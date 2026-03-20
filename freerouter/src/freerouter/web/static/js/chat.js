@@ -1,22 +1,15 @@
 /**
- * chat.js — Chat tab: streaming conversations with any configured provider.
+ * chat.js — Chat tab: streaming conversations with provider visibility.
  *
- * Context: Core chat UI. Sends messages to /api/chat/stream which routes
- * directly to the best available provider via Router. No LiteLLM needed.
+ * Context: Core chat UI. Shows which provider/model handled each response.
+ * Sends to /api/chat/stream → Router → best available provider.
+ * If a provider fails, Router automatically tries the next one.
  *
- * How streaming works:
- *   1. POST to /api/chat/stream with messages array
- *   2. Server returns SSE stream of OpenAI-format chunks
- *   3. We parse each "data: {...}" line and append delta content
- *   4. On [DONE] or stream end, save message to conversation
- *
- * State: chatState (model, conversationId, messages, isStreaming)
  * Depends on: ui.js (apiFetch, showToast, escapeHtml, formatTime)
  */
 
 const chatState = {
   model: 'auto',
-  conversationId: null,
   messages: [],
   isStreaming: false,
 };
@@ -27,7 +20,6 @@ async function initChat() {
   const panel = document.getElementById('tab-chat');
   panel.innerHTML = getChatHTML();
 
-  // Load models into selector
   try {
     const data = await apiFetch('/models');
     const select = document.getElementById('model-select');
@@ -40,14 +32,9 @@ async function initChat() {
     console.warn('Could not load models:', e.message);
   }
 
-  // Wire up send button and Enter key
-  const input = document.getElementById('chat-input');
-  if (input) {
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-    });
-  }
-
+  document.getElementById('chat-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
   document.getElementById('model-select')?.addEventListener('change', e => {
     chatState.model = e.target.value;
   });
@@ -67,12 +54,14 @@ function getChatHTML() {
       <div id="chat-messages" class="chat-messages">
         <div class="chat-welcome">
           <strong>FreeRouter Chat</strong>
-          <p>Select a model above and start chatting. Add API keys in the Providers tab first.</p>
+          <p>Messages automatically route to your best available provider.<br>
+          Each response shows which provider and model handled it.</p>
         </div>
       </div>
 
       <div class="chat-input-row">
-        <textarea id="chat-input" class="chat-input" placeholder="Type a message… (Enter to send, Shift+Enter for newline)" rows="3"></textarea>
+        <textarea id="chat-input" class="chat-input"
+          placeholder="Type a message… (Enter to send, Shift+Enter for newline)" rows="3"></textarea>
         <button id="send-btn" class="btn btn-primary" onclick="sendMessage()">Send</button>
       </div>
     </div>
@@ -92,12 +81,10 @@ async function sendMessage() {
   chatState.isStreaming = true;
   document.getElementById('send-btn').disabled = true;
 
-  // Add user message to UI
   const userMsg = { role: 'user', content: text, timestamp: new Date().toISOString() };
   chatState.messages.push(userMsg);
   appendMessage(userMsg);
 
-  // Add streaming placeholder for assistant
   const assistantId = 'msg-' + Date.now();
   appendStreamingPlaceholder(assistantId);
 
@@ -119,13 +106,14 @@ async function sendMessage() {
       throw new Error(err.detail || `HTTP ${response.status}`);
     }
 
-    const fullContent = await readStream(response, assistantId);
+    const { content, provider, model: usedModel } = await readStream(response, assistantId);
 
-    // Save assistant message
     const assistantMsg = {
       role: 'assistant',
-      content: fullContent || '(no response)',
+      content: content || '(no response)',
       timestamp: new Date().toISOString(),
+      provider,
+      model: usedModel,
     };
     chatState.messages.push(assistantMsg);
     finalizeMessage(assistantId, assistantMsg);
@@ -147,7 +135,8 @@ async function readStream(response, elementId) {
   const decoder = new TextDecoder();
   let fullContent = '';
   let buffer = '';
-  let providerUsed = '';
+  let provider = '';
+  let usedModel = '';
 
   while (true) {
     const { done, value } = await reader.read();
@@ -159,7 +148,7 @@ async function readStream(response, elementId) {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
+      if (!trimmed.startsWith('data: ')) continue;
 
       const data = trimmed.slice(6);
       if (data === '[DONE]' || data === '') continue;
@@ -167,43 +156,55 @@ async function readStream(response, elementId) {
       try {
         const parsed = JSON.parse(data);
 
-        // Check for error
+        // Error from provider
         if (parsed.error) {
-          throw new Error(typeof parsed.error === 'string' ? parsed.error : parsed.error.message || 'Provider error');
+          const errText = typeof parsed.error === 'string' ? parsed.error : parsed.error.message || 'Error';
+          throw new Error(errText);
         }
 
-        // Grab provider metadata from first chunk
-        if (parsed.meta?._provider && !providerUsed) {
-          providerUsed = parsed.meta._provider;
+        // Meta chunk — grab provider info
+        if (parsed.meta?._provider) {
+          provider = parsed.meta._provider;
+          usedModel = parsed.meta._model || '';
+          // Update the placeholder header to show provider
+          updateStreamingProvider(elementId, provider, usedModel);
+          continue;
         }
 
-        // Extract delta content
+        // Content delta
         const delta = parsed.choices?.[0]?.delta?.content;
         if (delta) {
           fullContent += delta;
           updateStreamingMessage(elementId, fullContent);
         }
       } catch (e) {
-        if (e.message.includes('Provider') || e.message.includes('error')) throw e;
-        // Skip unparseable lines silently
+        if (e.message && !e.message.includes('JSON')) throw e;
       }
     }
   }
 
-  return fullContent;
+  return { content: fullContent, provider, model: usedModel };
 }
 
 // ─── DOM Helpers ──────────────────────────────────────────────────────────────
 
 function appendMessage(msg) {
   const container = document.getElementById('chat-messages');
-  // Remove welcome message on first real message
   container.querySelector('.chat-welcome')?.remove();
 
   const div = document.createElement('div');
   div.className = `chat-msg ${msg.role}`;
+
+  const providerTag = (msg.role === 'assistant' && msg.provider)
+    ? `<span class="provider-tag">${escapeHtml(msg.provider)}${msg.model ? ' / ' + escapeHtml(msg.model) : ''}</span>`
+    : '';
+
   div.innerHTML = `
-    <div class="msg-header">${msg.role === 'user' ? 'You' : 'Assistant'} <span class="msg-time">${formatTime(msg.timestamp)}</span></div>
+    <div class="msg-header">
+      ${msg.role === 'user' ? 'You' : 'Assistant'}
+      ${providerTag}
+      <span class="msg-time">${formatTime(msg.timestamp)}</span>
+    </div>
     <div class="msg-body">${escapeHtml(msg.content)}</div>
   `;
   container.appendChild(div);
@@ -216,11 +217,16 @@ function appendStreamingPlaceholder(id) {
   div.id = id;
   div.className = 'chat-msg assistant streaming';
   div.innerHTML = `
-    <div class="msg-header">Assistant</div>
+    <div class="msg-header">Assistant <span class="provider-tag" id="${id}-provider">routing...</span></div>
     <div class="msg-body"><span class="thinking-dots">thinking</span></div>
   `;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
+}
+
+function updateStreamingProvider(id, provider, model) {
+  const el = document.getElementById(`${id}-provider`);
+  if (el) el.textContent = `${provider}${model ? ' / ' + model : ''}`;
 }
 
 function updateStreamingMessage(id, content) {
@@ -234,7 +240,10 @@ function finalizeMessage(id, msg) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.remove('streaming');
-  el.querySelector('.msg-header').innerHTML = `Assistant <span class="msg-time">${formatTime(msg.timestamp)}</span>`;
+  const providerTag = msg.provider
+    ? `<span class="provider-tag">${escapeHtml(msg.provider)}${msg.model ? ' / ' + escapeHtml(msg.model) : ''}</span>`
+    : '';
+  el.querySelector('.msg-header').innerHTML = `Assistant ${providerTag} <span class="msg-time">${formatTime(msg.timestamp)}</span>`;
   el.querySelector('.msg-body').textContent = msg.content;
 }
 
@@ -242,7 +251,7 @@ function setMessageError(id, errorText) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.remove('streaming');
-  el.classList.add('error');
+  el.querySelector('.msg-header').innerHTML = 'Assistant <span class="provider-tag error-tag">failed</span>';
   el.querySelector('.msg-body').innerHTML = `<span class="text-err">Error: ${escapeHtml(errorText)}</span>`;
 }
 
@@ -252,9 +261,7 @@ function clearChat() {
   if (container) {
     container.innerHTML = `
       <div class="chat-welcome">
-        <strong>Chat cleared</strong>
-        <p>Start a new conversation.</p>
-      </div>
-    `;
+        <strong>Chat cleared</strong><p>Start a new conversation.</p>
+      </div>`;
   }
 }

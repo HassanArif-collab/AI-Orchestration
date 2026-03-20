@@ -2,18 +2,16 @@
 proxy_server.py — Multi-format AI proxy server.
 
 Context: Exposes FreeRouter as a drop-in replacement for both:
-  - OpenAI API   (POST /v1/chat/completions) — for Cursor, Continue, scripts
-  - Anthropic API (POST /v1/messages)        — for Claude Code, Claude SDKs
+  - OpenAI API    (POST /v1/chat/completions) — Cursor, Continue, scripts
+  - Anthropic API (POST /v1/messages)         — Claude Code, Claude SDKs
 
-Both formats route through the same Router → best free provider.
+Both formats route through Router → best available free provider with
+automatic fallback. The actual provider/model used is returned in response
+headers so you can always see what ran.
 
-Usage:
-    python -m freerouter proxy   # starts on port 4000
-
-Tool config:
-    OpenAI-style:    base_url=http://localhost:4000/v1  api_key=any
-    Anthropic-style: ANTHROPIC_BASE_URL=http://localhost:4000
-                     ANTHROPIC_API_KEY=any
+Response headers added:
+  x-freerouter-provider  — which provider handled it (e.g. "groq")
+  x-freerouter-model     — actual model used (e.g. "llama-3.3-70b-versatile")
 
 Imports: router.py, providers.py
 Imported by: cli.py
@@ -22,16 +20,15 @@ Imported by: cli.py
 import json
 import logging
 import os
-import time
 import uuid
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from freerouter.router import get_router, RouterError
-from freerouter.providers import PROVIDER_MAP
+from freerouter.providers import PROVIDER_MAP, reset_provider
 
 logger = logging.getLogger("freerouter.proxy_server")
 
@@ -41,35 +38,26 @@ logger = logging.getLogger("freerouter.proxy_server")
 def _anthropic_to_openai_messages(anthropic_messages: list, system: str = None) -> list:
     """Convert Anthropic messages format to OpenAI format."""
     openai_messages = []
-
-    # Anthropic puts system prompt separately; OpenAI puts it as first message
     if system:
         openai_messages.append({"role": "system", "content": system})
-
     for msg in anthropic_messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
-
-        # Anthropic content can be a list of blocks
         if isinstance(content, list):
             text_parts = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text_parts.append(block.get("text", ""))
             content = "\n".join(text_parts)
-
         openai_messages.append({"role": role, "content": content})
-
     return openai_messages
 
 
-def _openai_response_to_anthropic(openai_resp: dict, model: str) -> dict:
-    """Convert OpenAI response format to Anthropic format."""
+def _openai_to_anthropic_response(openai_resp: dict, model: str) -> dict:
+    """Convert OpenAI response to Anthropic format."""
     choice = openai_resp.get("choices", [{}])[0]
-    message = choice.get("message", {})
-    content = message.get("content", "")
+    content = choice.get("message", {}).get("content", "")
     usage = openai_resp.get("usage", {})
-
     return {
         "id": openai_resp.get("id", f"msg_{uuid.uuid4().hex[:24]}"),
         "type": "message",
@@ -85,36 +73,22 @@ def _openai_response_to_anthropic(openai_resp: dict, model: str) -> dict:
     }
 
 
-def _make_anthropic_stream_chunk(text: str, msg_id: str, model: str, event_type: str = "content_block_delta") -> str:
-    """Format a text chunk as an Anthropic SSE event."""
-    if event_type == "message_start":
-        data = {
-            "type": "message_start",
-            "message": {
-                "id": msg_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": model,
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-            },
-        }
-    elif event_type == "content_block_start":
-        data = {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
-    elif event_type == "content_block_delta":
-        data = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
-    elif event_type == "content_block_stop":
-        data = {"type": "content_block_stop", "index": 0}
-    elif event_type == "message_delta":
-        data = {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 0}}
-    elif event_type == "message_stop":
-        data = {"type": "message_stop"}
-    else:
-        data = {"type": event_type}
-
+def _anthropic_sse(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
+def _extract_provider_from_stream(raw_chunk: str) -> tuple[str, str]:
+    """Extract _provider and _model from the meta chunk the router sends."""
+    for line in raw_chunk.split("\n"):
+        if line.startswith("data: "):
+            try:
+                parsed = json.loads(line[6:])
+                meta = parsed.get("meta", {})
+                if meta:
+                    return meta.get("_provider", ""), meta.get("_model", "")
+            except Exception:
+                pass
+    return "", ""
 
 
 # ─── App factory ──────────────────────────────────────────────────────────────
@@ -122,7 +96,7 @@ def _make_anthropic_stream_chunk(text: str, msg_id: str, model: str, event_type:
 def create_proxy_app(api_key: Optional[str] = None) -> FastAPI:
     app = FastAPI(
         title="FreeRouter Proxy",
-        description="OpenAI + Anthropic compatible proxy — routes to free providers",
+        description="OpenAI + Anthropic compatible proxy — auto-routes to free providers",
         version="2.0.0",
     )
 
@@ -144,8 +118,9 @@ def create_proxy_app(api_key: Optional[str] = None) -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid API key")
 
     def _detect_provider(model: str) -> Optional[str]:
+        """If model is 'groq/llama-xxx', extract 'groq' as the forced provider."""
         if "/" in model and not model.startswith(("gpt-", "claude-", "o1", "o3")):
-            prefix = model.split("/", 1)[0]
+            prefix = model.split("/")[0]
             if prefix in PROVIDER_MAP:
                 return prefix
         return None
@@ -169,7 +144,15 @@ def create_proxy_app(api_key: Optional[str] = None) -> FastAPI:
             "data": [{"id": m["id"], "object": "model", "owned_by": m["provider"]} for m in models],
         }
 
-    # ─── OpenAI format: POST /v1/chat/completions ─────────────────────────────
+    # ─── Provider reset (useful when stuck on rate limit) ─────────────────────
+
+    @app.post("/v1/providers/{name}/reset")
+    async def reset_provider_limits(name: str, request: Request):
+        _check_auth(request)
+        reset_provider(name)
+        return {"success": True, "message": f"Rate limits cleared for {name}"}
+
+    # ─── OpenAI: POST /v1/chat/completions ────────────────────────────────────
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
@@ -185,32 +168,60 @@ def create_proxy_app(api_key: Optional[str] = None) -> FastAPI:
         router = get_router()
 
         if stream:
-            async def generate():
-                try:
-                    async for chunk in router.stream(
-                        messages=messages, model=model,
-                        temperature=temperature, max_tokens=max_tokens,
-                        provider=provider,
-                    ):
-                        yield chunk
-                except RouterError as e:
-                    yield f"data: {json.dumps({'error': {'message': str(e)}})}\n\n"
-                    yield "data: [DONE]\n\n"
+            actual_provider = ["unknown"]
+            actual_model = [model]
 
-            return StreamingResponse(generate(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+            async def generate():
+                first = True
+                async for chunk in router.stream(
+                    messages=messages, model=model,
+                    temperature=temperature, max_tokens=max_tokens,
+                    provider=provider,
+                ):
+                    # Grab provider info from first (meta) chunk
+                    if first:
+                        p, m = _extract_provider_from_stream(chunk)
+                        if p:
+                            actual_provider[0] = p
+                            actual_model[0] = m
+                        first = False
+                    yield chunk
+
+            return StreamingResponse(
+                generate(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                    "x-freerouter-provider": actual_provider[0],
+                    "x-freerouter-model": actual_model[0],
+                },
+            )
         else:
             try:
-                return await router.complete(
+                result = await router.complete(
                     messages=messages, model=model,
                     temperature=temperature, max_tokens=max_tokens,
                     provider=provider,
                 )
+                actual_p = result.pop("_provider", "unknown")
+                actual_m = result.pop("_model", model)
+                # Return actual model name in response so tools can see it
+                result["model"] = f"{actual_p}/{actual_m}"
+                logger.info(f"Served by {actual_p} / {actual_m}")
+                return Response(
+                    content=json.dumps(result),
+                    media_type="application/json",
+                    headers={
+                        "x-freerouter-provider": actual_p,
+                        "x-freerouter-model": actual_m,
+                    },
+                )
             except RouterError as e:
                 raise HTTPException(status_code=503, detail=str(e))
 
-    # ─── Anthropic format: POST /v1/messages ──────────────────────────────────
-    # Claude Code, Claude SDKs, and anything using ANTHROPIC_BASE_URL hit this.
+    # ─── Anthropic: POST /v1/messages ─────────────────────────────────────────
 
     @app.post("/v1/messages")
     async def anthropic_messages(request: Request):
@@ -224,59 +235,97 @@ def create_proxy_app(api_key: Optional[str] = None) -> FastAPI:
         max_tokens = body.get("max_tokens", 4096)
         stream = body.get("stream", False)
 
-        # Convert Anthropic → OpenAI message format
         messages = _anthropic_to_openai_messages(anthropic_msgs, system)
         provider = _detect_provider(model)
         router = get_router()
         msg_id = f"msg_{uuid.uuid4().hex[:24]}"
 
         if stream:
-            async def generate_anthropic_stream():
-                try:
-                    # Send Anthropic stream preamble
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "message_start")
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "content_block_start")
+            actual_provider = ["unknown"]
+            actual_model = [model]
 
-                    # Stream content from provider (OpenAI SSE format)
+            async def generate_anthropic():
+                first = True
+                try:
+                    yield _anthropic_sse("message_start", {
+                        "type": "message_start",
+                        "message": {
+                            "id": msg_id, "type": "message", "role": "assistant",
+                            "content": [], "model": model, "stop_reason": None,
+                            "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0},
+                        },
+                    })
+                    yield _anthropic_sse("content_block_start", {
+                        "type": "content_block_start", "index": 0,
+                        "content_block": {"type": "text", "text": ""},
+                    })
+
                     async for raw_chunk in router.stream(
                         messages=messages, model=model,
                         temperature=temperature, max_tokens=max_tokens,
                         provider=provider,
                     ):
-                        # raw_chunk is "data: {...}\n\n" or "data: [DONE]\n\n"
+                        # Extract provider info from meta chunk
+                        if first:
+                            p, m = _extract_provider_from_stream(raw_chunk)
+                            if p:
+                                actual_provider[0] = p
+                                actual_model[0] = m
+                                logger.info(f"Claude Code served by {p} / {m}")
+                            first = False
+
                         for line in raw_chunk.split("\n"):
                             line = line.strip()
                             if not line.startswith("data: "):
                                 continue
                             payload = line[6:]
-                            if payload == "[DONE]" or not payload:
+                            if payload in ("[DONE]", ""):
                                 continue
                             try:
                                 parsed = json.loads(payload)
                                 if parsed.get("error"):
-                                    err_text = parsed["error"] if isinstance(parsed["error"], str) else parsed["error"].get("message", "Error")
-                                    yield _make_anthropic_stream_chunk(f"\n\nError: {err_text}", msg_id, model, "content_block_delta")
+                                    err = parsed["error"]
+                                    err_text = err if isinstance(err, str) else err.get("message", "Error")
+                                    yield _anthropic_sse("content_block_delta", {
+                                        "type": "content_block_delta", "index": 0,
+                                        "delta": {"type": "text_delta", "text": f"\n\n[FreeRouter Error: {err_text}]"},
+                                    })
                                     continue
                                 delta = parsed.get("choices", [{}])[0].get("delta", {}).get("content")
                                 if delta:
-                                    yield _make_anthropic_stream_chunk(delta, msg_id, model, "content_block_delta")
+                                    yield _anthropic_sse("content_block_delta", {
+                                        "type": "content_block_delta", "index": 0,
+                                        "delta": {"type": "text_delta", "text": delta},
+                                    })
                             except (json.JSONDecodeError, KeyError):
                                 continue
 
-                    # Send Anthropic stream closing events
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "content_block_stop")
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "message_delta")
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "message_stop")
+                    yield _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                    yield _anthropic_sse("message_delta", {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                        "usage": {"output_tokens": 0},
+                    })
+                    yield _anthropic_sse("message_stop", {"type": "message_stop"})
 
                 except RouterError as e:
-                    yield _make_anthropic_stream_chunk(f"\n\nError: {str(e)}", msg_id, model, "content_block_delta")
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "content_block_stop")
-                    yield _make_anthropic_stream_chunk("", msg_id, model, "message_stop")
+                    yield _anthropic_sse("content_block_delta", {
+                        "type": "content_block_delta", "index": 0,
+                        "delta": {"type": "text_delta", "text": f"\n\n[FreeRouter Error: {str(e)}]"},
+                    })
+                    yield _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                    yield _anthropic_sse("message_stop", {"type": "message_stop"})
 
             return StreamingResponse(
-                generate_anthropic_stream(),
+                generate_anthropic(),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                    "x-freerouter-provider": actual_provider[0],
+                    "x-freerouter-model": actual_model[0],
+                },
             )
 
         else:
@@ -286,7 +335,18 @@ def create_proxy_app(api_key: Optional[str] = None) -> FastAPI:
                     temperature=temperature, max_tokens=max_tokens,
                     provider=provider,
                 )
-                return _openai_response_to_anthropic(openai_result, model)
+                actual_p = openai_result.pop("_provider", "unknown")
+                actual_m = openai_result.pop("_model", model)
+                logger.info(f"Claude Code served by {actual_p} / {actual_m}")
+                anthropic_resp = _openai_to_anthropic_response(openai_result, f"{actual_p}/{actual_m}")
+                return Response(
+                    content=json.dumps(anthropic_resp),
+                    media_type="application/json",
+                    headers={
+                        "x-freerouter-provider": actual_p,
+                        "x-freerouter-model": actual_m,
+                    },
+                )
             except RouterError as e:
                 raise HTTPException(status_code=503, detail=str(e))
 
