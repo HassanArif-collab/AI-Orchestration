@@ -1,6 +1,7 @@
 /**
  * FreeRouter Dashboard - Frontend Logic
  * Enhanced with Provider Instance Management and Chat Playground
+ * FIXED VERSION - All bugs corrected
  */
 
 // API Base URL
@@ -20,6 +21,7 @@ const state = {
     selectedModel: 'free-router/auto',
     conversations: [],
     currentConversationId: null,
+    currentConversation: null,
     isStreaming: false,
     compareModels: [],
     showCompare: false,
@@ -71,6 +73,7 @@ function createToastContainer() {
 }
 
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
@@ -230,7 +233,7 @@ function renderProvidersContent(providers, healthMap) {
     }).join('')}
             </div>
         </div>
-        
+
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">💡 How to Get Free API Keys</h2>
@@ -298,13 +301,13 @@ function showApiKeyModal(provider, displayName, signupUrl) {
                 </div>
                 <div class="form-group">
                     <p style="margin-bottom: 15px; color: var(--text-secondary);">
-                        Get your API key from: 
+                        Get your API key from:
                         <a href="${escapeHtml(signupUrl)}" target="_blank" style="color: var(--primary);">
                             ${escapeHtml(signupUrl)}
                         </a>
                     </p>
                     <label class="form-label">API Key</label>
-                    <input type="password" id="api-key-input" class="form-input" 
+                    <input type="password" id="api-key-input" class="form-input"
                            placeholder="Paste your API key here" autocomplete="off">
                 </div>
                 <div style="display: flex; gap: 10px; justify-content: flex-end;">
@@ -407,7 +410,7 @@ function renderInstancesContent() {
                 Manage multiple provider instances. You can have both local (Ollama) and cloud instances
                 of the same provider type.
             </p>
-            
+
             ${Object.keys(grouped).length === 0 ? `
                 <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
                     <p>No instances configured yet.</p>
@@ -431,7 +434,7 @@ function renderInstancesContent() {
                 `;
     }).join('')}
         </div>
-        
+
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">ℹ️ About Instances</h2>
@@ -901,7 +904,7 @@ function renderModelsContent() {
             <p style="color: var(--text-secondary); margin-bottom: 20px;">
                 Manage model aliases and their configurations. Each alias maps to a specific model from a provider.
             </p>
-            
+
             ${state.modelAliases.length === 0 ? `
                 <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
                     <p>No model aliases configured.</p>
@@ -925,7 +928,7 @@ function renderModelsContent() {
                 </div>
             `}
         </div>
-        
+
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">🔗 Fallback Chains</h2>
@@ -936,7 +939,7 @@ function renderModelsContent() {
             <p style="color: var(--text-secondary); margin-bottom: 20px;">
                 Configure fallback chains for automatic failover when a model is unavailable.
             </p>
-            
+
             ${state.primaryModels.length === 0 ? `
                 <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
                     <p>No fallback chains configured.</p>
@@ -1337,14 +1340,25 @@ async function loadChatTab() {
         ]);
 
         state.models = Object.keys(modelsData.models);
-        state.conversations = convsData.conversations;
+        state.conversations = convsData.conversations || [];
 
         // Create new conversation if none exists
         if (state.conversations.length === 0) {
-            await createNewConversation();
+            const newConvId = await createNewConversation();
+            if (!newConvId) {
+                content.innerHTML = `<div class="card"><p>Error creating conversation</p></div>`;
+                return;
+            }
         } else {
             // Load most recent conversation
-            state.currentConversationId = state.conversations[0].id;
+            // Sort by updated_at descending
+            const sortedConvs = [...state.conversations].sort((a, b) => {
+                const dateA = new Date(a.updated_at || a.created_at || 0);
+                const dateB = new Date(b.updated_at || b.created_at || 0);
+                return dateB - dateA;
+            });
+
+            state.currentConversationId = sortedConvs[0].id;
             await loadConversation(state.currentConversationId);
         }
 
@@ -1362,6 +1376,11 @@ async function createNewConversation() {
             body: JSON.stringify({ title: 'New Chat' }),
         });
         state.currentConversationId = result.conversation_id;
+
+        // Refresh conversations list
+        const convsData = await fetchAPI('/chat/conversations');
+        state.conversations = convsData.conversations || [];
+
         await loadConversation(result.conversation_id);
         return result.conversation_id;
     } catch (error) {
@@ -1373,8 +1392,28 @@ async function createNewConversation() {
 async function loadConversation(convId) {
     try {
         const result = await fetchAPI(`/chat/conversations/${convId}`);
+        state.currentConversationId = convId;
         state.currentConversation = result;
-        state.conversations = [{ id: convId, title: result.title, ...result }]; // Update list
+
+        // Update conversation in the list if it exists, otherwise add it
+        const existingIndex = state.conversations.findIndex(c => c.id === convId);
+        if (existingIndex >= 0) {
+            state.conversations[existingIndex] = {
+                id: convId,
+                title: result.title || 'Untitled',
+                created_at: result.created_at,
+                updated_at: result.updated_at,
+                message_count: result.messages?.length || 0
+            };
+        } else {
+            state.conversations.unshift({
+                id: convId,
+                title: result.title || 'Untitled',
+                created_at: result.created_at,
+                updated_at: result.updated_at,
+                message_count: result.messages?.length || 0
+            });
+        }
     } catch (error) {
         showToast('Failed to load conversation', 'error');
     }
@@ -1399,16 +1438,16 @@ function renderChatContent() {
                     <button class="btn btn-secondary btn-small" onclick="loadChatTab()">↻ Refresh</button>
                 </div>
             </div>
-            
+
             <div class="chat-layout">
                 <div class="chat-sidebar">
                     <div class="chat-sidebar-header">
-                        <button class="btn btn-primary btn-small" onclick="createNewConversation()">+ New Chat</button>
+                        <button class="btn btn-primary btn-small" onclick="createNewConversationAndRefresh()">+ New Chat</button>
                     </div>
                     <div class="conversation-list">
                         ${state.conversations.map(conv => `
-                            <div class="conversation-item ${conv.id === state.currentConversationId ? 'active' : ''}" 
-                                 onclick="loadConversationById('${conv.id}')">
+                            <div class="conversation-item ${conv.id === state.currentConversationId ? 'active' : ''}"
+                                 data-conv-id="${conv.id}">
                                 <div class="conversation-title">${escapeHtml(conv.title || 'Untitled')}</div>
                                 <div class="conversation-meta">
                                     ${conv.message_count || 0} messages
@@ -1417,7 +1456,7 @@ function renderChatContent() {
                         `).join('')}
                     </div>
                 </div>
-                
+
                 <div class="chat-main">
                     <div class="chat-messages" id="chat-messages">
                         ${!hasMessages ? `
@@ -1426,10 +1465,10 @@ function renderChatContent() {
                             </div>
                         ` : conversation.messages.map(msg => renderChatMessage(msg)).join('')}
                     </div>
-                    
+
                     <div class="chat-input-area">
                         <div class="chat-input-container">
-                            <textarea id="chat-input" class="chat-input" 
+                            <textarea id="chat-input" class="chat-input"
                                       placeholder="Type your message... (Shift+Enter for newline)"
                                       rows="3"
                                       onkeydown="handleChatKeydown(event)"></textarea>
@@ -1437,7 +1476,7 @@ function renderChatContent() {
                                 <button class="btn btn-secondary btn-small" onclick="toggleImageUpload()" title="Upload image">
                                     📷
                                 </button>
-                                <button class="btn btn-primary" onclick="sendMessage()" ${state.isStreaming ? 'disabled' : ''}>
+                                <button class="btn btn-primary" id="send-button" onclick="sendMessage()" ${state.isStreaming ? 'disabled' : ''}>
                                     ${state.isStreaming ? 'Sending...' : 'Send'}
                                 </button>
                             </div>
@@ -1470,7 +1509,7 @@ function renderChatContent() {
                 </div>
             </div>
         </div>
-        
+
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">ℹ️ About Auto-Routing</h2>
@@ -1491,7 +1530,7 @@ function renderChatContent() {
 
 function renderChatMessage(message) {
     const isUser = message.role === 'user';
-    const hasImage = message.image || (message.content && message.content.includes('data:image'));
+    const hasImage = message.image || (message.content && message.content.includes && message.content.includes('data:image'));
 
     return `
         <div class="message ${isUser ? 'user' : 'assistant'}">
@@ -1504,11 +1543,11 @@ function renderChatMessage(message) {
             <div class="message-content">
                 ${hasImage ? `
                     <div class="message-image">
-                        <img src="${escapeHtml(message.image || (message.content && message.content.match(/data:image[^"]+/)?.[0]))}" 
+                        <img src="${escapeHtml(message.image || (message.content && message.content.match && message.content.match(/data:image[^"]+/)?.[0]))}"
                              alt="Uploaded image" style="max-width: 100%; border-radius: 8px; margin-bottom: 10px;">
                     </div>
                 ` : ''}
-                <div class="message-text">${escapeHtml(message.content)}</div>
+                <div class="message-text">${escapeHtml(message.content || '')}</div>
             </div>
         </div>
     `;
@@ -1521,6 +1560,17 @@ function initChatEvents() {
             state.selectedModel = e.target.value;
         });
     }
+
+    // Add click handlers for conversation items
+    const conversationItems = document.querySelectorAll('.conversation-item');
+    conversationItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const convId = item.dataset.convId;
+            if (convId && convId !== state.currentConversationId) {
+                loadConversationById(convId);
+            }
+        });
+    });
 }
 
 function handleChatKeydown(event) {
@@ -1530,22 +1580,38 @@ function handleChatKeydown(event) {
     }
 }
 
+async function createNewConversationAndRefresh() {
+    await createNewConversation();
+    const content = document.getElementById('content');
+    if (content) {
+        content.innerHTML = renderChatContent();
+        initChatEvents();
+    }
+}
+
 async function sendMessage() {
     const input = document.getElementById('chat-input');
     const message = input.value.trim();
     const imagePreview = document.getElementById('image-preview-container');
-    const imageData = imagePreview.dataset.image || null;
+    const imageData = imagePreview?.dataset?.image || null;
 
     if (!message && !imageData) {
         showToast('Please enter a message or upload an image', 'error');
         return;
     }
 
+    if (!state.currentConversationId) {
+        showToast('No conversation selected', 'error');
+        return;
+    }
+
     // Clear input
     input.value = '';
-    imagePreview.style.display = 'none';
-    imagePreview.dataset.image = '';
-    imagePreview.innerHTML = '';
+    if (imagePreview) {
+        imagePreview.style.display = 'none';
+        imagePreview.dataset.image = '';
+        imagePreview.innerHTML = '';
+    }
 
     // Add user message to conversation
     const userMessage = {
@@ -1575,7 +1641,7 @@ async function sendMessage() {
     const compareToggle = document.getElementById('compare-toggle');
     const selectedModels = Array.from(document.querySelectorAll('.compare-model-checkbox:checked')).map(cb => cb.value);
 
-    if (compareToggle.checked && selectedModels.length > 1) {
+    if (compareToggle?.checked && selectedModels.length > 1) {
         await sendCompareRequest(selectedModels, [...(state.currentConversation?.messages || []), userMessage].map(m => ({ role: m.role, content: m.content })));
     } else {
         await sendStreamingRequest(userMessage);
@@ -1624,32 +1690,76 @@ async function sendStreamingRequest(userMessage) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullContent = '';
+        let buffer = '';
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\n').filter(line => line.trim() !== '');
+            const chunk = decoder.decode(value, { stream: true });
+            buffer += chunk;
+
+            // Process complete lines
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
             for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') continue;
+                const trimmedLine = line.trim();
+                if (!trimmedLine) continue;
+
+                // Handle SSE format: "data: {...}"
+                if (trimmedLine.startsWith('data: ')) {
+                    const data = trimmedLine.slice(6);
+
+                    // Skip heartbeat/completion markers
+                    if (data === '[DONE]' || data === '') continue;
 
                     try {
+                        // Try parsing as JSON
                         const parsed = JSON.parse(data);
-                        const content = parsed.choices?.[0]?.delta?.content || '';
-                        if (content) {
-                            fullContent += content;
+
+                        // Handle different SSE event types
+                        if (parsed.choices && parsed.choices[0]?.delta?.content) {
+                            const content = parsed.choices[0].delta.content;
+                            if (content) {
+                                fullContent += content;
+                                const msgElement = document.getElementById(assistantMsgId);
+                                if (msgElement) {
+                                    msgElement.querySelector('.message-text').textContent = fullContent;
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        // If not JSON, try plain text format
+                        // Some servers send raw text
+                        if (data && !data.startsWith('{')) {
+                            fullContent += data;
                             const msgElement = document.getElementById(assistantMsgId);
                             if (msgElement) {
                                 msgElement.querySelector('.message-text').textContent = fullContent;
                                 chatMessages.scrollTop = chatMessages.scrollHeight;
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Process any remaining buffer
+        if (buffer.trim()) {
+            const trimmedLine = buffer.trim();
+            if (trimmedLine.startsWith('data: ')) {
+                const data = trimmedLine.slice(6);
+                if (data && data !== '[DONE]' && data !== '') {
+                    try {
+                        const parsed = JSON.parse(data);
+                        if (parsed.choices && parsed.choices[0]?.delta?.content) {
+                            fullContent += parsed.choices[0].delta.content;
+                        }
                     } catch (e) {
-                        // Skip invalid JSON
+                        // Plain text fallback
+                        fullContent += data;
                     }
                 }
             }
@@ -1658,7 +1768,7 @@ async function sendStreamingRequest(userMessage) {
         // Save assistant message
         const assistantMessage = {
             role: 'assistant',
-            content: fullContent,
+            content: fullContent || 'No response received',
             timestamp: new Date().toISOString(),
         };
 
@@ -1676,18 +1786,18 @@ async function sendStreamingRequest(userMessage) {
         if (msgElement) {
             msgElement.querySelector('.message-text').innerHTML = `<span style="color: var(--error);">Error: ${escapeHtml(error.message)}</span>`;
         }
+        showToast('Failed to get response: ' + error.message, 'error');
     } finally {
         state.isStreaming = false;
         updateChatButtons();
     }
 }
 
-async function sendCompareRequest(userMessage, messages) {
+async function sendCompareRequest(selectedModels, messages) {
     state.isStreaming = true;
     updateChatButtons();
 
     const chatMessages = document.getElementById('chat-messages');
-    const selectedModels = Array.from(document.querySelectorAll('.compare-model-checkbox:checked')).map(cb => cb.value);
 
     // Add placeholders for each model
     const msgIds = selectedModels.map((model, idx) => {
@@ -1696,9 +1806,9 @@ async function sendCompareRequest(userMessage, messages) {
             <div id="${msgId}" class="message assistant compare">
                 <div class="message-header">
                     🤖 ${escapeHtml(model)}
-                    <span class="compare-badge">Comparing</span>
+                    <span class="compare-badge">Thinking...</span>
                 </div>
-                <div class="message-text streaming">Thinking...</div>
+                <div class="message-text streaming">Waiting...</div>
             </div>
         `;
         chatMessages.insertAdjacentHTML('beforeend', placeholderHtml);
@@ -1719,7 +1829,7 @@ async function sendCompareRequest(userMessage, messages) {
         });
 
         // Update each model's response
-        result.results.forEach((res, idx) => {
+        result.results.forEach((res) => {
             const msgId = msgIds.find(m => m.model === res.model)?.id;
             if (msgId) {
                 const msgElement = document.getElementById(msgId);
@@ -1746,7 +1856,7 @@ async function sendCompareRequest(userMessage, messages) {
 }
 
 function updateChatButtons() {
-    const sendBtn = document.querySelector('.chat-input-area .btn-primary');
+    const sendBtn = document.getElementById('send-button');
     if (sendBtn) {
         sendBtn.disabled = state.isStreaming;
         sendBtn.textContent = state.isStreaming ? 'Sending...' : 'Send';
@@ -1766,13 +1876,17 @@ function toggleCompare(enabled) {
 }
 
 async function loadConversationById(convId) {
+    if (!convId || convId === state.currentConversationId) return;
+
     state.currentConversationId = convId;
     await loadConversation(convId);
 
     // Re-render chat
     const content = document.getElementById('content');
-    content.innerHTML = renderChatContent();
-    initChatEvents();
+    if (content && state.currentTab === 'chat') {
+        content.innerHTML = renderChatContent();
+        initChatEvents();
+    }
 }
 
 // ─── Image Upload ──────────────────────────────────────────────────────────────
@@ -1883,7 +1997,7 @@ function renderConfigContent(exportConfig) {
             <p style="color: var(--text-secondary); margin-bottom: 20px;">
                 Copy these settings to connect your favorite tools to FreeRouter.
             </p>
-            
+
             ${renderConfigSection('cursor', 'Cursor IDE', exportConfig)}
             ${renderConfigSection('continue', 'VS Code + Continue', exportConfig)}
             ${renderConfigSection('python', 'Python', exportConfig)}
@@ -1982,20 +2096,20 @@ function renderUsageContent(usage, health) {
             </div>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
                 <div style="text-align: center; padding: 15px; background: var(--bg-input); border-radius: var(--radius);">
-                    <div style="font-size: 2rem; font-weight: bold; color: var(--success);">${health.healthy}</div>
+                    <div style="font-size: 2rem; font-weight: bold; color: var(--success);">${health.healthy || 0}</div>
                     <div style="color: var(--text-secondary);">Healthy</div>
                 </div>
                 <div style="text-align: center; padding: 15px; background: var(--bg-input); border-radius: var(--radius);">
-                    <div style="font-size: 2rem; font-weight: bold; color: var(--error);">${health.unhealthy}</div>
+                    <div style="font-size: 2rem; font-weight: bold; color: var(--error);">${health.unhealthy || 0}</div>
                     <div style="color: var(--text-secondary);">Unhealthy</div>
                 </div>
                 <div style="text-align: center; padding: 15px; background: var(--bg-input); border-radius: var(--radius);">
-                    <div style="font-size: 2rem; font-weight: bold; color: var(--warning);">${health.unconfigured}</div>
+                    <div style="font-size: 2rem; font-weight: bold; color: var(--warning);">${health.unconfigured || 0}</div>
                     <div style="color: var(--text-secondary);">Not Configured</div>
                 </div>
             </div>
-            
-            ${health.details.map(d => `
+
+            ${health.details?.map(d => `
                 <div class="provider-item" style="margin-bottom: 10px;">
                     <div class="provider-info">
                         <span class="health-dot ${d.status}"></span>
@@ -2005,19 +2119,19 @@ function renderUsageContent(usage, health) {
                 </div>
             `).join('')}
         </div>
-        
+
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">📈 Rate Limit Usage</h2>
             </div>
-            ${Object.keys(usage).length === 0 ? `
+            ${Object.keys(usage || {}).length === 0 ? `
                 <p style="color: var(--text-secondary);">
                     No usage data yet. Usage statistics will appear here after making requests.
                 </p>
             ` : `
                 <div class="provider-list">
                     ${Object.entries(usage).map(([name, data]) => {
-        const pct = data.used_pct !== null ? data.used_pct * 100 : 0;
+        const pct = data.used_pct !== null && data.used_pct !== undefined ? data.used_pct * 100 : 0;
         const barClass = pct < 70 ? 'low' : (pct < 90 ? 'medium' : 'high');
 
         return `
@@ -2025,7 +2139,7 @@ function renderUsageContent(usage, health) {
                                 <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
                                     <span style="font-weight: 600;">${escapeHtml(name)}</span>
                                     <span style="color: var(--text-secondary);">
-                                        ${data.requests_remaining !== null ? `${data.requests_remaining} / ${data.requests_limit}` : 'Unlimited'}
+                                        ${data.requests_remaining !== null && data.requests_remaining !== undefined ? `${data.requests_remaining} / ${data.requests_limit}` : 'Unlimited'}
                                     </span>
                                 </div>
                                 ${data.requests_limit > 0 ? `
