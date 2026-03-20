@@ -74,22 +74,34 @@ class Router:
     def _resolve_model(self, provider_name: str, model: str) -> str:
         """
         Resolve the model string for a specific provider.
-        If model is "auto" or a freerouter alias, use the provider's default.
+
+        Examples:
+          ollama  + "ollama/llama3.2"        -> "llama3.2"
+          groq    + "groq/llama-3.3-70b"     -> "llama-3.3-70b"
+          groq    + "ollama/llama3.2"        -> groq default (wrong provider, use default)
+          auto    + any provider             -> that provider's default model
         """
-        if model.startswith("auto") or model.startswith("free-router/"):
-            return DEFAULT_MODELS.get(provider_name, DEFAULT_MODELS.get("groq", "llama-3.3-70b-versatile"))
+        # Auto routing — always use provider default
+        if model == "auto" or model.startswith("free-router/"):
+            return DEFAULT_MODELS.get(provider_name, "llama-3.3-70b-versatile")
 
-        # If model explicitly names a provider (e.g. "groq/llama-3.3-70b-versatile")
-        # and this is that provider, strip the prefix
-        if "/" in model and model.split("/")[0] == provider_name:
-            return model.split("/", 1)[1]
+        # Model has a provider prefix (e.g. "groq/llama-3.3-70b-versatile")
+        if "/" in model:
+            prefix = model.split("/")[0]
+            # Prefix matches this provider — strip it
+            if prefix == provider_name:
+                return model.split("/", 1)[1]
+            # Prefix is a DIFFERENT known provider (e.g. "ollama/llama3.2" sent to groq)
+            # Use this provider's default — never forward wrong provider's model name
+            if prefix in PROVIDER_MAP:
+                return DEFAULT_MODELS.get(provider_name, "llama-3.3-70b-versatile")
 
-        # For Ollama, pass model as-is (user might specify "llama3.2" etc.)
+        # No prefix — bare model name
+        # Ollama: pass as-is (user typed local model name)
         if provider_name == "ollama":
             return model
 
-        # For OpenRouter, models need the full path (e.g. "meta-llama/...")
-        # If user passes just a model name, use the default
+        # Cloud providers: pass through
         return model
 
     def _get_ordered_providers(self) -> list[str]:
@@ -291,7 +303,7 @@ class Router:
                 ollama_models = await fetch_ollama_models()
                 for m in ollama_models:
                     models.append({
-                        "id": m,
+                        "id": f"ollama/{m}",   # prefix so router knows it's Ollama
                         "provider": "ollama",
                         "display": f"ollama / {m}",
                     })
