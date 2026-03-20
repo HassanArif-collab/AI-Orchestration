@@ -209,20 +209,53 @@ def create_web_app() -> FastAPI:
 
     @app.get("/api/usage")
     async def get_usage():
+        from freerouter.providers import KNOWN_PROVIDERS, get_provider_key, DEFAULT_MODELS
+        import time
         all_u = get_all_usage()
-        return {
-            "usage": {
-                name: {
-                    "requests_limit": u.requests_limit,
-                    "requests_remaining": u.requests_remaining,
-                    "used_pct": round((u.requests_used_pct or 0) * 100, 1),
-                    "is_soft_limited": u.is_soft_limited,
-                    "is_hard_limited": u.is_hard_limited,
-                    "last_updated": u.last_updated,
-                }
-                for name, u in all_u.items()
+        result = {}
+
+        # Include ALL configured providers, even ones with no traffic yet
+        for defn in sorted(KNOWN_PROVIDERS, key=lambda x: x.priority):
+            name = defn.name
+            has_key = (not defn.requires_auth) or bool(get_provider_key(name))
+            if not has_key:
+                continue
+
+            u = all_u.get(name)
+            pct = round((u.requests_used_pct or 0) * 100, 1) if u else 0
+            last = u.last_updated if u else None
+            ago = None
+            if last:
+                secs = int(time.time() - last)
+                if secs < 60: ago = f"{secs}s ago"
+                elif secs < 3600: ago = f"{secs//60}m ago"
+                else: ago = f"{secs//3600}h ago"
+
+            result[name] = {
+                "display_name": defn.display_name,
+                "provider_type": defn.provider_type.value,
+                "default_model": DEFAULT_MODELS.get(name, ""),
+                "requests_limit": u.requests_limit if u else 0,
+                "requests_remaining": u.requests_remaining if u else -1,
+                "tokens_limit": u.tokens_limit if u else 0,
+                "tokens_remaining": u.tokens_remaining if u else -1,
+                "used_pct": pct,
+                "is_soft_limited": u.is_soft_limited if u else False,
+                "is_hard_limited": u.is_hard_limited if u else False,
+                "last_updated": last,
+                "last_updated_ago": ago,
+                "has_data": u is not None,
+                "signup_url": defn.signup_url,
+                "priority": defn.priority,
             }
-        }
+
+        return {"usage": result, "source": "response_headers"}
+
+    @app.post("/api/providers/{name}/reset")
+    async def reset_provider_limits_web(name: str):
+        """Reset rate limit state for a provider."""
+        reset_provider(name)
+        return {"success": True, "message": f"Rate limits cleared for {name}"}
 
     # ─── Conversations API ────────────────────────────────────────────────────
 

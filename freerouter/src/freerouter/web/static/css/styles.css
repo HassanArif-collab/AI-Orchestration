@@ -202,3 +202,56 @@ code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 12p
   vertical-align: middle;
 }
 .error-tag { background: #fff0f0; color: #cc0000; }
+
+/* ─── Usage tab ─────────────────────────────────────────────────────────── */
+
+.info-box {
+  padding: 14px 16px;
+  background: #f0f7ff;
+  border: 1px solid #c8dff8;
+  border-radius: 8px;
+  color: #1a56cc;
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+
+.usage-card.card-limited { border-color: #ffcccc; background: #fff8f8; }
+.priority-hint { font-size: 11px; color: #999; margin-left: 8px; }
+
+.usage-pct-row {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: #666; margin: 4px 0 10px;
+}
+.text-warn { color: #856404; font-weight: 600; }
+
+.usage-stats { display: flex; flex-direction: column; gap: 4px; }
+.usage-stat {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: #444;
+}
+.usage-stat.muted { color: #999; }
+.usage-stat span:last-child { font-weight: 500; text-align: right; }
+
+.badge-err { background: #fff0f0; color: #cc0000; }
+.badge-gray { background: #f0f0f0; color: #888; }
+
+/* ─── Usage explainer ────────────────────────────────────────────────────── */
+
+.usage-explainer {
+  margin-top: 32px;
+  padding: 20px;
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+}
+.usage-explainer h3 { font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #333; }
+
+.explainer-steps { display: flex; flex-direction: column; gap: 10px; }
+.step { display: flex; gap: 12px; align-items: flex-start; }
+.step-num {
+  width: 24px; height: 24px; min-width: 24px;
+  background: #0066cc; color: #fff;
+  border-radius: 50%; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.step-text { font-size: 13px; color: #444; line-height: 1.5; padding-top: 3px; }
