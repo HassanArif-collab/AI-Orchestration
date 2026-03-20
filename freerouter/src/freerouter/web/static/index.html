@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FreeRouter</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>⚡ FreeRouter</h1>
+      <p>Routes AI requests to the best free provider automatically</p>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="providers">Providers</button>
+      <button class="tab-btn" data-tab="chat">Chat</button>
+      <button class="tab-btn" data-tab="usage">Usage</button>
+    </nav>
+
+    <div id="tab-providers" class="tab-panel">
+      <div class="loading">Loading…</div>
+    </div>
+
+    <div id="tab-chat" class="tab-panel hidden">
+      <div class="loading">Loading…</div>
+    </div>
+
+    <div id="tab-usage" class="tab-panel hidden">
+      <div class="loading">Loading…</div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <!-- Load order matters: ui.js first (defines helpers), then feature modules -->
+  <script src="/static/js/ui.js"></script>
+  <script src="/static/js/providers.js"></script>
+  <script src="/static/js/chat.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
