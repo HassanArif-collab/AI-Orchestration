@@ -36,6 +36,11 @@ from freerouter.providers import (
     reset_provider, load_env,
 )
 from freerouter.router import get_router, RouterError
+from freerouter.storage import (
+    init_db, create_conversation, list_conversations,
+    get_conversation, delete_conversation, add_message,
+    get_db_stats, get_db_path,
+)
 
 logger = logging.getLogger("freerouter.web")
 
@@ -63,6 +68,11 @@ def create_web_app() -> FastAPI:
         version="2.0.0",
     )
 
+    # Init database on startup
+    @app.on_event("startup")
+    async def startup():
+        init_db()
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -75,8 +85,7 @@ def create_web_app() -> FastAPI:
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # In-memory conversation store
-    _conversations: dict[str, dict] = {}
+    # Conversations are stored in SQLite via storage.py
 
     # ─── Dashboard ────────────────────────────────────────────────────────────
 
@@ -260,63 +269,49 @@ def create_web_app() -> FastAPI:
     # ─── Conversations API ────────────────────────────────────────────────────
 
     @app.get("/api/conversations")
-    async def list_conversations():
-        return {
-            "conversations": [
-                {
-                    "id": cid,
-                    "title": c.get("title", "Untitled"),
-                    "created_at": c.get("created_at"),
-                    "message_count": len(c.get("messages", [])),
-                }
-                for cid, c in _conversations.items()
-            ]
-        }
+    async def list_convs():
+        return {"conversations": list_conversations()}
 
     @app.post("/api/conversations")
-    async def create_conversation(data: dict = {}):
-        cid = str(uuid.uuid4())
-        _conversations[cid] = {
-            "id": cid,
-            "title": data.get("title", "New Chat"),
-            "messages": [],
-            "created_at": datetime.now().isoformat(),
-        }
-        return {"id": cid}
+    async def create_conv(data: dict = {}):
+        conv = create_conversation(
+            title=data.get("title", "New Chat"),
+            model=data.get("model", ""),
+        )
+        return {"id": conv["id"]}
 
     @app.get("/api/conversations/{cid}")
-    async def get_conversation(cid: str):
-        if cid not in _conversations:
+    async def get_conv(cid: str):
+        conv = get_conversation(cid)
+        if not conv:
             raise HTTPException(status_code=404, detail="Not found")
-        return _conversations[cid]
+        return conv
 
     @app.delete("/api/conversations/{cid}")
-    async def delete_conversation(cid: str):
-        if cid in _conversations:
-            del _conversations[cid]
+    async def delete_conv(cid: str):
+        if delete_conversation(cid):
             return {"success": True}
         raise HTTPException(status_code=404, detail="Not found")
 
     @app.post("/api/conversations/{cid}/messages")
-    async def add_message(cid: str, data: dict):
-        if cid not in _conversations:
+    async def add_msg(cid: str, data: dict):
+        msg = add_message(
+            cid=cid,
+            role=data.get("role", "user"),
+            content=data.get("content", ""),
+            provider=data.get("provider", ""),
+            model=data.get("model", ""),
+        )
+        if not msg:
             raise HTTPException(status_code=404, detail="Not found")
-        msg = {
-            "id": str(uuid.uuid4()),
-            "role": data.get("role", "user"),
-            "content": data.get("content", ""),
-            "timestamp": datetime.now().isoformat(),
-            "provider": data.get("provider"),
-            "model": data.get("model"),
-        }
-        _conversations[cid]["messages"].append(msg)
-        # Auto-title from first user message
-        if len(_conversations[cid]["messages"]) == 1 and msg["role"] == "user":
-            text = msg["content"]
-            _conversations[cid]["title"] = text[:50] + ("..." if len(text) > 50 else "")
         return {"success": True, "message": msg}
 
     # ─── Health ───────────────────────────────────────────────────────────────
+
+    @app.get("/api/storage")
+    async def storage_info():
+        """Get info about the local chat database."""
+        return get_db_stats()
 
     @app.get("/api/health")
     async def health():
