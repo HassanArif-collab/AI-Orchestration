@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Logs
+*.log
+web.log
+start.log
+web_err.log
+start_err.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# FreeRouter Specific
+data/
+config/local_config.yaml
+freerouter/state/
+freerouter/.env
