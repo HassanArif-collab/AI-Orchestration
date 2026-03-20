@@ -1,35 +1,19 @@
-# Core dependency - LiteLLM with proxy support
-litellm[proxy]>=1.50.0
-
-# FastAPI for additional endpoints
+# Web server
 fastapi>=0.100.0
-
-# ASGI server
 uvicorn>=0.20.0
 
-# Environment variable management
-python-dotenv>=0.20.0
-
-# HTTP client for API calls
+# HTTP client (direct provider calls)
 httpx>=0.24.0
 
 # Data validation
 pydantic>=2.0.0
 
-# YAML configuration parsing
+# Environment variable management
+python-dotenv>=1.0.0
+
+# YAML config (optional, for routing rules later)
 pyyaml>=6.0
 
-# Rich terminal output
-rich>=13.0.0
-
-# CLI framework
+# CLI
 typer>=0.9.0
-
-# Interactive terminal prompts
-questionary>=2.0.0
-
-# HTML parsing for web search (robust parsing)
-beautifulsoup4>=4.12.0
-
-# HTML parser for BeautifulSoup
-lxml>=4.9.0
+rich>=13.0.0
