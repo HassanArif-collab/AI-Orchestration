@@ -950,8 +950,10 @@ def get_dashboard_html() -> str:
             <button class="tab-btn active" data-tab="providers">🔑 Providers</button>
             <button class="tab-btn" data-tab="instances">🖥️ Instances</button>
             <button class="tab-btn" data-tab="chat">💬 Test Chat</button>
+            <button class="tab-btn" data-tab="models">📦 Models</button>
             <button class="tab-btn" data-tab="config">📋 Config</button>
             <button class="tab-btn" data-tab="usage">📊 Usage</button>
+
         </nav>
         
         <main id="content">
