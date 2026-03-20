@@ -7,6 +7,9 @@ to enable automatic fallback before hitting hard limits.
 
 All cloud providers use OpenAI-compatible APIs, so we call them directly
 with httpx — no LiteLLM proxy needed.
+
+Imports: nothing internal
+Imported by: router.py, web/app.py, proxy_server.py
 """
 
 import os
@@ -29,15 +32,15 @@ class ProviderType(str, Enum):
 
 @dataclass
 class ProviderDefinition:
-    name: str               # Internal key
+    name: str
     display_name: str
     provider_type: ProviderType
-    env_key: str            # .env variable for API key / base URL
-    base_url: str           # OpenAI-compatible API base
+    env_key: str
+    base_url: str
     health_url: str
     signup_url: str
     requires_auth: bool = True
-    priority: int = 100     # Lower = preferred (Ollama=10, Groq=20 …)
+    priority: int = 100
     soft_limit_threshold: float = 0.90
 
 
@@ -117,11 +120,14 @@ KNOWN_PROVIDERS: list[ProviderDefinition] = [
 
 PROVIDER_MAP: dict[str, ProviderDefinition] = {p.name: p for p in KNOWN_PROVIDERS}
 
-# Default model to use per provider
+# ─── Default Models ───────────────────────────────────────────────────────────
+# These are used when model="auto" or when a wrong-provider model is received.
+# Change these to set your preferred model per provider.
+
 DEFAULT_MODELS: dict[str, str] = {
-    "ollama": "llama3.2",
-    "groq": "llama-3.3-70b-versatile",
-    "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
+    "ollama": "llama3.2",                                        # whatever you have locally
+    "groq": "llama-3.3-70b-versatile",                          # fast, generous free tier
+    "openrouter": "stepfun/step-3.5-flash:free",                # as requested
     "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
     "deepinfra": "meta-llama/Meta-Llama-3.1-70B-Instruct",
     "openai": "gpt-4o-mini",
@@ -141,6 +147,8 @@ class ProviderUsage:
     last_updated: float = field(default_factory=time.time)
     is_soft_limited: bool = False
     is_hard_limited: bool = False
+    # Track when hard limit was set so we can auto-reset after a window
+    hard_limited_at: float = 0.0
 
     @property
     def requests_used_pct(self) -> Optional[float]:
@@ -150,6 +158,10 @@ class ProviderUsage:
 
 
 _usage: dict[str, ProviderUsage] = {}
+
+# Auto-reset hard limits after this many seconds (1 minute)
+# OpenRouter rate limits reset per minute
+HARD_LIMIT_RESET_SECONDS = 60
 
 
 def get_usage(name: str) -> ProviderUsage:
@@ -193,19 +205,42 @@ def update_usage_from_headers(name: str, headers: dict) -> None:
     pct = usage.requests_used_pct
     usage.is_soft_limited = (pct is not None and pct >= threshold)
 
+    # If we got a successful response, clear any hard limit
+    if rem is not None and rem > 0:
+        usage.is_hard_limited = False
+        usage.hard_limited_at = 0.0
+
 
 def mark_hard_limited(name: str) -> None:
     usage = get_usage(name)
     usage.is_hard_limited = True
     usage.requests_remaining = 0
+    usage.hard_limited_at = time.time()
 
 
 def should_skip_provider(name: str) -> bool:
     u = _usage.get(name)
-    return bool(u and (u.is_hard_limited or u.is_soft_limited))
+    if not u:
+        return False
+    # Auto-reset hard limits after the window expires
+    if u.is_hard_limited and u.hard_limited_at > 0:
+        if time.time() - u.hard_limited_at > HARD_LIMIT_RESET_SECONDS:
+            u.is_hard_limited = False
+            u.hard_limited_at = 0.0
+            return False
+    return u.is_hard_limited or u.is_soft_limited
 
 
-# ─── API Key / Config Management ─────────────────────────────────────────────
+def reset_provider(name: str) -> None:
+    """Manually reset a provider's rate limit state."""
+    if name in _usage:
+        _usage[name].is_hard_limited = False
+        _usage[name].is_soft_limited = False
+        _usage[name].hard_limited_at = 0.0
+        _usage[name].requests_remaining = -1
+
+
+# ─── API Key Management ───────────────────────────────────────────────────────
 
 def _env_path() -> Path:
     return Path(__file__).parent.parent.parent / ".env"
@@ -242,7 +277,7 @@ def get_configured_providers() -> list[tuple[ProviderDefinition, bool]]:
         if p.requires_auth:
             is_configured = bool(get_provider_key(p.name))
         else:
-            is_configured = True  # Ollama: assume configured, health check verifies
+            is_configured = True
         result.append((p, is_configured))
     return result
 
@@ -271,6 +306,8 @@ async def check_provider_health(name: str, timeout: float = 5.0) -> tuple[bool, 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(health_url, headers=headers)
             if resp.status_code == 200:
+                # Clear any stale rate limit on successful health check
+                reset_provider(name)
                 return True, "OK"
             elif resp.status_code in (401, 403):
                 return False, "Invalid API key"

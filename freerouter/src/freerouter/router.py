@@ -1,22 +1,19 @@
 """
 router.py — Direct provider routing without LiteLLM.
 
-Context: This is the core of FreeRouter. It picks the best available provider
+Context: This is the core of FreeRouter. Picks the best available provider
 and streams/completes requests directly using their OpenAI-compatible APIs.
+Auto-falls back to next provider if one fails or is rate-limited.
 
-Routing strategy (priority order):
-  1. Ollama (local) — fastest, no rate limits, private
-  2. Groq — very fast, generous free tier
-  3. OpenRouter — many free models
-  4. Together / DeepInfra — cheap alternatives
-  5. OpenAI / Anthropic — paid fallbacks
+Routing priority (configured in providers.py):
+  1. Ollama (local)   — priority 10, no rate limits
+  2. Groq             — priority 20, fast free tier
+  3. OpenRouter       — priority 30, many free models
+  4. Together/DeepInfra — priority 40-50
+  5. OpenAI/Anthropic — priority 60-70, paid fallbacks
 
-If a provider is rate-limited or down, it automatically tries the next one.
-
-Usage:
-    router = Router()
-    async for chunk in router.stream(messages, model="auto"):
-        yield chunk
+Imports: providers.py
+Imported by: web/app.py, proxy_server.py
 """
 
 import json
@@ -38,28 +35,22 @@ logger = logging.getLogger("freerouter.router")
 
 
 class RouterError(Exception):
-    """Raised when no provider could handle the request."""
     pass
 
 
 class Router:
-    """
-    Picks the best available provider and routes requests directly.
-    No LiteLLM. No separate proxy process needed.
-    """
+    """Routes requests to the best available provider with automatic fallback."""
 
     def __init__(self):
         load_env()
 
     def _get_provider_base_url(self, name: str) -> str:
-        """Get effective base URL for a provider (respects env overrides)."""
         defn = PROVIDER_MAP[name]
         if name == "ollama":
             return os.getenv("OLLAMA_BASE_URL", defn.base_url).rstrip("/")
         return defn.base_url
 
     def _get_auth_headers(self, name: str) -> dict[str, str]:
-        """Build auth headers for a provider."""
         defn = PROVIDER_MAP[name]
         headers = {"Content-Type": "application/json"}
         if defn.requires_auth:
@@ -73,52 +64,50 @@ class Router:
 
     def _resolve_model(self, provider_name: str, model: str) -> str:
         """
-        Resolve the model string for a specific provider.
+        Resolve the correct model string for a specific provider.
 
-        Examples:
-          ollama  + "ollama/llama3.2"        -> "llama3.2"
-          groq    + "groq/llama-3.3-70b"     -> "llama-3.3-70b"
-          groq    + "ollama/llama3.2"        -> groq default (wrong provider, use default)
-          auto    + any provider             -> that provider's default model
+        Rules:
+          "auto"              → provider's default model
+          "ollama/llama3.2"  → if provider=ollama: "llama3.2"
+                             → if provider=groq:   groq's default (don't send ollama name)
+          "groq/llama-3.3"   → if provider=groq:   "llama-3.3"
+          bare name          → pass through for ollama, use default for others if wrong
         """
-        # Auto routing — always use provider default
+        # Auto → always use provider default
         if model == "auto" or model.startswith("free-router/"):
             return DEFAULT_MODELS.get(provider_name, "llama-3.3-70b-versatile")
 
-        # Model has a provider prefix (e.g. "groq/llama-3.3-70b-versatile")
+        # Has a provider prefix
         if "/" in model:
             prefix = model.split("/")[0]
-            # Prefix matches this provider — strip it
             if prefix == provider_name:
+                # Correct provider — strip prefix and use the rest
                 return model.split("/", 1)[1]
-            # Prefix is a DIFFERENT known provider (e.g. "ollama/llama3.2" sent to groq)
-            # Use this provider's default — never forward wrong provider's model name
             if prefix in PROVIDER_MAP:
+                # Wrong provider's model — use this provider's default
                 return DEFAULT_MODELS.get(provider_name, "llama-3.3-70b-versatile")
 
-        # No prefix — bare model name
-        # Ollama: pass as-is (user typed local model name)
+        # Bare model name — Ollama accepts anything, cloud providers use as-is
         if provider_name == "ollama":
             return model
 
-        # Cloud providers: pass through
         return model
 
     def _get_ordered_providers(self) -> list[str]:
-        """Return provider names in priority order, skipping unconfigured/limited ones."""
+        """Return configured providers in priority order, skipping rate-limited ones."""
         load_env()
         providers = []
         for defn in sorted(KNOWN_PROVIDERS, key=lambda x: x.priority):
             name = defn.name
-            # Skip if rate limited
             if should_skip_provider(name):
-                logger.info(f"Skipping {name}: rate limited")
+                logger.info(f"Skipping {name}: rate limited (will auto-reset)")
                 continue
-            # Skip cloud providers without API keys
             if defn.requires_auth and not get_provider_key(name):
                 continue
             providers.append(name)
         return providers
+
+    # ─── Non-streaming ────────────────────────────────────────────────────────
 
     async def complete(
         self,
@@ -128,64 +117,43 @@ class Router:
         max_tokens: int = 4096,
         provider: Optional[str] = None,
     ) -> dict[str, Any]:
-        """
-        Non-streaming completion. Tries providers in priority order.
-        Returns OpenAI-compatible response dict.
-        """
         providers = [provider] if provider else self._get_ordered_providers()
-        last_error = "No providers available"
+        last_error = "No providers available. Add an API key in the Providers tab."
 
         for pname in providers:
             try:
-                result = await self._complete_with_provider(
-                    pname, messages, model, temperature, max_tokens
-                )
-                return result
+                return await self._complete_with_provider(pname, messages, model, temperature, max_tokens)
             except RouterError as e:
                 last_error = str(e)
                 logger.warning(f"Provider {pname} failed: {e}, trying next")
-                continue
 
         raise RouterError(f"All providers failed. Last error: {last_error}")
 
     async def _complete_with_provider(
-        self,
-        provider_name: str,
-        messages: list[dict],
-        model: str,
-        temperature: float,
-        max_tokens: int,
+        self, provider_name: str, messages: list[dict],
+        model: str, temperature: float, max_tokens: int,
     ) -> dict[str, Any]:
         base_url = self._get_provider_base_url(provider_name)
         headers = self._get_auth_headers(provider_name)
         resolved_model = self._resolve_model(provider_name, model)
-
-        payload = {
-            "model": resolved_model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
 
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
-                    json=payload,
+                    json={"model": resolved_model, "messages": messages,
+                          "temperature": temperature, "max_tokens": max_tokens, "stream": False},
                 )
                 update_usage_from_headers(provider_name, dict(resp.headers))
 
                 if resp.status_code == 429:
                     mark_hard_limited(provider_name)
                     raise RouterError(f"Rate limited by {provider_name}")
-
                 if resp.status_code != 200:
-                    raise RouterError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    raise RouterError(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
                 data = resp.json()
-                # Tag the response with which provider was used
                 data["_provider"] = provider_name
                 data["_model"] = resolved_model
                 return data
@@ -199,6 +167,8 @@ class Router:
         except Exception as e:
             raise RouterError(f"Unexpected error from {provider_name}: {e}")
 
+    # ─── Streaming ────────────────────────────────────────────────────────────
+
     async def stream(
         self,
         messages: list[dict],
@@ -207,10 +177,6 @@ class Router:
         max_tokens: int = 4096,
         provider: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        """
-        Streaming completion. Yields SSE-formatted chunks.
-        Automatically falls back to next provider on failure.
-        """
         providers = [provider] if provider else self._get_ordered_providers()
 
         if not providers:
@@ -222,43 +188,35 @@ class Router:
 
         for pname in providers:
             try:
-                found_content = False
+                got_real_content = False
                 async for chunk in self._stream_with_provider(pname, messages, model, temperature, max_tokens):
-                    found_content = True
+                    # Only count actual content chunks, not the meta header chunk
+                    if '"content"' in chunk and '"delta"' in chunk:
+                        got_real_content = True
                     yield chunk
-                if found_content:
-                    return  # Success, stop trying providers
+
+                # If we streamed without raising RouterError, it worked
+                return
+
             except RouterError as e:
                 last_error = str(e)
                 logger.warning(f"Provider {pname} stream failed: {e}, trying next")
                 continue
 
-        # All providers failed
-        error_msg = f"All providers failed: {last_error}"
-        yield f"data: {json.dumps({'error': error_msg})}\n\n"
+        yield f"data: {json.dumps({'error': f'All providers failed: {last_error}'})}\n\n"
         yield "data: [DONE]\n\n"
 
     async def _stream_with_provider(
-        self,
-        provider_name: str,
-        messages: list[dict],
-        model: str,
-        temperature: float,
-        max_tokens: int,
+        self, provider_name: str, messages: list[dict],
+        model: str, temperature: float, max_tokens: int,
     ) -> AsyncIterator[str]:
         base_url = self._get_provider_base_url(provider_name)
         headers = self._get_auth_headers(provider_name)
         resolved_model = self._resolve_model(provider_name, model)
 
-        payload = {
-            "model": resolved_model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-        }
+        logger.info(f"Routing to {provider_name} with model {resolved_model}")
 
-        # Send a "which provider" header chunk first
+        # Send meta chunk so the UI knows which provider is being used
         meta = {"_provider": provider_name, "_model": resolved_model}
         yield f"data: {json.dumps({'choices': [{'delta': {'role': 'assistant'}, 'index': 0}], 'meta': meta})}\n\n"
 
@@ -268,7 +226,8 @@ class Router:
                     "POST",
                     f"{base_url}/chat/completions",
                     headers=headers,
-                    json=payload,
+                    json={"model": resolved_model, "messages": messages,
+                          "temperature": temperature, "max_tokens": max_tokens, "stream": True},
                 ) as resp:
                     update_usage_from_headers(provider_name, dict(resp.headers))
 
@@ -278,7 +237,7 @@ class Router:
 
                     if resp.status_code != 200:
                         body = await resp.aread()
-                        raise RouterError(f"HTTP {resp.status_code}: {body[:200].decode()}")
+                        raise RouterError(f"HTTP {resp.status_code}: {body[:300].decode()}")
 
                     async for line in resp.aiter_lines():
                         if line:
@@ -293,8 +252,10 @@ class Router:
         except Exception as e:
             raise RouterError(f"Unexpected error from {provider_name}: {e}")
 
+    # ─── Model listing ────────────────────────────────────────────────────────
+
     async def list_models(self) -> list[dict]:
-        """List all available models from configured providers."""
+        """List available models — Ollama shows actual installed models, others show defaults."""
         models = []
         for defn, is_configured in get_configured_providers():
             if not is_configured:
@@ -303,7 +264,7 @@ class Router:
                 ollama_models = await fetch_ollama_models()
                 for m in ollama_models:
                     models.append({
-                        "id": f"ollama/{m}",   # prefix so router knows it's Ollama
+                        "id": f"ollama/{m}",
                         "provider": "ollama",
                         "display": f"ollama / {m}",
                     })
@@ -316,17 +277,10 @@ class Router:
                         "display": f"{defn.name} / {default}",
                     })
 
-        # Always add the "auto" option
-        models.insert(0, {
-            "id": "auto",
-            "provider": "auto",
-            "display": "⚡ Auto (best available)",
-        })
-
+        models.insert(0, {"id": "auto", "provider": "auto", "display": "⚡ Auto (best available)"})
         return models
 
 
-# Singleton instance
 _router: Optional[Router] = None
 
 

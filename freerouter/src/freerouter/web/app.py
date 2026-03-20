@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from freerouter.providers import (
     KNOWN_PROVIDERS, get_configured_providers,
     save_api_key, check_provider_health, get_all_usage,
-    load_env,
+    reset_provider, load_env,
 )
 from freerouter.router import get_router, RouterError
 
@@ -117,6 +117,13 @@ def create_web_app() -> FastAPI:
     async def test_provider(name: str):
         ok, msg = await check_provider_health(name)
         return {"ok": ok, "message": msg}
+
+    @app.post("/api/providers/{name}/reset")
+    async def reset_provider_limits(name: str):
+        """Reset rate limit state for a provider (useful when stuck)."""
+        from freerouter.providers import reset_provider
+        reset_provider(name)
+        return {"success": True, "message": f"Rate limits cleared for {name}"}
 
     @app.get("/api/providers/status")
     async def providers_status():
