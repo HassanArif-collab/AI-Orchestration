@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     ZEP_BASE_URL: str = "https://api.getzep.com"
     ZEP_AUDIENCE_USER_ID: str = "audience_model_v1"
     ZEP_LEARNING_USER_ID: str = "learning_synthesis_v1"
+    # Set to true once ZEP_API_KEY is configured and verified working
+    ZEP_ENABLED: bool = False
 
     # External integrations
     YOUTUBE_API_KEY: str = ""
