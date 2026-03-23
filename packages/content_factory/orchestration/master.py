@@ -58,8 +58,20 @@ class MasterOrchestrator:
             "phase": cycle.current_phase
         }])
         
-        # In a real deployed environment, here we would schedule the immediate
-        # processing of Phase_3_Round_1A via a background worker queue or asyncio.
+        # Trigger the pipeline runner for this cycle (non-blocking)
+        import asyncio
+        asyncio.create_task(self._trigger_pipeline(cycle.cycle_id, selected_topic))
+
+    async def _trigger_pipeline(self, cycle_id: str, topic: TopicBrief) -> None:
+        """Start a PipelineRunner for this production cycle."""
+        try:
+            from packages.pipeline.runner import PipelineRunner
+            runner = PipelineRunner()
+            run = await runner.create_run()
+            self.db.update_pipeline_run_id(cycle_id, run.run_id)
+            logger.info(f"pipeline_triggered | cycle={cycle_id} run={run.run_id}")
+        except Exception as e:
+            logger.error(f"pipeline_trigger_failed: {e} cycle={cycle_id}")
         
     def advance_phase(self, cycle_id: str, new_phase: str):
         """Sequential Routing enforcement."""

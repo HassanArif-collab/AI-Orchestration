@@ -39,7 +39,8 @@ class OrchestrationDB:
                     published_video_id TEXT,
                     created_at TEXT,
                     updated_at TEXT,
-                    lock_expires_at TEXT
+                    lock_expires_at TEXT,
+                    pipeline_run_id TEXT
                 )
             ''')
             
@@ -55,6 +56,16 @@ class OrchestrationDB:
                     created_at TEXT
                 )
             ''')
+            conn.commit()
+        
+        # Safe migration — add pipeline_run_id column if it doesn't exist
+        with sqlite3.connect(DB_PATH) as conn:
+            try:
+                conn.execute(
+                    "ALTER TABLE production_registry ADD COLUMN pipeline_run_id TEXT DEFAULT NULL"
+                )
+            except Exception:
+                pass  # Column already exists
             conn.commit()
 
     def create_cycle(self, record: ProductionCycleRecord):
@@ -138,4 +149,13 @@ class OrchestrationDB:
                 item.escalation_id, item.cycle_id, item.type, item.severity,
                 json.dumps(item.context_payload), item.status, item.created_at.isoformat()
             ))
+            conn.commit()
+
+    def update_pipeline_run_id(self, cycle_id: str, pipeline_run_id: str) -> None:
+        """Link a pipeline run to a production cycle."""
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "UPDATE production_registry SET pipeline_run_id = ? WHERE cycle_id = ?",
+                (pipeline_run_id, cycle_id)
+            )
             conn.commit()
