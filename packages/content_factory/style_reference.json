@@ -1,0 +1,237 @@
+{
+  "meta": {
+    "schema_version": "1.0.0",
+    "created": "2026-03-22",
+    "description": "Machine-readable style reference for the Johnny Harris investigation format, adapted for a Pakistani audience. Every future agent in the Content Factory reads this document as its constitution for what good content looks like.",
+    "author": "Phase 1 — Johnny Harris Intelligence Layer"
+  },
+
+  "core_philosophy": {
+    "summary": "Johnny Harris does not explain topics. He investigates them. The viewer must experience discovery, not receive instruction.",
+    "principles": [
+      {
+        "id": "CP1",
+        "name": "Investigation Over Explanation",
+        "description": "An explainer tells the audience what something means. An investigation shows the audience something real and lets the meaning emerge from what they see. Every video must be structured as an investigation."
+      },
+      {
+        "id": "CP2",
+        "name": "Experience Over Information",
+        "description": "People do not retain information they are told. They retain experiences they have had. Every creative decision — writing, visuals, music, pacing — must create the experience of discovering something rather than the experience of being taught something."
+      }
+    ]
+  },
+
+  "anchor_bridge_formula": {
+    "summary": "The structural backbone of every video. Anchor first, Bridge second. The rhythm never reverses.",
+    "visual_anchor": {
+      "definition": "A tangible, physical, real-world thing that the camera can point at. Not a concept. Not a statistic. An object, a place, a person, a document, a footage clip — something that exists in physical reality that the viewer can look at directly.",
+      "requirements": [
+        "Must exist in physical reality",
+        "Must be filmable or photographable",
+        "Must not require narration to convey its basic meaning",
+        "Must be emotionally arresting within the first three seconds of seeing it",
+        "Should suggest that something is wrong, hidden, or misunderstood"
+      ]
+    },
+    "contextual_bridge": {
+      "definition": "The explanatory tissue that connects two anchors. Provides history, data, mechanism — the why and how that gives the anchor its meaning.",
+      "requirements": [
+        "Must always follow an anchor, never precede it",
+        "Must be shorter in total duration than anchor sections",
+        "Must create a hunger in the viewer for the next anchor"
+      ]
+    },
+    "rhythm": {
+      "pattern": "Anchor → Bridge → Anchor → Bridge → ...",
+      "rule": "Context never precedes evidence. The viewer experiences something real, then understands it, then experiences something real again.",
+      "opening_rule": "The opening must drop the viewer into a surprising action or visual, never an abstract introduction."
+    }
+  },
+
+  "classic_style_writing": {
+    "summary": "Inspired by Steven Pinker's writing philosophy. Core rule: who did what to whom.",
+    "rules": [
+      {
+        "id": "CSW1",
+        "name": "Agent-Action-Object",
+        "description": "Every sentence must contain a visible agent performing a visible action on a visible object.",
+        "test": "Can the viewer's brain form a mental image while hearing this sentence? If no image comes, the sentence is abstract and needs rewriting.",
+        "bad_example": "The globalization of trade led to economic displacement.",
+        "good_example": "America sent its factories to China and a million workers in Ohio lost their jobs."
+      },
+      {
+        "id": "CSW2",
+        "name": "Anti-Abstraction",
+        "description": "Abstract nouns are the enemy. Never use words that describe concepts when you can describe actions. Avoid nominalizations — words that turn verbs into nouns.",
+        "nominalizations_to_avoid": ["globalization", "implementation", "utilization", "facilitation", "optimization", "displacement", "transformation"]
+      },
+      {
+        "id": "CSW3",
+        "name": "Anti-Jargon",
+        "description": "Jargon is never used. Not because the audience is unsophisticated — Harris treats his audience as intelligent — but because jargon creates distance. Every piece of jargon can be replaced with a plain action that means the same thing.",
+        "reasoning": "The writer using jargon is signaling expertise to peers, not communicating to a viewer."
+      },
+      {
+        "id": "CSW4",
+        "name": "Active Voice Only",
+        "description": "Every sentence must be in active voice. Passive constructions hide the agent and weaken the mental image."
+      },
+      {
+        "id": "CSW5",
+        "name": "Simple Reductionist Dialogue",
+        "description": "Complex bureaucratic or historical processes must be compressed into simple reductionist dialogue — plain statements that capture the essence of a process in a single vivid action."
+      }
+    ]
+  },
+
+  "peer_to_peer_framing": {
+    "summary": "Harris speaks to the viewer as a friend who has just discovered something fascinating and cannot wait to show it. Not as a professor. Not as a journalist filing a report.",
+    "tone": "A friend sitting next to you saying 'wait, look at this.'",
+    "direction_phrases": [
+      "Let me show you this.",
+      "Look at this map.",
+      "Here's what I found.",
+      "I want to take you through this.",
+      "Wait, look at this.",
+      "Come with me on this.",
+      "Follow me here."
+    ],
+    "effects": [
+      "Equalizes the relationship between speaker and viewer",
+      "Creates forward momentum — each phrase is a promise of something about to be revealed"
+    ],
+    "anti_patterns": [
+      "Professorial lecturing tone",
+      "Journalist-filing-a-report neutrality",
+      "Condescending simplification",
+      "Addressing the audience as students"
+    ]
+  },
+
+  "motive_loading": {
+    "summary": "When Harris introduces an entity — a government, a corporation, a community — he immediately loads that entity with human motives. This is not editorializing. It is storytelling.",
+    "motives_to_assign": ["fear", "ambition", "desperation", "self-preservation", "greed", "pride", "territorial instinct", "survival", "revenge", "hope"],
+    "rule": "Entities without motives are abstract forces. Entities with motives are characters. Viewers follow characters.",
+    "bad_example": "A map showing the US federal government moving west.",
+    "good_example": "A map showing the federal government — hungry to control the continent and threatened by a community of believers who have built their own state — moving west toward the Mormons who are terrified of losing their spiritual autonomy."
+  },
+
+  "dual_column_format": {
+    "summary": "Harris writes scripts in two columns simultaneously. The left column is spoken prose. The right column is visual direction. Every sentence has a corresponding visual instruction.",
+    "left_column": {
+      "name": "Spoken Prose",
+      "description": "The narration text that will be read aloud. Must follow all Classic Style Writing rules."
+    },
+    "right_column": {
+      "name": "Visual Coding",
+      "description": "Specific visual direction for every sentence. Not vague descriptions. Specific actions, animations, footage references, and motion instructions that an animator or editor can execute without asking a single follow-up question.",
+      "requirement": "An animator or editor must be able to execute the instruction without a single follow-up question."
+    },
+    "color_coding_system": {
+      "description": "The right column uses a color-coding system to distinguish between different types of visual content.",
+      "types": [
+        {
+          "type": "talking_head",
+          "color": "red",
+          "description": "Direct-to-camera footage of the presenter"
+        },
+        {
+          "type": "broll",
+          "color": "green",
+          "description": "Supplementary footage that visually supports the narration"
+        },
+        {
+          "type": "animation",
+          "color": "blue",
+          "description": "Custom graphics, motion graphics, or animated explainers"
+        },
+        {
+          "type": "archive",
+          "color": "yellow",
+          "description": "Historical footage, documents, or photographs"
+        },
+        {
+          "type": "data_viz",
+          "color": "purple",
+          "description": "Charts, maps, annotated documents, or data visualizations"
+        },
+        {
+          "type": "soul_moment",
+          "color": "gray",
+          "description": "Purely atmospheric visuals that carry emotional rather than evidential weight. Slow, meditative, human."
+        }
+      ]
+    },
+    "writing_process": "The two columns are written together, not sequentially. The writing is inherently visual from the first word."
+  },
+
+  "conclusion_shift": {
+    "summary": "Every video ends with a tone shift from precise 'thinky' mode to slower, more poetic 'feely' mode.",
+    "structure": {
+      "thinky_percent": "80-90% of the video",
+      "feely_percent": "10-20% of the video"
+    },
+    "thinky_mode": {
+      "description": "Precise, active, evidence-based, forward-moving. The investigative engine of the video."
+    },
+    "feely_mode": {
+      "description": "Slower, more poetic, less precise, emotionally resonant. The human moment.",
+      "elements": [
+        "Zooms out from the specific story to the larger human complexity it represents",
+        "Raises questions instead of closing them",
+        "Includes unexpected praise — a genuine acknowledgment of something valuable or beautiful about the thing the video has been criticizing",
+        "Gets personal — connects the story to the presenter's own experience, uncertainty, and emotional response",
+        "Prevents the video from feeling like a one-sided argument"
+      ]
+    },
+    "unexpected_praise": {
+      "definition": "A genuine acknowledgment of something valuable or beautiful about the thing the video has been criticizing.",
+      "purpose": "Reflects the honest complexity of most human situations and transforms a documentary into a conversation."
+    },
+    "final_line_rule": "The final line must be personal or emotionally resonant rather than informational."
+  },
+
+  "genre_variations": {
+    "history_documentary": {
+      "genre_id": "history",
+      "name": "History and Documentary",
+      "structural_backbone": "Chronological — the script has a natural start and end point.",
+      "key_challenge": "Making historical figures feel like living characters with real motives rather than names in a timeline.",
+      "conclusion_pattern": "Reflects on what the history means for the present."
+    },
+    "current_situation": {
+      "genre_id": "current_situation",
+      "name": "Current Situation Explainer",
+      "structural_backbone": "The Big Question — a specific gap between what most people think is true and what is actually happening.",
+      "key_challenge": "The video exists to close the gap between perception and reality. Timing must be tied to why this matters right now.",
+      "conclusion_pattern": "Productive uncertainty rather than false resolution."
+    },
+    "tech_systems": {
+      "genre_id": "tech_systems",
+      "name": "Tech and Systems Explainer",
+      "structural_backbone": "Human consequence, never technical mechanism. The technology is the villain or the context. The story is always about what the technology does to people.",
+      "key_challenge": "The most abstract genre. Must always ground technical mechanism in human impact.",
+      "conclusion_pattern": "What the technology means for real people's lives."
+    },
+    "comparison_contrast": {
+      "genre_id": "comparison",
+      "name": "Comparison and Contrast",
+      "structural_backbone": "The surprising revelation that two things most people consider different are actually the same in the ways that matter, or vice versa.",
+      "key_challenge": "Framing the comparison as a human story rather than a feature list.",
+      "conclusion_pattern": "A revelation that emerges from the comparison itself.",
+      "pakistan_example": "The 25k vs 25,000,000 salary video adapted for Pakistani audience."
+    }
+  },
+
+  "pakistani_adaptation": {
+    "summary": "All content is produced for a Pakistani audience. This affects monetary references, locations, cultural context, and tone.",
+    "rules": [
+      "All monetary figures must be converted to Pakistani rupees with locally recognizable salary or price context",
+      "Named locations should be replaced with Pakistani equivalents where the story structure allows",
+      "Cultural references must be recognizable to a Pakistani audience without explanation",
+      "Human characters should reflect Pakistani social and economic realities rather than Western defaults",
+      "Tone must be calibrated for a Pakistani audience — neither condescending nor assuming Western cultural familiarity"
+    ]
+  }
+}

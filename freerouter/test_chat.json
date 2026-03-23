@@ -1,0 +1,10 @@
+{
+  "model": "free-router/auto",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, are you working?"
+    }
+  ],
+  "stream": false
+}

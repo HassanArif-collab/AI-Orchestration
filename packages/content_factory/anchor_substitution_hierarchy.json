@@ -1,0 +1,91 @@
+{
+  "meta": {
+    "schema_version": "1.0.0",
+    "created": "2026-03-22",
+    "description": "Anchor Substitution Hierarchy — a 5-level fallback system the Visual Agent uses when a direct visual anchor cannot be found. Queryable by level number."
+  },
+
+  "levels": [
+    {
+      "level": 1,
+      "name": "Direct Evidence",
+      "description": "Actual footage, real documents, real emails, real objects filmed directly. The highest fidelity visual anchor — the camera is pointed at the thing itself.",
+      "examples": [
+        "Leaked internal documents shown on screen",
+        "Footage of the actual event as it happened",
+        "Photograph of the real person being discussed",
+        "A real email or letter, readable on screen",
+        "Drone footage of the actual location"
+      ],
+      "is_error": false,
+      "visual_impact": "highest",
+      "viewer_trust": "highest"
+    },
+    {
+      "level": 2,
+      "name": "Symbolic Object",
+      "description": "A physical object that represents the concept. Must be filmable or photographable in reality. The object stands in for the idea but is itself tangible.",
+      "examples": [
+        "A locked padlock representing restricted access",
+        "An empty factory floor representing deindustrialization",
+        "A passport representing citizenship or migration",
+        "A pile of currency notes representing economic pressure",
+        "A demolished building representing displacement"
+      ],
+      "is_error": false,
+      "visual_impact": "high",
+      "viewer_trust": "high"
+    },
+    {
+      "level": 3,
+      "name": "Data Visualization",
+      "description": "A chart, map, animated graphic, or annotated document that makes invisible data visible. The data must be real and sourced.",
+      "examples": [
+        "An animated map showing troop movements over time",
+        "A bar chart comparing wages across countries",
+        "A timeline with annotated key events",
+        "A satellite image with overlaid boundary changes",
+        "An annotated government document with highlights"
+      ],
+      "is_error": false,
+      "visual_impact": "medium-high",
+      "viewer_trust": "medium-high"
+    },
+    {
+      "level": 4,
+      "name": "Constructed Reference",
+      "description": "The physical space, building, location, or object associated with the event, filmed from the outside or in context. You cannot film the event itself, but you can film where it happened.",
+      "examples": [
+        "The exterior of a government building where the policy was signed",
+        "The street where the protest occurred, filmed today",
+        "The factory that was mentioned in the story, from outside",
+        "The border crossing relevant to the narrative",
+        "The school building associated with the incident"
+      ],
+      "is_error": false,
+      "visual_impact": "medium",
+      "viewer_trust": "medium"
+    },
+    {
+      "level": 5,
+      "name": "Script Demotion",
+      "description": "The claim cannot be anchored at any level. It is moved from anchor status to bridge status. This means the claim is spoken as context between visual anchors, not presented as a visual moment itself. This is logged as an error.",
+      "examples": [
+        "An abstract economic theory that has no physical manifestation",
+        "A claim about someone's internal emotional state with no footage or evidence",
+        "A statistical trend with no compelling visualization possible"
+      ],
+      "is_error": true,
+      "visual_impact": "none",
+      "viewer_trust": "lowest",
+      "error_action": "Log as anchor failure. Move claim to bridge section. Document why no visual anchor could be found at levels 1-4."
+    }
+  ],
+
+  "usage_rules": {
+    "priority": "Always attempt Level 1 first. Only descend to lower levels when the higher level is genuinely impossible.",
+    "logging": "When the Visual Agent uses Level 3 or below, it must log the reason why higher levels were not possible.",
+    "error_threshold": "If more than 30% of a script's anchors are at Level 5 (Script Demotion), the script is flagged for rewrite. The topic may be too abstract for the Harris format.",
+    "query_method": "The Visual Agent queries this hierarchy by level number. For each claim that needs anchoring, it walks from Level 1 downward until a viable option is found."
+  }
+}

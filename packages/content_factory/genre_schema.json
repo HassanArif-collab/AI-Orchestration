@@ -1,0 +1,141 @@
+{
+  "meta": {
+    "schema_version": "1.0.0",
+    "created": "2026-03-22",
+    "description": "Genre Classification Schema for the Content Factory. Maps each genre to its structural backbone, question categories, and Pakistani adaptation rules."
+  },
+
+  "genres": [
+    {
+      "genre_id": "history",
+      "name": "History and Documentary",
+      "structural_backbone": "Chronological narrative with natural start and end points",
+      "description": "Videos that trace historical events, figures, or movements. The challenge is making historical figures feel like living characters with real motives rather than names in a timeline.",
+      "conclusion_pattern": "Reflects on what the history means for the present moment",
+      "universal_question_categories": [
+        "research_quality",
+        "visual_anchor_quality",
+        "script_prose_quality",
+        "anchor_bridge_structure",
+        "dual_column_coding_quality",
+        "conclusion_quality",
+        "pakistani_audience_adaptation"
+      ],
+      "genre_specific_question_categories": [
+        "history_documentary_specific"
+      ],
+      "total_applicable_questions": "A1-A7, B1-B7, C1-C7, D1-D7, E1-E5, F1-F5, G1-G4, K1-K5"
+    },
+    {
+      "genre_id": "current_situation",
+      "name": "Current Situation Explainer",
+      "structural_backbone": "The Big Question — closing the gap between public perception and actual reality",
+      "description": "Videos about events, policies, or situations happening right now. The timing must be tied to why this matters at this specific moment. The video exists to close the gap between what most people think is true and what is actually happening.",
+      "conclusion_pattern": "Productive uncertainty rather than false resolution",
+      "universal_question_categories": [
+        "research_quality",
+        "visual_anchor_quality",
+        "script_prose_quality",
+        "anchor_bridge_structure",
+        "dual_column_coding_quality",
+        "conclusion_quality",
+        "pakistani_audience_adaptation"
+      ],
+      "genre_specific_question_categories": [
+        "current_situation_specific"
+      ],
+      "total_applicable_questions": "A1-A7, B1-B7, C1-C7, D1-D7, E1-E5, F1-F5, H1-H3, K1-K5"
+    },
+    {
+      "genre_id": "tech_systems",
+      "name": "Tech and Systems Explainer",
+      "structural_backbone": "Human consequence — what the technology does to people, not how it works internally",
+      "description": "The most abstract genre. The backbone is always human consequence, never technical mechanism. The technology is the villain or the context. The story is always about what the technology does to people.",
+      "conclusion_pattern": "What the technology means for real people's lives",
+      "universal_question_categories": [
+        "research_quality",
+        "visual_anchor_quality",
+        "script_prose_quality",
+        "anchor_bridge_structure",
+        "dual_column_coding_quality",
+        "conclusion_quality",
+        "pakistani_audience_adaptation"
+      ],
+      "genre_specific_question_categories": [
+        "tech_systems_specific"
+      ],
+      "total_applicable_questions": "A1-A7, B1-B7, C1-C7, D1-D7, E1-E5, F1-F5, I1-I3, K1-K5"
+    },
+    {
+      "genre_id": "comparison",
+      "name": "Comparison and Contrast",
+      "structural_backbone": "The surprising revelation that two things most people consider different are actually the same, or vice versa",
+      "description": "Videos built on comparing two entities, systems, or situations. The comparison must be framed as a human story, not a feature list. The Pakistani adaptation (e.g., 25k vs 25,000,000 salary) is the prototypical example.",
+      "conclusion_pattern": "A revelation that emerges from the comparison itself",
+      "universal_question_categories": [
+        "research_quality",
+        "visual_anchor_quality",
+        "script_prose_quality",
+        "anchor_bridge_structure",
+        "dual_column_coding_quality",
+        "conclusion_quality",
+        "pakistani_audience_adaptation"
+      ],
+      "genre_specific_question_categories": [
+        "comparison_contrast_specific"
+      ],
+      "total_applicable_questions": "A1-A7, B1-B7, C1-C7, D1-D7, E1-E5, F1-F5, J1-J3, K1-K5"
+    },
+    {
+      "genre_id": "islamic_history",
+      "name": "Islamic History and Civilization",
+      "structural_backbone": "Tracing ideas from theological/historical origin to modern consequence",
+      "description": "Explorations of Islamic history, theology, and civilization. Often features the 'Islamic Scholarly' sub-genre.",
+      "conclusion_pattern": "Connects historical theological precedent to contemporary Muslim identity",
+      "universal_question_categories": [
+        "research_quality",
+        "visual_anchor_quality",
+        "script_prose_quality",
+        "anchor_bridge_structure",
+        "dual_column_coding_quality",
+        "conclusion_quality",
+        "pakistani_audience_adaptation"
+      ],
+      "genre_specific_question_categories": [
+        "islamic_history_specific",
+        "islamic_scholarly_specific"
+      ],
+      "total_applicable_questions": "A1-A7, B1-B7, C1-C7, D1-D7, E1-E5, F1-F5, L1-L5, N1-N5, K1-K5"
+    },
+    {
+      "genre_id": "south_asian_history",
+      "name": "South Asian and Mughal History",
+      "structural_backbone": "Deconstructing colonial narratives to reveal indigenous realities",
+      "description": "Focuses on the subcontinent's history, spanning pre-colonial, Mughal, colonial, and post-partition eras.",
+      "conclusion_pattern": "Reclaiming historical agency from colonial framing",
+      "universal_question_categories": [
+        "research_quality",
+        "visual_anchor_quality",
+        "script_prose_quality",
+        "anchor_bridge_structure",
+        "dual_column_coding_quality",
+        "conclusion_quality",
+        "pakistani_audience_adaptation"
+      ],
+      "genre_specific_question_categories": [
+        "south_asian_history_specific"
+      ],
+      "total_applicable_questions": "A1-A7, B1-B7, C1-C7, D1-D7, E1-E5, F1-F5, M1-M5, K1-K5"
+    }
+  ],
+
+  "scoring_rules": {
+    "method": "binary",
+    "score_values": {
+      "pass": 1,
+      "fail": 0
+    },
+    "aggregation": "Every applicable question for a genre must be evaluated. The total score is the count of passing questions divided by the count of applicable questions. No partial scores, no ranges.",
+    "genre_detection": "Before scoring, the content must be classified into exactly one genre. The genre determines which genre-specific questions are added to the universal set."
+  }
+}

@@ -1,0 +1,739 @@
+{
+  "meta": {
+    "schema_version": "1.0.0",
+    "created": "2026-03-22",
+    "description": "Binary Evaluation Question Suite for the Self-Improving Content Factory. Every question is binary — Yes (1) or No (0). No partial scores. No ranges. This is the scoring engine for the Auto Research loop.",
+    "total_categories": 11,
+    "category_labels": {
+      "A": "Research Quality",
+      "B": "Visual Anchor Quality",
+      "C": "Script Prose Quality",
+      "D": "Anchor-Bridge Structure",
+      "E": "Dual-Column Coding Quality",
+      "F": "Conclusion Quality",
+      "G": "History and Documentary Specific",
+      "H": "Current Situation Specific",
+      "I": "Tech and Systems Specific",
+      "J": "Comparison and Contrast Specific",
+      "K": "Pakistani Audience Adaptation",
+      "O": "Universal Music Architecture",
+      "P": "Pakistani Audience Music",
+      "Q": "Genre-Specific Music"
+    }
+  },
+
+  "questions": [
+    {
+      "id": "A1",
+      "text": "Does the research contain at least three tangible physical objects or real-world locations that could serve as Visual Anchors?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+    {
+      "id": "A2",
+      "text": "Is every factual assertion in the research linked to a verifiable source?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+    {
+      "id": "A3",
+      "text": "Does the research identify at least one human character whose personal story illustrates the macro problem?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+    {
+      "id": "A4",
+      "text": "Has the research separated raw fact-gathering from any narrative framing or interpretation?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+    {
+      "id": "A5",
+      "text": "Does the research surface at least one piece of evidence that contradicts or complicates the mainstream interpretation of the topic?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+    {
+      "id": "A6",
+      "text": "Does the research contain either a clear chronological sequence or a single central question that can serve as a structural backbone?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+    {
+      "id": "A7",
+      "text": "Does the research contain at least one detail that the average viewer would find genuinely surprising?",
+      "category": "research_quality",
+      "genres": ["all"],
+      "responsible_agent": "researcher",
+      "failure_reason": null
+    },
+
+    {
+      "id": "B1",
+      "text": "Can a camera or graphic point directly at this specific object or location — does it exist in physical reality?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "B2",
+      "text": "Does this visual replace an abstract concept without requiring narration to explain its basic meaning?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "B3",
+      "text": "Is this visual emotionally arresting within the first three seconds of seeing it?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "B4",
+      "text": "Does this visual suggest that something is wrong, hidden, or misunderstood?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "B5",
+      "text": "Is this visual loaded with human motives — does it represent someone's fear, agenda, desire, or struggle?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "B6",
+      "text": "Could this visual appear in the first sixty seconds without confusing a viewer with no prior knowledge of the topic?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "B7",
+      "text": "Can this visual recur later in the video as a narrative reference point without feeling forced?",
+      "category": "visual_anchor_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "C1",
+      "text": "Does every sentence contain a clear agent performing a visible action?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "C2",
+      "text": "Is every sentence free of abstract nominalizations — words that describe concepts rather than actions?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "C3",
+      "text": "Could this sentence be spoken by a friend explaining something at a coffee table?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "C4",
+      "text": "Is this sentence free of jargon that requires prior domain knowledge to understand?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "C5",
+      "text": "Can the viewer form a mental image while hearing this sentence?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "C6",
+      "text": "Does complex bureaucratic or historical process get compressed into simple reductionist dialogue?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "C7",
+      "text": "Is every sentence in active voice?",
+      "category": "script_prose_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "D1",
+      "text": "Does every contextual bridge section follow rather than precede a visual anchor section?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+    {
+      "id": "D2",
+      "text": "Are bridge sections shorter in total duration than anchor sections?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+    {
+      "id": "D3",
+      "text": "Does the opening drop the viewer into a surprising action or visual rather than an abstract introduction?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+    {
+      "id": "D4",
+      "text": "Is a Big Question planted within the first sixty seconds?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+    {
+      "id": "D5",
+      "text": "Does each anchor create a hunger for the explanatory bridge that follows it?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+    {
+      "id": "D6",
+      "text": "Does the script contain at least three explicit viewer direction phrases such as 'look at this' or equivalent?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+    {
+      "id": "D7",
+      "text": "Do all entities introduced in the script have clearly stated motives, worries, or intentions?",
+      "category": "anchor_bridge_structure",
+      "genres": ["all"],
+      "responsible_agent": "orchestrator",
+      "failure_reason": null
+    },
+
+    {
+      "id": "E1",
+      "text": "Does every sentence of spoken prose have a corresponding visual direction entry?",
+      "category": "dual_column_coding_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "E2",
+      "text": "Is every visual direction specific enough to execute without follow-up questions?",
+      "category": "dual_column_coding_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "E3",
+      "text": "Are visual elements distinguished by type using a consistent coding system?",
+      "category": "dual_column_coding_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "E4",
+      "text": "Does the visual direction align with an established mood and art direction for this video?",
+      "category": "dual_column_coding_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "E5",
+      "text": "Are soul moments clearly labeled and separated from evidence moments?",
+      "category": "dual_column_coding_quality",
+      "genres": ["all"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "F1",
+      "text": "Does the conclusion shift from a precise thinky tone to a slower feely tone?",
+      "category": "conclusion_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "F2",
+      "text": "Does the conclusion include at least one moment of unexpected praise for the subject being criticized?",
+      "category": "conclusion_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "F3",
+      "text": "Does the conclusion ground the story in the lived experience of real people rather than abstract forces?",
+      "category": "conclusion_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "F4",
+      "text": "Does the final section raise questions rather than close them?",
+      "category": "conclusion_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "F5",
+      "text": "Is the final line personal or emotionally resonant rather than informational?",
+      "category": "conclusion_quality",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "G1",
+      "text": "Does each historical figure have a stated motive not just a stated action?",
+      "category": "history_documentary_specific",
+      "genres": ["history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "G2",
+      "text": "Is the chronology simplified enough for a viewer with no prior knowledge to follow without rewinding?",
+      "category": "history_documentary_specific",
+      "genres": ["history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "G3",
+      "text": "Does the script find one specific human moment within the larger historical event to anchor the emotional weight?",
+      "category": "history_documentary_specific",
+      "genres": ["history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "G4",
+      "text": "Does the conclusion reflect on what the history means for the present moment?",
+      "category": "history_documentary_specific",
+      "genres": ["history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "H1",
+      "text": "Does the script challenge at least one mainstream assumption about the topic?",
+      "category": "current_situation_specific",
+      "genres": ["current_situation"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "H2",
+      "text": "Is the 'why now' timing of the story established within the first ninety seconds?",
+      "category": "current_situation_specific",
+      "genres": ["current_situation"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "H3",
+      "text": "Does the conclusion leave productive uncertainty rather than false resolution?",
+      "category": "current_situation_specific",
+      "genres": ["current_situation"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "I1",
+      "text": "Is the technical mechanism explained through its human consequence rather than its internal process?",
+      "category": "tech_systems_specific",
+      "genres": ["tech_systems"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "I2",
+      "text": "Does the script have at least one moment comparing the official story to the documented reality?",
+      "category": "tech_systems_specific",
+      "genres": ["tech_systems"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "I3",
+      "text": "Is every piece of technical terminology translated into a plain visible action?",
+      "category": "tech_systems_specific",
+      "genres": ["tech_systems"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "J1",
+      "text": "Is the comparison framed as a human story rather than a feature list?",
+      "category": "comparison_contrast_specific",
+      "genres": ["comparison"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "J2",
+      "text": "Does the script acknowledge complexity within the comparison rather than presenting false equivalence?",
+      "category": "comparison_contrast_specific",
+      "genres": ["comparison"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "J3",
+      "text": "Is there a clear moment where the comparison produces a revelation rather than just a summary?",
+      "category": "comparison_contrast_specific",
+      "genres": ["comparison"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "K1",
+      "text": "Are all monetary figures converted to Pakistani rupees with locally recognizable salary or price context?",
+      "category": "pakistani_audience_adaptation",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "K2",
+      "text": "Are all named locations replaced with Pakistani equivalents where the story structure allows?",
+      "category": "pakistani_audience_adaptation",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "K3",
+      "text": "Are all cultural references verified as recognizable to a Pakistani audience without explanation?",
+      "category": "pakistani_audience_adaptation",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "K4",
+      "text": "Do the human characters introduced reflect Pakistani social and economic realities rather than Western defaults?",
+      "category": "pakistani_audience_adaptation",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "K5",
+      "text": "Is the tone calibrated for a Pakistani audience — neither condescending nor assuming Western cultural familiarity?",
+      "category": "pakistani_audience_adaptation",
+      "genres": ["all"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "L1",
+      "text": "Does the script accurately source its theological or historical claims from recognized texts?",
+      "category": "islamic_history_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "L2",
+      "text": "Is the distinction between cultural practice and theological doctrine maintained?",
+      "category": "islamic_history_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "L3",
+      "text": "Are historical Muslim figures granted human complexity rather than hagiography?",
+      "category": "islamic_history_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "L4",
+      "text": "Does the visual direction avoid clichéd orientalist imagery in favor of historically accurate representation?",
+      "category": "islamic_history_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "visual_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "L5",
+      "text": "Is the historical event connected to a living reality for modern Muslims?",
+      "category": "islamic_history_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "M1",
+      "text": "Does the script actively deconstruct a specific colonial narrative or framing?",
+      "category": "south_asian_history_specific",
+      "genres": ["south_asian_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "M2",
+      "text": "Are indigenous actors granted agency rather than appearing solely as victims or subjects of colonial power?",
+      "category": "south_asian_history_specific",
+      "genres": ["south_asian_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "M3",
+      "text": "Does the timeline begin before the arrival of European powers if discussing systemic issues?",
+      "category": "south_asian_history_specific",
+      "genres": ["south_asian_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "M4",
+      "text": "Are pre-colonial governance or economic institutions explained on their own terms?",
+      "category": "south_asian_history_specific",
+      "genres": ["south_asian_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "M5",
+      "text": "Does the conclusion address the modern institutional legacy of the historical event?",
+      "category": "south_asian_history_specific",
+      "genres": ["south_asian_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "N1",
+      "text": "Are scholarly disagreements acknowledged rather than presenting a monolith?",
+      "category": "islamic_scholarly_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "N2",
+      "text": "Is Arabic or Persian terminology translated accurately into accessible urdu/english vernacular?",
+      "category": "islamic_scholarly_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "N3",
+      "text": "Does the explanation of fiqh or aqidah center the human problem it was trying to solve?",
+      "category": "islamic_scholarly_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "N4",
+      "text": "Are the political or social conditions influencing the scholar clearly established?",
+      "category": "islamic_scholarly_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "N5",
+      "text": "Is the scholarly text treated as a living document within a tradition rather than a dead artifact?",
+      "category": "islamic_scholarly_specific",
+      "genres": ["islamic_history"],
+      "responsible_agent": "script_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "O1",
+      "text": "Does every ANCHOR section receive either State 3 (Feeling Track) or State 2 (Thinking Track) with specific justification?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O2",
+      "text": "Does every BRIDGE section receive State 2 (Thinking Track)?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O3",
+      "text": "Does every CONCLUSION section receive State 4 (Contemplative Close)?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O4",
+      "text": "Is there at least one complete silence moment placed immediately before the primary REVEAL?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O5",
+      "text": "Does the energy trajectory show a building pattern from the first ANCHOR to the REVEAL?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O6",
+      "text": "Does every state transition have a specified transition type and prose cue points?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O7",
+      "text": "Are Surface moments specified for every voiceover section longer than thirty seconds?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O8",
+      "text": "Does the CONCLUSION section end at lower energy than it began?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O9",
+      "text": "Is the final ten seconds of the video at either very low volume or complete silence?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "O10",
+      "text": "Does every section with voiceover have at least one Surface moment specified?",
+      "category": "universal_music_architecture",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "P1",
+      "text": "For Islamic History and South Asian History genres, does a full-video Pakistani sonic palette flag appear with specific instrumentation direction?",
+      "category": "pakistani_audience_music",
+      "genres": ["islamic_history", "south_asian_history"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "P2",
+      "text": "For CONCLUSION sections covering Pakistani social or economic realities, does the Sonic Palette Specification create emotional space for the viewer rather than dictating an emotional response?",
+      "category": "pakistani_audience_music",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "P3",
+      "text": "For ANCHOR sections showing Pakistani human stories, does the state assignment and volume level allow the visual and prose to carry the primary emotional weight without the music overwhelming them?",
+      "category": "pakistani_audience_music",
+      "genres": ["all"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+
+    {
+      "id": "Q1",
+      "text": "Does the Sonic Palette Specification for significant historical anchor sections specifically avoid Western Hollywood-style dramatic orchestration?",
+      "category": "genre_specific_music",
+      "genres": ["islamic_history"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "Q2",
+      "text": "Does the CONCLUSION section's Sonic Palette Specification reflect the gravity and reverence appropriate for Islamic historical content?",
+      "category": "genre_specific_music",
+      "genres": ["islamic_history"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    },
+    {
+      "id": "Q3",
+      "text": "Is there a clear sonic distinction between the two elements being compared — different energy levels, different volume treatments, or different surface moment density?",
+      "category": "genre_specific_music",
+      "genres": ["comparison"],
+      "responsible_agent": "music_agent",
+      "failure_reason": null
+    }
+  ]
+}

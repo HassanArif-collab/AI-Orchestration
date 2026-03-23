@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Pipeline Dashboard</title>
+  <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+  <div id="app">
+    <nav id="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">⚡</span>
+        <h1>FreeRouter</h1>
+        <span id="system-status" class="status-dot unknown" title="Checking..."></span>
+      </div>
+      <ul class="nav-links">
+        <li><a href="#pipeline" class="nav-link active" data-tab="pipeline">
+          <span class="nav-icon">📋</span>
+          <span class="nav-label">Pipeline</span>
+          <span id="pipeline-badge" class="badge hidden">0</span>
+        </a></li>
+        <li><a href="#chat" class="nav-link" data-tab="chat">
+          <span class="nav-icon">💬</span>
+          <span class="nav-label">Chat</span>
+        </a></li>
+        <li><a href="#providers" class="nav-link" data-tab="providers">
+          <span class="nav-icon">🔌</span>
+          <span class="nav-label">Providers</span>
+        </a></li>
+        <li><a href="#memory" class="nav-link" data-tab="memory">
+          <span class="nav-icon">🧠</span>
+          <span class="nav-label">Memory</span>
+        </a></li>
+        <li><a href="#analytics" class="nav-link" data-tab="analytics">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Analytics</span>
+        </a></li>
+        <li><a href="#visual" class="nav-link" data-tab="visual">
+          <span class="nav-icon">🎨</span>
+          <span class="nav-label">Visual</span>
+        </a></li>
+        <li><a href="#settings" class="nav-link" data-tab="settings">
+          <span class="nav-icon">⚙️</span>
+          <span class="nav-label">Settings</span>
+        </a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <span class="sidebar-version">v1.0</span>
+      </div>
+    </nav>
+
+    <main id="content">
+      <div id="tab-pipeline"  class="tab-content active"></div>
+      <div id="tab-chat"      class="tab-content"></div>
+      <div id="tab-providers" class="tab-content"></div>
+      <div id="tab-memory"    class="tab-content"></div>
+      <div id="tab-analytics" class="tab-content"></div>
+      <div id="tab-visual"    class="tab-content"></div>
+      <div id="tab-settings"  class="tab-content"></div>
+    </main>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <div id="modal-overlay" class="hidden">
+    <div id="modal-content"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/pipeline.js"></script>
+  <script src="/js/chat.js"></script>
+  <script src="/js/providers.js"></script>
+  <script src="/js/memory.js"></script>
+  <script src="/js/analytics.js"></script>
+  <script src="/js/visual.js"></script>
+  <script src="/js/settings.js"></script>
+</body>
+</html>
