@@ -5,6 +5,7 @@ against all applicable binary questions based on its genre.
 """
 
 import json
+import re
 from pathlib import Path
 
 from packages.core.logger import get_logger
@@ -66,8 +67,8 @@ class ScoringEngine:
 
         q_list_text = "\n".join([f"{q['id']}: {q['text']}" for q in questions])
         
-        system_prompt = \"\"\"
-        You are the ultimate Quality Assurance Engine for a Johnny Harris-style documentary pipeline.
+        system_prompt = """
+        You are the ultimate Quality Assurance Engine for a Johnny harris-style documentary pipeline.
         Evaluate the provided dual-column script against the numbered list of binary questions.
 
         For EVERY question, you must return a 1 (Pass) or 0 (Fail). No partial scores or ranges.
@@ -83,15 +84,15 @@ class ScoringEngine:
                 }
             ]
         }
-        \"\"\"
+        """
 
-        user_prompt = f\"\"\"
+        user_prompt = f"""
         Questions to evaluate:
         {q_list_text}
         
         Script to evaluate:
         {script.model_dump_json(include={'entries'}, exclude_none=True)}
-        \"\"\"
+        """
 
         try:
             async with RouterClient() if not router_client else router_client as client:
@@ -102,8 +103,7 @@ class ScoringEngine:
                     temperature=0.0
                 )
 
-                import re
-                json_match = re.search(r'\\{.*\\}', response_text, re.DOTALL)
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if not json_match:
                     raise ValueError("Could not extract JSON from Scoring Engine response")
 

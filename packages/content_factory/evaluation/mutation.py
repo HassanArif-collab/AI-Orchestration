@@ -6,6 +6,7 @@ re-writes that specific zone using LLM to fix failed evaluation questions.
 """
 
 import json
+import re
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 from ..models import AdaptedScript, DualColumnEntry
@@ -51,7 +52,7 @@ class ChallengerGenerator:
             
         failures_text = "\n".join([f"- {c.question_id}: {c.question_text} (Reason: {c.failure_reason})" for c in failed_checks])
         
-        system_prompt = \"\"\"
+        system_prompt = """
         You are the Auto-Research Challenger Generator for a documentary AI system.
         You take a baseline dual-column script and mutate EXACTLY ONE ZONE to fix specific failures.
         
@@ -67,9 +68,9 @@ class ChallengerGenerator:
             }
           ]
         }
-        \"\"\"
+        """
 
-        user_prompt = f\"\"\"
+        user_prompt = f"""
         MUTATION ZONE: {mutation_zone}
         
         To beat the baseline score, you must fix these specific test failures in this script:
@@ -77,7 +78,7 @@ class ChallengerGenerator:
         
         Baseline Script:
         {baseline.model_dump_json(include={'entries'}, exclude_none=True)}
-        \"\"\"
+        """
 
         try:
             async with RouterClient() if not router_client else router_client as client:
@@ -87,8 +88,7 @@ class ChallengerGenerator:
                     model="auto"
                 )
 
-                import re
-                json_match = re.search(r'\\{.*\\}', response_text, re.DOTALL)
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if not json_match:
                     raise ValueError("Could not extract JSON from Challenger Generator")
 
