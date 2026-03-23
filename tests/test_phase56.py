@@ -4,6 +4,13 @@ Tests the Topic Finder SQLite storage and the Music Agent parsing paths.
 Run locally to verify the new modules.
 """
 
+import sys
+import os
+from pathlib import Path
+
+# Add repo root to path so 'packages' is importable when running from tests/
+sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+
 from packages.content_factory.topic_finder.models import TopicBrief
 from packages.content_factory.topic_finder.db import TopicReservoirDB
 from packages.content_factory.topic_finder.finder import TopicFinderAgent
@@ -76,11 +83,7 @@ def test_music_agent():
     
     print("Success: Music Architecture generated perfectly.")
 
-if __name__ == "__main__":
-    try:
-        test_topic_reservoir()
-        test_music_agent()
-        print("\n--- All Phase 5 & 6 Validation Tests Passed! ---")
-    except Exception as e:
-        print(f"Validation FAILED: {e}", file=sys.stderr)
-        sys.exit(1)
+def test_integration():
+    """Run all phase 5/6 validations as a single pytest integration test."""
+    test_topic_reservoir()
+    test_music_agent()

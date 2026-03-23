@@ -1,5 +1,12 @@
 """Validation Script for Phase 7: Full System Orchestration."""
 
+import sys
+import os
+from pathlib import Path
+
+# Add repo root to path so 'packages' is importable when running from tests/
+sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+
 from packages.content_factory.orchestration.master import MasterOrchestrator
 from packages.content_factory.orchestration.scheduler import Scheduler
 from packages.content_factory.orchestration.synthesis import SynthesisEngine
@@ -70,9 +77,8 @@ def test_synthesis_and_update(synthesis: SynthesisEngine, updates: UpdatePipelin
         updates.process_insight(insight)
         print("  -> Update pipeline processed Insight with Regression + Gates.")
 
-if __name__ == "__main__":
-    print("--- Phase 7 End-To-End Validation ---")
+def test_integration():
+    """Run all phase 7 validations as a single pytest integration test."""
     master, scheduler, synthesis, updates, monitor, review, memory = test_initialization()
     test_production_cycle(master, monitor)
     test_synthesis_and_update(synthesis, updates)
-    print("\n[OK] PHASE 7 Core Tests Passed.")
