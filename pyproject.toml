@@ -1,5 +1,5 @@
 [project]
-name = "youtube-pipeline"
+name = "ai-orchestration"
 version = "0.1.0"
 description = "Multi-agent YouTube video production pipeline"
 requires-python = ">=3.11"
@@ -19,7 +19,7 @@ memory  = ["zep-cloud>=2.0"]
 youtube = ["google-api-python-client>=2.0", "google-auth-oauthlib>=1.0"]
 notion  = ["notion-client>=2.0"]
 pipeline = ["crewai>=0.80", "typer>=0.12", "rich>=13.0"]
-all     = ["youtube-pipeline[dev,memory,youtube,notion,pipeline]"]
+all     = ["ai-orchestration[dev,memory,youtube,notion,pipeline]"]
 
 [build-system]
 requires = ["setuptools>=68"]

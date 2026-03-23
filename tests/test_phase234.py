@@ -9,8 +9,8 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 
-# Add FreeRouter root to path to resolve packages
-sys.path.insert(0, str(Path(__file__).parent.absolute()))
+# Add repo root to path so 'packages' is importable when running from tests/
+sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from packages.content_factory.models import (
     RawExtraction, StructuralMap, LocalizationMap, AdaptedScript, DualColumnEntry
@@ -93,13 +93,8 @@ def test_learning_log():
     if os.path.exists("packages/data/test_log.jsonl"):
         os.remove("packages/data/test_log.jsonl")
 
-if __name__ == "__main__":
-    print("Starting Architecture Validation for Phases 2, 3, 4...")
-    try:
-        test_models()
-        test_sqlite_baseline()
-        test_learning_log()
-        print("\nAll architecture validations passed successfully. Core engines are ready.")
-    except Exception as e:
-        print(f"\nValidation failed: {e}")
-        sys.exit(1)
+def test_integration():
+    """Run all phase 2/3/4 validations as a single pytest integration test."""
+    test_models()
+    test_sqlite_baseline()
+    test_learning_log()

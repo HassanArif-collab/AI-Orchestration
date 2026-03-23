@@ -1,4 +1,11 @@
-"""Core package — shared types, config, errors, logging."""
+"""
+Core package — shared infrastructure foundation.
+
+Provides: config (loads all .env vars), logger, typed errors, shared types.
+Import from here — never from individual submodules directly.
+
+    from packages.core import get_settings, get_logger, PipelineError
+"""
 
 from packages.core.types import (
     VideoIdea, ResearchOutput, Script, ScriptSection,

@@ -1,113 +1,186 @@
 # AI-Orchestration Architecture
 
-## Repository Structure
+## What This System Does
+
+A multi-agent YouTube video production pipeline. Given a topic, it:
+1. **Discovers** candidate topics via the Topic Finder agent (stored in SQLite reservoir)
+2. **Adapts** source content through a 4-stage pipeline (extract → structural → localize → script)
+3. **Scores** each script against a baseline via an evolutionary A-B evaluation loop
+4. **Designs** a music architecture (arc, section briefs, silence map) via the Music agent
+5. **Publishes** the final output to YouTube via the production workflow
+
+All LLM calls are free — routed through FreeRouter which auto-selects the best available provider (Groq → OpenRouter → Ollama).
+
+---
+
+## Two Services — Both Must Run
+
+This system is split into two separately-running processes:
+
+### Service 1: FreeRouter (start this FIRST)
+```bash
+make freerouter        # LLM proxy on :4000 — required for all LLM calls
+make freerouter-web    # Web dashboard on :8080 — manage provider API keys
+```
+
+FreeRouter is a **standalone service** in `freerouter/`. It has its own `pyproject.toml`, `.env`, and `tests/`. **Never import from `freerouter/` directly** — always call it via HTTP through `packages/router/client.py`.
+
+### Service 2: The Pipeline (the main app)
+```bash
+pip install -e ".[all]"
+python apps/worker/main.py start   # full worker
+python scripts/run_pipeline.py     # smoke test
+```
+
+---
+
+## Two-Layer Package Architecture
 
 ```
-AI-Orchestration/
-├── freerouter/              ← EXISTING — the LLM proxy server (do not modify)
-│   ├── src/freerouter/      ← FreeRouter source code
-│   ├── data/conversations.db← FreeRouter's own SQLite DB (chat history)
-│   └── .env                 ← Provider API keys (Groq, OpenRouter, etc.)
+packages/
 │
-└── packages/                ← NEW — YouTube pipeline built on top of FreeRouter
-    ├── core/                ← Shared types, config, logging, errors
-    ├── router/              ← HTTP client wrapper around FreeRouter at :4000
-    ├── memory/              ← GetZep Cloud agent memory client
-    ├── pipeline/            ← State machine, stage orchestration
-    ├── agents/              ← Individual agent implementations
-    ├── visual/              ← Visual planning, Remotion/Radiant integration
-    │   ├── remotion/        ← Remotion config generation
-    │   └── radiant/         ← Shader background selection
-    ├── integrations/        ← External API clients
-    │   ├── youtube/         ← YouTube Data API v3
-    │   ├── notion/          ← Notion API
-    │   └── mirofish/        ← MiroFish API
-    └── data/                ← Package-level SQLite DBs (usage, pipeline state)
-        ├── usage_tracker.db ← API usage stats (from packages/router/tracker.py)
-        └── pipeline.db      ← Pipeline run state (from packages/pipeline/)
+│  ── Layer 1: Infrastructure ──────────────────────────────────────────
+│
+├── core/           Config (loads .env), logger, typed errors, shared types.
+│                   Foundation — everything else imports from here.
+│
+├── router/         HTTP client to FreeRouter at :4000.
+│                   ALL LLM calls go through RouterClient here.
+│                   Never call LLM APIs directly.
+│
+├── memory/         Zep Cloud agent memory.
+│                   Handles conversation history + long-term facts for agents.
+│
+├── pipeline/       9-stage state machine runner.
+│                   Persists state in packages/data/pipeline.db.
+│                   Stages with human gates pause for approval.
+│
+├── agents/         Base AgentClass + AgentRegistry.
+│                   Skill/prompt files live in data/skills/*.md
+│
+├── integrations/   External API clients:
+│   ├── youtube/      YouTube Data API v3 (upload, analytics)
+│   ├── notion/       Notion API (script pages)
+│   └── mirofish/     MiroFish trend simulation
+│
+├── visual/         Video rendering support:
+│   ├── remotion/     Remotion config generation (React-based animations)
+│   └── radiant/      Canvas shader background selection
+│
+│  ── Layer 2: Business Logic ──────────────────────────────────────────
+│
+└── content_factory/   The actual AI pipeline work.
+    │
+    ├── models.py          Shared Pydantic models (AdaptedScript, DualColumnEntry…)
+    ├── source_library.py  Source video catalogue + processing status
+    │
+    ├── topic_finder/      Topic discovery agent.
+    │                      Stores candidates in SQLite reservoir.
+    │                      Scores topics by gap type, viability, urgency.
+    │
+    ├── adaptation/        4-stage content pipeline:
+    │   ├── stage1_extraction.py   Extract raw content from source
+    │   ├── stage2_structural.py   Build structural map
+    │   ├── stage3_localization.py Localise for target audience
+    │   └── stage4_script.py       Generate dual-column script
+    │
+    ├── evaluation/        Evolutionary A-B improvement loop:
+    │   ├── baseline.py    Champion script store (SQLite)
+    │   ├── scoring.py     Production readiness scorer
+    │   ├── mutation.py    Script mutation strategies
+    │   └── loop.py        Challenger vs baseline cycle
+    │
+    ├── music/             Music architecture agent:
+    │   ├── arc_designer.py   Emotional arc across sections
+    │   ├── section_brief.py  Per-section music brief
+    │   └── transitions.py    Transition design between sections
+    │
+    ├── production/        Final production workflow and agents.
+    │
+    └── orchestration/     System-level coordination:
+        ├── master.py      MasterOrchestrator — top-level cycle controller
+        ├── scheduler.py   Automated production schedule
+        ├── monitor.py     Health dashboard
+        ├── review.py      Human review interface
+        ├── synthesis.py   Learning synthesis engine (reads Zep insights)
+        └── updates.py     Applies synthesised learnings to system prompts
 ```
 
-## The Golden Rule: FreeRouter is an HTTP Server
+---
 
-FreeRouter is **not** a Python library. You **never** import from `freerouter/`.
-
-```python
-# WRONG — never do this
-from freerouter.router import Router
-from freerouter.providers import get_provider_key
-
-# CORRECT — always call it via HTTP
-from packages.router.client import RouterClient
-
-async with RouterClient() as client:
-    text = await client.complete_text("Your prompt here")
-```
-
-FreeRouter must be running as a separate process before any LLM calls work:
-```bash
-# Terminal 1
-cd freerouter && python -m freerouter web    # dashboard at :8080
-
-# Terminal 2
-cd freerouter && python -m freerouter proxy  # API proxy at :4000
-```
-
-Or use the Makefile shortcuts:
-```bash
-make freerouter-web   # dashboard
-make freerouter       # proxy
-```
-
-## Pipeline Data Flow
+## Data Flow
 
 ```
-VideoIdea
-    ↓  (research agent)
-ResearchOutput
-    ↓  (script agent)
-Script
-    ↓  (visual planning agent)
-VisualPlan
-    ↓  (SEO agent)
-SEOPackage
-    ↓  (upload agent)
-YouTube
+TopicBrief (from topic_finder)
+    │
+    ▼
+content_factory/adaptation/runner.py
+    │   stage1: RawExtraction
+    │   stage2: StructuralMap
+    │   stage3: LocalizationMap
+    │   stage4: AdaptedScript
+    ▼
+content_factory/evaluation/loop.py
+    │   score script → compare to baseline → keep winner
+    ▼
+content_factory/music/agent.py
+    │   generate MusicArchitectureDocument
+    ▼
+content_factory/production/workflow.py
+    │   run production agents
+    ▼
+packages/integrations/youtube/client.py
+    │   upload to YouTube
+    ▼
+Published Video
 ```
 
-All stages use `PipelineState` to pass data. State is persisted in
-`packages/data/pipeline.db` so runs survive crashes and can be resumed.
+---
 
-## LLM Routing
+## Two Separate `.env` Files
 
-Every LLM call goes through `packages/router/client.RouterClient`:
+| File | Contains | Managed by |
+|------|----------|------------|
+| `freerouter/.env` | LLM provider keys: `GROQ_API_KEY`, `OPENROUTER_API_KEY` | FreeRouter dashboard at `:8080` |
+| `.env` (repo root) | Pipeline keys: `ZEP_API_KEY`, `YOUTUBE_API_KEY`, `NOTION_API_KEY`, `GITHUB_TOKEN` | Copy from `.env.example`, fill manually |
 
-```
-RouterClient.complete_text(prompt, model="research")
-    ↓
-POST http://localhost:4000/v1/chat/completions
-    ↓
-FreeRouter picks best free provider:
-    Ollama (local) → Groq → OpenRouter → Together → DeepInfra
-    (auto-fallback if rate-limited)
-    ↓
-Response with x-freerouter-provider and x-freerouter-model headers
-```
+**Never put LLM provider keys in the root `.env`.** They belong in `freerouter/.env`.
 
-## Two Separate .env Files
+---
 
-| File | Purpose | Managed by |
-|------|---------|------------|
-| `freerouter/.env` | Provider API keys (Groq, OpenRouter, etc.) | FreeRouter dashboard at :8080 |
-| `.env` (repo root) | Pipeline config (Zep, YouTube, Notion) | Copy from `.env.example` |
-
-## Package Dependencies
+## Package Dependency Order
 
 ```
-packages/core        ← no internal dependencies
-packages/router      ← packages/core
-packages/memory      ← packages/core
-packages/pipeline    ← packages/core, packages/router, packages/memory
-packages/agents      ← packages/core, packages/router, packages/memory
-packages/visual      ← packages/core, packages/router
-packages/integrations← packages/core
+packages/core           ← no internal dependencies (load this first)
+packages/router         ← packages/core
+packages/memory         ← packages/core
+packages/integrations   ← packages/core
+packages/pipeline       ← packages/core, packages/router, packages/memory
+packages/agents         ← packages/core, packages/router, packages/memory
+packages/visual         ← packages/core, packages/router
+packages/content_factory← packages/core, packages/router (via orchestration)
+apps/api                ← all packages
+apps/worker             ← packages/pipeline, packages/agents
 ```
+
+---
+
+## How to Add a New Agent
+
+1. Create `packages/agents/your_agent.py` — inherit from `packages/agents/base.BaseAgent`
+2. Register it in `packages/agents/registry.py` via `AgentRegistry.register()`
+3. Add its skill/prompt file at `data/skills/your_agent.md`
+4. Use `packages/agents/registry.load_skill("your_agent")` to load the prompt
+5. All LLM calls must go through `packages/router/client.RouterClient`
+6. Add tests in `tests/test_your_agent.py`
+
+---
+
+## Key Runtime Data Locations
+
+| Path | Contents | Git status |
+|------|----------|------------|
+| `packages/data/pipeline.db` | Pipeline run state | Gitignored — auto-created |
+| `packages/data/synthesis_reports/` | Learning loop JSON outputs | Gitignored |
+| `freerouter/data/conversations.db` | FreeRouter chat history | Gitignored |
+| `data/skills/*.md` | Agent skill/prompt definitions | Committed — source code |
