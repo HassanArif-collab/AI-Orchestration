@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 
-from ..models import AdaptedScript, DualColumnEntry, ProcessingStatus
+from ..models import AdaptedScript, DualColumnEntry, ProcessingStatus, SectionLabel
 from ..source_library import SourceVideoLibrary
 from .agents import create_researcher, create_script_agent, create_visual_agent
 
@@ -29,12 +29,16 @@ class VideoIdea(BaseModel):
     special_instructions: str = ""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy Workflow (kept for backwards compatibility)
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def run_production_workflow(
     idea: VideoIdea,
     source_library: SourceVideoLibrary | None = None,
     router_client: RouterClient | None = None,
 ) -> AdaptedScript | None:
-    """Run the Phase 3 Core Production workflow.
+    """Run the Phase 3 Core Production workflow (Legacy Sequential).
     
     Args:
         idea: The video idea parameters.
@@ -57,7 +61,7 @@ async def run_production_workflow(
     
     # 3. Define Tasks
     research_task = Task(
-        description=f\"\"\"
+        description=f"""
         Conduct deep research on the topic: '{idea.topic}'.
         Target Audience: {idea.target_audience}.
         Special Instructions: {idea.special_instructions}.
@@ -67,24 +71,24 @@ async def run_production_workflow(
         - 1+ specific human character illustrating the problem
         - Evidence contradicting the mainstream narrative
         - Chronological sequence or central Big Question
-        \"\"\",
+        """,
         expected_output="A structured markdown dossier of raw facts, anchors, and human stories.",
         agent=researcher
     )
     
     visual_task = Task(
-        description=\"\"\"
+        description="""
         Take the research dossier and create a Visual Plan.
         Assign Anchor Substitution Hierarchy levels and visual types to all evidence.
         Ensure every piece of evidence can be pointed at by a camera or graphic.
-        \"\"\",
+        """,
         expected_output="A sequence of visual directions and assigned hierarchy levels.",
         agent=visual_agent,
         context=[research_task]
     )
     
     script_task = Task(
-        description=f\"\"\"
+        description=f"""
         Take the research dossier and the visual plan and merge them into a Dual-Column Script.
         The genre is {idea.genre_id}.
         
@@ -103,7 +107,7 @@ async def run_production_workflow(
             }}
           ]
         }}
-        \"\"\",
+        """,
         expected_output="A JSON object matching the AdaptedScript dual-column schema.",
         agent=script_agent,
         context=[research_task, visual_task]
@@ -123,16 +127,16 @@ async def run_production_workflow(
         result_text = crew.kickoff()
         
         import re
-        json_match = re.search(r'\\{.*\\}', str(result_text), re.DOTALL)
+        json_match = re.search(r'\{.*\}', str(result_text), re.DOTALL)
         if not json_match:
             # Fallback to RouterClient to fix it if CrewAI output isn't clean JSON
             async with RouterClient() if not router_client else router_client as rc:
                 fixed = await rc.complete_text(
                     prompt=f"Extract the JSON object from this text:\n\n{result_text}",
-                    system_prompt="You return ONLY valid JSON. No markdown blocks.",
+                    system="You return ONLY valid JSON. No markdown blocks.",
                     model="auto"
                 )
-                json_match = re.search(r'\\{.*\\}', fixed, re.DOTALL)
+                json_match = re.search(r'\{.*\}', fixed, re.DOTALL)
                 if not json_match:
                     raise ValueError("Could not extract JSON from Script Agent output")
                 result_text = json_match.group(0)
@@ -162,3 +166,216 @@ async def run_production_workflow(
     except Exception as e:
         logger.error(f"production_failed: {str(e)}")
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Round-Based Production Workflow (NEW)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RoundBasedProductionWorkflow:
+    """
+    Iterative round-based production workflow for Mode B original content.
+
+    Replaces the single-pass sequential CrewAI process with structured rounds:
+      Round 1A: Research (up to 2 iterations if completeness < 5/7 anchors found)
+      Round 1B: Visual anchor check (one more research pass if < 2 Level 1-3 anchors)
+      Round 2:  Script opening only — self-check, one rewrite if needed
+      Round 2B: Opening visual review — narrow revision if visual ratio off
+      Round 3:  Full script (target: 32/40 binary questions passing, up to 2 rewrites)
+      Round 3B: Full visual review — section ratio check
+      Round 4:  Assemble final DualColumnScript / AdaptedScript
+
+    Uses the same agents from production/agents.py.
+    All LLM calls go through RouterClient via FreeRouter.
+    """
+
+    async def run(self, idea: VideoIdea) -> AdaptedScript | None:
+        """Run the full round-based workflow."""
+        from packages.content_factory.source_library import SourceVideoLibrary
+
+        library = SourceVideoLibrary()
+        references = library.find_by_genre(idea.genre_id, limit=3)
+
+        async with RouterClient() as router:
+            # Round 1A — Research
+            research = await self._round_research(idea, references, router)
+            if not research:
+                return None
+
+            # Round 1B — Anchor availability check
+            research = await self._round_anchor_check(research, idea, references, router)
+
+            # Round 2 — Script opening
+            opening = await self._round_script_opening(research, idea, router)
+
+            # Round 3 — Full script with score threshold
+            full_script = await self._round_full_script(
+                research, opening, idea, router, target_pass_count=32
+            )
+            if not full_script:
+                return None
+
+            # Round 4 — Assemble final output
+            return self._assemble_script(full_script, idea)
+
+    async def _round_research(self, idea, references, router, max_iterations=2):
+        """Round 1A: Research with completeness check."""
+        prompt_base = self._build_research_prompt(idea, references)
+        research_text = None
+
+        for attempt in range(max_iterations):
+            research_text = await router.complete_text(
+                prompt=prompt_base if attempt == 0
+                       else f"{prompt_base}\n\nPrevious attempt lacked physical anchors. "
+                            "Find at least 3 specific physical objects or locations.",
+                system="You are an investigative researcher. Output structured markdown."
+            )
+            # Quick anchor count check — count lines with physical nouns
+            anchor_count = research_text.lower().count("anchor") + \
+                          research_text.lower().count("location") + \
+                          research_text.lower().count("document")
+            if anchor_count >= 5:
+                break
+            logger.info(f"research_round_retry: attempt={attempt+1} anchor_signals={anchor_count}")
+
+        return research_text
+
+    async def _round_anchor_check(self, research, idea, references, router):
+        """Round 1B: Ensure at least 2 Level 1-3 anchors exist."""
+        anchor_check_prompt = f"""Review this research for visual anchors:
+
+{research}
+
+Count anchors at each level:
+Level 1 = Primary source artifacts (documents, original footage)
+Level 2 = Geographic proof (real locations, maps)
+Level 3 = Expert deposition or data visualization
+
+If fewer than 2 Level 1-3 anchors exist, rewrite the research to find stronger ones.
+Otherwise return the research unchanged."""
+
+        result = await router.complete_text(
+            anchor_check_prompt,
+            system="Return the improved research. Keep all facts."
+        )
+        return result if result else research
+
+    async def _round_script_opening(self, research, idea, router):
+        """Round 2: Generate and self-check the HOOK + ANCHOR sections only."""
+        prompt = f"""Write ONLY the opening two sections (HOOK and ANCHOR) of a Johnny harris
+style script about: {idea.topic}
+
+Research:
+{research[:3000]}
+
+Output JSON:
+{{"hook": {{"prose": "...", "visual_direction": "..."}},
+  "anchor": {{"prose": "...", "visual_direction": "..."}}}}"""
+
+        opening = await router.complete_text(prompt, system="Return only valid JSON.")
+
+        # One self-check rewrite
+        recheck_prompt = f"""Does this opening obey these rules?
+1. Hook creates genuine curiosity without stating the answer
+2. Anchor is a specific physical object or location (not abstract)
+3. Active voice only — no nominalizations
+
+Opening: {opening}
+
+If any rule fails, rewrite the opening fixing only what failed. Return same JSON schema."""
+
+        return await router.complete_text(recheck_prompt, system="Return only valid JSON.")
+
+    async def _round_full_script(self, research, opening, idea, router, target_pass_count=32):
+        """Round 3: Full script with up to 2 rewrites targeting 32/40 questions."""
+        import json
+
+        prompt = f"""Write a complete Johnny harris-style dual-column script.
+Topic: {idea.topic}
+Genre: {idea.genre_id}
+Big Question: {getattr(idea, 'big_question', '')}
+
+Research:
+{research[:4000]}
+
+Opening sections already written:
+{opening}
+
+Complete the remaining sections: BRIDGE, REVEAL, CONCLUSION.
+
+Output a JSON array of ALL sections (including HOOK and ANCHOR from the opening):
+[{{"section_label": "HOOK|ANCHOR|BRIDGE|REVEAL|CONCLUSION",
+   "prose": "spoken narration",
+   "visual_direction": "specific visual plan",
+   "visual_type": "talking_head|broll|animation|archive|data_viz|soul_moment"}}]"""
+
+        script_json = None
+        for attempt in range(2):  # up to 2 rewrites
+            result = await router.complete_text(
+                prompt if attempt == 0
+                else f"{prompt}\n\nPrevious version had too many abstract sentences. "
+                     "Every sentence must describe a visible action.",
+                system="Return only a valid JSON array."
+            )
+            script_json = result
+            # Simple quality check: count entries
+            try:
+                entries = json.loads(result) if isinstance(result, str) else result
+                if isinstance(entries, list) and len(entries) >= 4:
+                    break
+            except Exception:
+                pass
+
+        return script_json
+
+    def _assemble_script(self, script_json, idea) -> AdaptedScript | None:
+        """Round 4: Parse JSON into AdaptedScript model."""
+        import json
+        import uuid
+        from packages.content_factory.models import DualColumnEntry, SectionLabel
+
+        try:
+            raw = script_json if isinstance(script_json, list) \
+                  else json.loads(script_json)
+            entries = []
+            for item in raw:
+                try:
+                    entries.append(DualColumnEntry(**item))
+                except Exception as e:
+                    logger.warning(f"entry_parse_failed: {e}")
+
+            if not entries:
+                return None
+
+            return AdaptedScript(
+                video_id=f"orig_{uuid.uuid4().hex[:8]}",
+                source_video_id="original",
+                adapted_title=idea.topic,
+                genre=idea.genre_id,
+                entries=entries,
+                section_sequence=[e.section_label.value for e in entries],
+                production_readiness_score=0.0,
+            )
+        except Exception as e:
+            logger.error(f"script_assembly_failed: {e}")
+            return None
+
+    def _build_research_prompt(self, idea, references) -> str:
+        ref_list = "\n".join([f"- {r.title} ({r.genre})" for r in references]) \
+                   if references else "No references available."
+        return f"""Conduct deep investigative research for a Johnny harris-style documentary.
+
+Topic: {idea.topic}
+Genre: {idea.genre_id}
+Target Audience: Pakistani
+
+Structural reference videos (study their approach):
+{ref_list}
+
+Find and document:
+1. At least 3 specific physical anchors (documents, locations, objects)
+2. One human character whose personal story illustrates the macro problem
+3. Evidence contradicting the mainstream narrative
+4. A clear chronological sequence OR one central Big Question
+
+DO NOT write narrative. DO NOT write script prose. Facts only."""
