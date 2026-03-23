@@ -35,9 +35,17 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
     # Generate 3 candidates for the user to choose from
     candidates = []
     for _ in range(3):
-        brief = finder.generate_candidate(seed, genre)
+        brief = await finder.generate_candidate(seed, genre)
         if brief:
             candidates.append(brief.model_dump())
+
+    # Also discover adaptation candidates from Source Library
+    try:
+        adaptation_briefs = await finder.discover_adaptation_candidates(genre)
+        for brief in adaptation_briefs[:1]:  # max 1 adaptation candidate per run
+            candidates.append(brief.model_dump())
+    except Exception as e:
+        logger.warning(f"adaptation_discovery_failed_non_blocking: {e}")
             
     if not candidates:
         # Fallback to mock if nothing found to keep pipeline moving in dev
@@ -54,7 +62,8 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
                 "urgency_flag": True,
                 "timing_rationale": "Recent cabinet approval",
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "status": "reservoir"
+                "status": "reservoir",
+                "content_type": "original",
             }
         ]
         
