@@ -3,6 +3,7 @@
 import sys
 import os
 from pathlib import Path
+import pytest
 
 # Add repo root to path so 'packages' is importable when running from tests/
 sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 import uuid
 import os
 
-def test_initialization():
+def _init_components():
     print("[TEST 1] Testing Component Initialization...")
     master = MasterOrchestrator()
     scheduler = Scheduler(master)
@@ -28,12 +29,19 @@ def test_initialization():
     monitor = HealthMonitor(master)
     review = ReviewInterface(master)
     memory = HermesMemoryAdapter()
-    
+
     scheduler.boot_schedule()
     print("  -> All components initialized and DB created.")
     return master, scheduler, synthesis, updates, monitor, review, memory
 
-def test_production_cycle(master: MasterOrchestrator, monitor: HealthMonitor):
+
+@pytest.fixture(autouse=True)
+def clean_pipeline_db(tmp_path, monkeypatch):
+    """Redirect OrchestrationDB to a fresh temp DB for every test — prevents state bleed."""
+    import packages.content_factory.orchestration.db as orch_db
+    monkeypatch.setattr(orch_db, "DB_PATH", tmp_path / "pipeline.db")
+
+def _check_production_cycle(master: MasterOrchestrator, monitor: HealthMonitor):
     print("\n[TEST 2] Testing End-To-End Production Triggers & Sync...")
     
     # Mock some tier 1 topics in reservoir
@@ -63,7 +71,7 @@ def test_production_cycle(master: MasterOrchestrator, monitor: HealthMonitor):
     assert master.advance_phase(cycle['cycle_id'], "phase_3_round_1a"), "Lock acquisition failed"
     print("  -> Routing lock test and phase advancement passed.")
 
-def test_synthesis_and_update(synthesis: SynthesisEngine, updates: UpdatePipeline):
+def _check_synthesis_and_update(synthesis: SynthesisEngine, updates: UpdatePipeline):
     print("\n[TEST 3] Testing Learning Synthesis and Updater...")
     report = synthesis.execute_synthesis_cycle()
     assert report is not None
@@ -77,8 +85,13 @@ def test_synthesis_and_update(synthesis: SynthesisEngine, updates: UpdatePipelin
         updates.process_insight(insight)
         print("  -> Update pipeline processed Insight with Regression + Gates.")
 
+def test_initialization():
+    """Smoke test: all orchestration components initialise without errors."""
+    _init_components()
+
+
 def test_integration():
     """Run all phase 7 validations as a single pytest integration test."""
-    master, scheduler, synthesis, updates, monitor, review, memory = test_initialization()
-    test_production_cycle(master, monitor)
-    test_synthesis_and_update(synthesis, updates)
+    master, scheduler, synthesis, updates, monitor, review, memory = _init_components()
+    _check_production_cycle(master, monitor)
+    _check_synthesis_and_update(synthesis, updates)
