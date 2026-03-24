@@ -1,3 +1,33 @@
+"""
+Zep Initialization and Migration Script.
+
+ONE-TIME SETUP — run this script once when you first configure your ZEP_API_KEY.
+It creates the two Zep users and migrates any existing local data to Zep.
+
+What it does:
+  1. Creates two Zep users:
+       - ZEP_AUDIENCE_USER_ID — stores Pakistani audience intelligence
+       - ZEP_LEARNING_USER_ID — stores experiment learning logs
+  2. Migrates audience_model.json → Zep audience session facts
+     (knowledge_baseline, attention_patterns, topic_resonance_map)
+  3. Migrates learning_log.jsonl → Zep learning session facts
+     (experiment cycle results, mutation zone outcomes)
+
+When to run:
+  ONLY run this after setting ZEP_API_KEY in .env and confirming it works.
+  Running it without a valid key is a safe no-op (logs a warning and exits).
+
+How to run:
+  python packages/memory/init_zep.py
+
+After running:
+  Set ZEP_ENABLED=true in .env to activate live Zep reads/writes.
+  Until then, the system uses local JSON fallbacks.
+
+Data sources migrated:
+  packages/data/audience_model.json  — audience intelligence baseline
+  packages/data/learning_log.jsonl   — experiment mutation history
+"""
 import json
 import logging
 from pathlib import Path
@@ -8,6 +38,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("InitZep")
 
 def migrate_audience_model(client: ZepMemoryClient, audience_user_id: str):
+    """Migrate local audience_model.json to Zep.
+    
+    Reads the existing audience model JSON file and converts each
+    field into a Zep fact. The facts are stored in the audience
+    user's session for semantic retrieval.
+    
+    Facts created:
+      - Knowledge baseline entries
+      - Attention patterns
+      - Topic resonance scores
+      - Genre engagement rankings
+    """
     logger.info("Starting Audience Model migration...")
     file_path = Path("packages/data/audience_model.json")
     if not file_path.exists():
@@ -57,6 +99,18 @@ def migrate_audience_model(client: ZepMemoryClient, audience_user_id: str):
         logger.error(f"Migration error for audience model: {e}")
 
 def migrate_learning_logs(client: ZepMemoryClient, learning_user_id: str):
+    """Migrate local learning_log.jsonl to Zep.
+    
+    Reads each line of the JSONL file (one experiment result per line)
+    and converts it into a Zep fact. These facts power the semantic
+    pattern detection in SynthesisEngine.
+    
+    Facts include:
+      - Cycle ID and genre
+      - Mutation zone and outcome
+      - Score changes (baseline → challenger)
+      - Fixed and regressed question IDs
+    """
     logger.info("Starting Learning Log migration...")
     file_path = Path("packages/data/learning_log.jsonl")
     if not file_path.exists():
@@ -100,6 +154,12 @@ def migrate_learning_logs(client: ZepMemoryClient, learning_user_id: str):
         logger.error(f"Migration error for learning logs: {e}")
 
 def main():
+    """Main entry point for Zep initialization.
+    
+    Creates both Zep users and migrates existing local data.
+    Safe to run multiple times — will not duplicate data if
+    users/sessions already exist.
+    """
     settings = get_settings()
     audience_user_id = settings.ZEP_AUDIENCE_USER_ID
     learning_user_id = settings.ZEP_LEARNING_USER_ID
