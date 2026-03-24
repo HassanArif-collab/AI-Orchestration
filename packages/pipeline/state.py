@@ -16,7 +16,30 @@ from packages.pipeline.stages import Stage, STAGE_DEPENDENCIES
 class PipelineRun:
     """Runtime state of a single pipeline execution.
 
-    Not to be confused with packages.core.types.PipelineState which is for API serialization.
+    NOT to be confused with packages.core.types.PipelineState which is
+    a Pydantic model for API serialization. PipelineRun is the live
+    mutable state object that PipelineRunner works with.
+
+    LIFECYCLE:
+      PipelineRun.new() → created with all stages "pending"
+      runner.execute_stage() → stage moves pending → running → complete/error
+      runner.run_until_gate() → runs until HUMAN_TOPIC_APPROVAL or HUMAN_REVIEW
+      runner.approve_gate() → human approves, status returns to "running"
+      run.status == "complete" → all stages done
+
+    PERSISTENCE:
+      Saved to packages/data/pipeline.db (pipeline_runs table) after every
+      stage transition. If the process crashes, state is recovered on restart.
+
+    RUN ID vs CYCLE ID:
+      run_id: UUID from PipelineRunner — the pipeline execution identifier
+      cycle_id: UUID from MasterOrchestrator — the production cycle identifier
+      They are linked in OrchestrationDB.production_registry.pipeline_run_id
+
+    STAGE OUTPUTS:
+      stage_outputs: dict mapping Stage.value → handler return value
+      Access via: run.get_output(Stage.RESEARCH) → AdaptedScript dict
+      Set via:    run.set_output(Stage.RESEARCH, script_data)
     """
 
     def __init__(
@@ -55,6 +78,8 @@ class PipelineRun:
     def new(cls) -> "PipelineRun":
         """Create a new pipeline run with default values.
 
+        All stages start as "pending". The first stage is TREND_ANALYSIS.
+
         Returns:
             New PipelineRun instance
         """
@@ -84,6 +109,9 @@ class PipelineRun:
 
     def can_start(self, stage: Stage) -> bool:
         """Check if a stage can start (all dependencies met).
+
+        Uses STAGE_DEPENDENCIES from stages.py to determine prerequisites.
+        For example, SCRIPT_WRITING depends on RESEARCH completing first.
 
         Args:
             stage: The stage to check
@@ -175,6 +203,17 @@ class RunStore:
     """SQLite persistence for PipelineRun objects.
 
     Stores runs at packages/data/pipeline.db (separate from FreeRouter DB).
+    
+    TABLE SCHEMA:
+      pipeline_runs
+        run_id (PK)     — UUID
+        state_json      — Full PipelineRun JSON
+        created_at      — ISO timestamp
+        updated_at      — ISO timestamp
+    
+    CRASH RECOVERY:
+      After any crash, PipelineRunner.load_run(run_id) can recover
+      the exact state and resume from the last completed stage.
     """
 
     def __init__(self, db_path: str = "packages/data/pipeline.db"):
@@ -199,12 +238,14 @@ class RunStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
-            """
+                """
             )
             conn.commit()
 
     def save(self, run: PipelineRun) -> None:
         """Save a pipeline run to the database.
+
+        Uses INSERT OR REPLACE to handle both new and existing runs.
 
         Args:
             run: The pipeline run to save
@@ -253,7 +294,7 @@ class RunStore:
             limit: Maximum number of runs to return
 
         Returns:
-            List of run summaries
+            List of run summaries (run_id, current_stage, status, updated_at)
         """
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
