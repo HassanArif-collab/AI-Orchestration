@@ -25,8 +25,8 @@ def create_researcher(architectural_references: list[SourceVideoRecord]) -> Agen
     """
     ref_list = "\n".join([f"- {r.title} ({r.genre}): {r.big_question}" for r in architectural_references])
     
-    system_prompt = f\"\"\"
-    You are an elite investigative researcher building the foundation for a Johnny Harris-style documentary.
+    system_prompt = f"""
+    You are an elite investigative researcher building the foundation for a Johnny harris-style documentary.
     Your job is to uncover raw truth, tangible physical evidence, and human characters.
     
     CRITICAL RULE: Do NOT write narrative. Do NOT write script prose. You are finding facts.
@@ -38,7 +38,7 @@ def create_researcher(architectural_references: list[SourceVideoRecord]) -> Agen
     Here are the architectural references for the genre you are researching. Notice how they 
     frame their 'Big Questions':
     {ref_list}
-    \"\"\"
+    """
 
     return Agent(
         role="Investigative Researcher",
@@ -55,8 +55,8 @@ def create_visual_agent() -> Agent:
     The Visual Agent enforces the Anchor Substitution Hierarchy and strictly
     separates visual evidence from the narrative.
     """
-    system_prompt = \"\"\"
-    You are the Visual Director for a Johnny Harris-style documentary.
+    system_prompt = """
+    You are the Visual Director for a Johnny harris-style documentary.
     You define the visual backbone of the story. You do NOT write narration.
     
     Your job is to identify what the camera sees. You must use the Anchor Substitution Hierarchy:
@@ -69,7 +69,7 @@ def create_visual_agent() -> Agent:
     For every piece of research provided, you must assign a visual type (talking_head, broll, animation, archive, data_viz, soul_moment) 
     and write specific, executable visual directions. 
     Ensure soul moments are clearly separated from evidence moments.
-    \"\"\"
+    """
 
     return Agent(
         role="Visual Director",
@@ -85,8 +85,8 @@ def create_script_agent() -> Agent:
     
     The Script Agent writes the spoken narration using the Phase 1 Style Reference rules.
     """
-    system_prompt = \"\"\"
-    You are the Lead Writer for a Johnny Harris-style documentary.
+    system_prompt = """
+    You are the Lead Writer for a Johnny harris-style documentary.
     Your job is to write the spoken narration (the prose). 
     
     You MUST obey these rules perfectly:
@@ -98,7 +98,7 @@ def create_script_agent() -> Agent:
     6. Tone calibration: Do not be condescending to the Pakistani audience, and do not assume Western cultural familiarity.
     
     You will take the research and the visual plan and merge them into a Dual-Column script.
-    \"\"\"
+    """
 
     return Agent(
         role="Lead Writer",

@@ -1,6 +1,6 @@
 """Pipeline Runner orchestrator for the Adaptation Engine.
 
-Runs all four stages sequentially and handles state transitions.
+Runs all five stages sequentially and handles state transitions.
 """
 
 import uuid
@@ -16,12 +16,13 @@ from .stage1_extraction import stage1_extract
 from .stage2_structural import stage2_analyze
 from .stage3_localization import stage3_localize
 from .stage4_script import stage4_generate
+from .stage5_refinement import stage5_refine
 
 logger = get_logger(__name__)
 
 
 async def run_adaptation(url: str, cycle_id: str | None = None) -> AdaptedScript | None:
-    """Run the complete 4-stage adaptation pipeline.
+    """Run the complete 5-stage adaptation pipeline.
 
     Args:
         url: YouTube video URL.
@@ -58,6 +59,14 @@ async def run_adaptation(url: str, cycle_id: str | None = None) -> AdaptedScript
         script = await stage4_generate(smap, lmap, router_client, library, error_logger, cycle_id)
         if not script:
             return None
+
+        # Stage 5 — Pakistani Context Refinement (NEW)
+        # Run the script through the writer for cultural depth
+        # This is what separates a mechanical transcript adaptation from real content
+        refined = await stage5_refine(script, router_client, error_logger, cycle_id)
+        if refined:
+            script = refined
+            logger.info(f"stage5_refinement_complete: {cycle_id}")
 
     logger.info(f"adaptation_pipeline_completed: {cycle_id} — {url}")
     return script

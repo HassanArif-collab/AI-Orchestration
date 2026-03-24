@@ -1,7 +1,7 @@
 """Phase 5: Topic Finder and Analytics Pydantic Models."""
 
 import uuid
-from typing import Literal, Any
+from typing import Literal, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 from packages.content_factory.models import SourceVideoRecord
@@ -24,6 +24,13 @@ class TopicBrief(BaseModel):
     timing_rationale: str
     created_at: datetime
     status: Literal["reservoir", "in_production", "complete"] = "reservoir"
+    
+    # NEW: Content routing fields
+    content_type: Literal["original", "adaptation"] = "original"
+    # If content_type == "adaptation", this is the JH YouTube video ID to adapt
+    adaptation_source_video_id: Optional[str] = None
+    # The most structurally similar JH video for reference (both modes)
+    structural_reference_video_id: Optional[str] = None
 
 
 class VideoPerformanceProfile(BaseModel):

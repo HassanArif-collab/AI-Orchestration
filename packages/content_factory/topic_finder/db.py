@@ -33,7 +33,10 @@ def init_db() -> None:
                 urgency_flag BOOLEAN,
                 timing_rationale TEXT,
                 created_at TIMESTAMP,
-                status TEXT
+                status TEXT,
+                content_type TEXT DEFAULT 'original',
+                adaptation_source_video_id TEXT DEFAULT NULL,
+                structural_reference_video_id TEXT DEFAULT NULL
             )
         """)
         
@@ -54,6 +57,20 @@ def init_db() -> None:
                 topic_resonance_score REAL
             )
         """)
+        conn.commit()
+    
+    # Safe migration — add new columns if they don't exist
+    with sqlite3.connect(DB_PATH) as conn:
+        migration_columns = [
+            ("content_type", "TEXT DEFAULT 'original'"),
+            ("adaptation_source_video_id", "TEXT DEFAULT NULL"),
+            ("structural_reference_video_id", "TEXT DEFAULT NULL"),
+        ]
+        for col_name, col_def in migration_columns:
+            try:
+                conn.execute(f"ALTER TABLE topic_reservoir ADD COLUMN {col_name} {col_def}")
+            except Exception:
+                pass  # Column already exists
         conn.commit()
 
 
@@ -77,13 +94,16 @@ class TopicReservoirDB:
                         brief_id, topic_statement, big_question, genre_id, gap_type,
                         score_breakdown, anchor_candidates, mainstream_assumption,
                         structural_reference_id, urgency_flag, timing_rationale,
-                        created_at, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        created_at, status, content_type, adaptation_source_video_id,
+                        structural_reference_video_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     topic.brief_id, topic.topic_statement, topic.big_question, topic.genre_id, topic.gap_type,
                     score_json, anchors_json, topic.mainstream_assumption,
                     ref_id, topic.urgency_flag, topic.timing_rationale,
-                    topic.created_at.isoformat(), topic.status
+                    topic.created_at.isoformat(), topic.status,
+                    topic.content_type, topic.adaptation_source_video_id,
+                    topic.structural_reference_video_id
                 ))
                 conn.commit()
                 logger.info(f"saved_topic_to_reservoir: {topic.topic_statement[:50]}...")
@@ -106,21 +126,28 @@ class TopicReservoirDB:
             
         topics = []
         for row in rows:
-            topics.append(TopicBrief(
-                brief_id=row["brief_id"],
-                topic_statement=row["topic_statement"],
-                big_question=row["big_question"],
-                genre_id=row["genre_id"],
-                gap_type=row["gap_type"],
-                viability_score_breakdown=json.loads(row["score_breakdown"]),
-                anchor_candidates=json.loads(row["anchor_candidates"]),
-                mainstream_assumption=row["mainstream_assumption"],
-                urgency_flag=bool(row["urgency_flag"]),
-                timing_rationale=row["timing_rationale"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                status=row["status"]
-            ))
+            topics.append(self._row_to_brief(row))
         return topics
+
+    def _row_to_brief(self, row: sqlite3.Row) -> TopicBrief:
+        """Convert a database row to a TopicBrief object."""
+        return TopicBrief(
+            brief_id=row["brief_id"],
+            topic_statement=row["topic_statement"],
+            big_question=row["big_question"],
+            genre_id=row["genre_id"],
+            gap_type=row["gap_type"],
+            viability_score_breakdown=json.loads(row["score_breakdown"]),
+            anchor_candidates=json.loads(row["anchor_candidates"]),
+            mainstream_assumption=row["mainstream_assumption"],
+            urgency_flag=bool(row["urgency_flag"]),
+            timing_rationale=row["timing_rationale"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            status=row["status"],
+            content_type=row.get("content_type", "original") if "content_type" in row.keys() else "original",
+            adaptation_source_video_id=row.get("adaptation_source_video_id") if "adaptation_source_video_id" in row.keys() else None,
+            structural_reference_video_id=row.get("structural_reference_video_id") if "structural_reference_video_id" in row.keys() else None,
+        )
 
 
 class PerformanceDB:

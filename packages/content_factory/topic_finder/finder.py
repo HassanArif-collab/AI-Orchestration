@@ -6,6 +6,7 @@ and saves Tier 1 candidates to the Topic Reservoir.
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from packages.router.client import RouterClient
@@ -49,38 +50,33 @@ VIABILITY_QUESTIONS = {
 
 class TopicFinderAgent:
     def __init__(self) -> None:
-        self.router = RouterClient()
         self.db = TopicReservoirDB()
         self.zep_client = ZepMemoryClient()
         self.zep_session_id = f"{get_settings().ZEP_AUDIENCE_USER_ID}_session"
 
-    def generate_candidate(self, seed_query: str, genre_id: str) -> TopicBrief | None:
+    async def generate_candidate(self, seed_query: str, genre_id: str) -> TopicBrief | None:
         """Find and score a topic, injecting Tier 1s into the reservoir."""
         logger.info(f"generating_topic_candidate: seed='{seed_query}' genre={genre_id}")
         
-        # Fetch Audience Model context from Zep
-        zep_context = []
-        queries = [
-            "Which gap types have produced the highest audience engagement for Pakistani content in the last six months?",
-            "What bridge section characteristics are associated with retention drops in Pakistani investigative content?",
-            "Which genres are currently performing above average engagement for this channel?",
-            "What topic characteristics predicted subscriber conversion in recent production cycles?"
-        ]
-        for q in queries:
-            results = self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
-            for r in results:
-                zep_context.append(r.get("fact", ""))
-                
-        context_str = "\n".join(set(zep_context)) if zep_context else "No historical audience data available."
+        # Try Zep first, fall back to static file
+        context_str = await self._get_audience_context(genre_id)
+        
+        # Add MiroFish signals to the prompt if available (non-blocking)
+        mirofish_signals = await self._get_mirofish_signals()
+        mirofish_context = ""
+        if mirofish_signals:
+            mirofish_context = f"\nTrending signals from MiroFish:\n" + \
+                               "\n".join(f"- {s}" for s in mirofish_signals)
         
         # 1. Generate the initial topic idea
         prompt = f"""
-        You are a YouTube Investigative Journalist producing Johnny Harris style documentary videos.
+        You are a YouTube Investigative Journalist producing Johnny harris style documentary videos.
         Your task is to find a compelling investigative topic related to: "{seed_query}".
         Focus on the Hidden Mechanism, Oversimplified Narrative, or Hidden Connection.
         
         Historical Audience Insights (Use these to calibrate your topic focus):
         {context_str}
+        {mirofish_context}
         
         Provide your response as a JSON object:
         {{
@@ -93,44 +89,50 @@ class TopicFinderAgent:
             "urgency_flag": true/false
         }}
         """
-        response = self.router.get_completion(prompt, system_prompt="Output only valid JSON.")
         
-        try:
-            data = json.loads(response.strip("` \n").removeprefix("json\n"))
-        except json.JSONDecodeError:
-            logger.error("failed_to_parse_topic_candidate")
-            return None
+        async with RouterClient() as router:
+            response = await router.complete_text(prompt, system="Output only valid JSON.")
             
-        # 2. Score Viability
-        score_breakdown = self._evaluate_viability(data["topic_statement"], data["anchor_candidates"])
-        
-        # 3. Assess Tier 1 Status
-        gap_pass = all(score_breakdown[q] for q in ["gap_1", "gap_2", "gap_3"])
-        anchor_pass_count = sum(1 for q in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if score_breakdown[q])
-        audience_pass_count = sum(1 for q in ["audience_1", "audience_2", "audience_3", "audience_4"] if score_breakdown[q])
-        
-        if gap_pass and anchor_pass_count >= 2 and audience_pass_count >= 2:
-            logger.info("tier_1_topic_identified")
-            brief = TopicBrief(
-                topic_statement=data["topic_statement"],
-                big_question=data["big_question"],
-                genre_id=genre_id,
-                gap_type=data["gap_type"],
-                viability_score_breakdown=score_breakdown,
-                anchor_candidates=data["anchor_candidates"],
-                mainstream_assumption=data["mainstream_assumption"],
-                urgency_flag=data.get("urgency_flag", False),
-                timing_rationale=data["timing_rationale"],
-                created_at=datetime.now(timezone.utc),
-                status="reservoir"
+            try:
+                data = json.loads(response.strip("` \n").removeprefix("json\n"))
+            except json.JSONDecodeError:
+                logger.error("failed_to_parse_topic_candidate")
+                return None
+                
+            # 2. Score Viability
+            score_breakdown = await self._evaluate_viability(
+                data["topic_statement"], data["anchor_candidates"], router
             )
-            self.db.save_topic(brief)
-            return brief
-        
-        logger.debug(f"candidate_failed_viability: gap={gap_pass}, anchors={anchor_pass_count}, audience={audience_pass_count}")
-        return None
+            
+            # 3. Assess Tier 1 Status
+            gap_pass = all(score_breakdown[q] for q in ["gap_1", "gap_2", "gap_3"])
+            anchor_pass_count = sum(1 for q in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if score_breakdown[q])
+            audience_pass_count = sum(1 for q in ["audience_1", "audience_2", "audience_3", "audience_4"] if score_breakdown[q])
+            
+            if gap_pass and anchor_pass_count >= 2 and audience_pass_count >= 2:
+                logger.info("tier_1_topic_identified")
+                brief = TopicBrief(
+                    topic_statement=data["topic_statement"],
+                    big_question=data["big_question"],
+                    genre_id=genre_id,
+                    gap_type=data["gap_type"],
+                    viability_score_breakdown=score_breakdown,
+                    anchor_candidates=data["anchor_candidates"],
+                    mainstream_assumption=data["mainstream_assumption"],
+                    urgency_flag=data.get("urgency_flag", False),
+                    timing_rationale=data["timing_rationale"],
+                    created_at=datetime.now(timezone.utc),
+                    status="reservoir"
+                )
+                self.db.save_topic(brief)
+                return brief
+            
+            logger.debug(f"candidate_failed_viability: gap={gap_pass}, anchors={anchor_pass_count}, audience={audience_pass_count}")
+            return None
 
-    def _evaluate_viability(self, topic: str, anchors: list[str]) -> dict[str, bool]:
+    async def _evaluate_viability(
+        self, topic: str, anchors: list[str], router: RouterClient
+    ) -> dict[str, bool]:
         """Ask LLM to grade the 17 questions."""
         scores = {}
         context = f"Topic: {topic}\nAnchors: {anchors}"
@@ -144,7 +146,9 @@ class TopicFinderAgent:
         Questions:
         {json.dumps(VIABILITY_QUESTIONS, indent=2)}
         """
-        resp = self.router.get_completion(prompt, system_prompt="You are a strict viability tester. Return ONLY valid JSON boolean mapping.")
+        resp = await router.complete_text(
+            prompt, system="You are a strict viability tester. Return ONLY valid JSON boolean mapping."
+        )
         try:
             res_data = json.loads(resp.strip("` \n").removeprefix("json\n"))
             for k in VIABILITY_QUESTIONS.keys():
@@ -153,3 +157,150 @@ class TopicFinderAgent:
             # Degrade to False if failure
             scores = {k: False for k in VIABILITY_QUESTIONS.keys()}
         return scores
+
+    async def _get_audience_context(self, genre_id: str) -> str:
+        """Get audience context from Zep or fall back to static file."""
+        # Try Zep first
+        try:
+            from packages.content_factory.memory.zep_store import ZepAudienceModelStore
+            zep_store = ZepAudienceModelStore()
+            context_str = await zep_store.read_audience_context(genre_id)
+            if context_str and context_str != "No audience data available yet.":
+                return context_str
+        except Exception:
+            pass
+        
+        # Fall back to ZepMemoryClient directly
+        zep_context = []
+        queries = [
+            "Which gap types have produced the highest audience engagement for Pakistani content in the last six months?",
+            "What bridge section characteristics are associated with retention drops in Pakistani investigative content?",
+            "Which genres are currently performing above average engagement for this channel?",
+            "What topic characteristics predicted subscriber conversion in recent production cycles?"
+        ]
+        for q in queries:
+            results = self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
+            for r in results:
+                zep_context.append(r.get("fact", ""))
+                
+        if zep_context:
+            return "\n".join(set(zep_context))
+        
+        # Fall back to static audience model JSON
+        audience_path = Path("data/audience_model.json")
+        if not audience_path.exists():
+            audience_path = Path("packages/data/audience_model.json")
+        if audience_path.exists():
+            aud_data = json.loads(audience_path.read_text())
+            return str(aud_data.get("topic_resonance_map", "No data"))
+        
+        return "No audience data available yet — first run."
+
+    async def _get_mirofish_signals(self) -> list[str]:
+        """
+        Query MiroFish for trending topic signals.
+        Returns empty list gracefully if server is down — never blocks discovery.
+
+        MiroFish is an optional trend simulation server (packages/integrations/mirofish/).
+        When available it provides audience simulation data to calibrate topic scoring.
+        """
+        try:
+            from packages.integrations.mirofish.client import MiroFishClient
+            from packages.integrations.mirofish.seeds import get_default_seeds
+
+            client = MiroFishClient()
+
+            # Check availability first
+            status = client.get_status()
+            if not status or status.get("status") == "unknown":
+                logger.debug("mirofish_unavailable_skipping")
+                return []
+
+            seeds = get_default_seeds()
+            report = client.submit_seeds(seeds)
+            if not report:
+                return []
+
+            signals = []
+            for item in (report.get("trending_topics") or [])[:5]:
+                if isinstance(item, str):
+                    signals.append(item)
+                elif isinstance(item, dict):
+                    signals.append(item.get("topic", ""))
+
+            logger.info(f"mirofish_signals_retrieved: {len(signals)} signals")
+            return [s for s in signals if s]
+
+        except Exception as e:
+            logger.debug(f"mirofish_signal_fetch_failed_non_blocking: {e}")
+            return []
+
+    async def discover_adaptation_candidates(self, genre_id: str) -> list[TopicBrief]:
+        """
+        Scan the SourceVideoLibrary for fully analyzed JH videos and check
+        whether any current Pakistani trends map to their structural gap types.
+
+        Returns adaptation TopicBrief entries for strong matches.
+        Never crashes — returns empty list on any failure.
+        """
+        from packages.content_factory.source_library import SourceVideoLibrary, ProcessingStatus
+        try:
+            library = SourceVideoLibrary()
+            candidates = []
+
+            # Get fully analyzed JH videos
+            analyzed = library.find_by_status(ProcessingStatus.FULLY_ANALYZED, limit=10)
+            if not analyzed:
+                return []
+
+            async with RouterClient() as router:
+                for record in analyzed[:5]:  # check up to 5 at a time
+                    prompt = f"""Does the structural gap in this Johnny Harris video map to
+a current Pakistani trend or social reality?
+
+Video: "{record.title}"
+Big Question: "{record.big_question}"
+Genre: {record.genre}
+
+Answer JSON:
+{{"maps_to_pakistan": true/false,
+  "pakistani_equivalent_topic": "one sentence if true, else null",
+  "pakistani_mainstream_assumption": "what Pakistanis wrongly believe, or null",
+  "timing_rationale": "why this maps now, or null"}}"""
+
+                    try:
+                        resp = await router.complete_text(
+                            prompt, system="Return only valid JSON."
+                        )
+                        import re
+                        match = re.search(r'\{.*\}', resp, re.DOTALL)
+                        if not match:
+                            continue
+                        data = json.loads(match.group(0))
+
+                        if data.get("maps_to_pakistan") and data.get("pakistani_equivalent_topic"):
+                            brief = TopicBrief(
+                                topic_statement=data["pakistani_equivalent_topic"],
+                                big_question=record.big_question or data["pakistani_equivalent_topic"],
+                                genre_id=genre_id,
+                                gap_type=record.gap_type if hasattr(record, 'gap_type') else "Hidden Mechanism",
+                                viability_score_breakdown={"adaptation": True},
+                                anchor_candidates=[record.title],
+                                mainstream_assumption=data.get("pakistani_mainstream_assumption", ""),
+                                timing_rationale=data.get("timing_rationale", "Structural parallel exists"),
+                                created_at=datetime.now(timezone.utc),
+                                content_type="adaptation",
+                                adaptation_source_video_id=record.video_id,
+                                structural_reference_video_id=record.video_id,
+                            )
+                            self.db.save_topic(brief)
+                            candidates.append(brief)
+                    except Exception as e:
+                        logger.debug(f"adaptation_candidate_check_failed: {e}")
+                        continue
+
+            return candidates
+
+        except Exception as e:
+            logger.warning(f"discover_adaptation_candidates_failed_non_blocking: {e}")
+            return []

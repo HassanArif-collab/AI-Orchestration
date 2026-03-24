@@ -129,3 +129,74 @@ freerouter/.env   ← GROQ_API_KEY, OPENROUTER_API_KEY  (managed via :8080 dashb
 ```
 
 See `.env.example` for all required root `.env` variables.
+
+---
+
+## Complete Pipeline Wiring Map
+
+User runs:  `python apps/worker/main.py start`
+              ↓
+            `packages/pipeline/runner.PipelineRunner`
+              ↓ (calls `STAGE_HANDLERS` for each stage)
+
+### Stage 1: TREND_ANALYSIS
+  - `TopicFinderAgent.generate_candidate()` [Mode B candidates]
+  - `TopicFinderAgent.discover_adaptation_candidates()` [Mode A candidates]
+  - MiroFish signals (optional, non-blocking)
+  - Zep audience context (if `ZEP_ENABLED=true`)
+
+### Stage 2: RESEARCH (human approves topic)
+  - `ContentCreationRouter.route(brief)`
+      If `content_type="adaptation"` → Mode A: `run_adaptation(url)`
+           Stage1 (transcript) → Stage2 (structure) → Stage3 (localize)
+           → Stage4 (script) → Stage5 (Pakistani prose refinement)
+      If `content_type="original"` → Mode B: `RoundBasedProductionWorkflow`
+           Round1A (research) → Round1B (anchor check) → Round2 (opening)
+           → Round3 (full script) → Round4 (assembly)
+
+### Stage 3: SCRIPT_WRITING
+  - `ContentCreationRouter.run_experiment_loop(script, iterations=20, threshold=85%)`
+      `ScoringEngine` → `ChallengerGenerator` → `ExperimentLoop`
+      Stops at 85% OR 20 iterations OR no more failing zones
+  - `ZepAudienceModelStore.write_experiment_result()` [if `ZEP_ENABLED`]
+
+### Stage 4: VISUAL_PLANNING
+  - `MusicAgent.generate_music_architecture()`
+
+### Stage 5: SEO
+  - `RouterClient` LLM call → 7 titles + description + tags + thumbnail
+
+### Stage 6: ASSET_CREATION
+  - `VisualManifest.add_pending()` for remotion render jobs
+
+### Stage 7: PUBLISH
+  - `NotionScriptClient.create_script_page()` [if `NOTION_API_KEY` set]
+  - Dry run log [if no key]
+
+---
+
+## Genres supported
+  - `history`
+  - `current_situation`
+  - `tech_systems`
+  - `comparison`
+  - `islamic_history`
+  - `south_asian_history`
+
+## Content types
+  - `original`    → Mode B (CrewAI agents write from scratch)
+  - `adaptation`  → Mode A (JH video adapted for Pakistani context)
+
+## Self-correction stop conditions
+  1. `production_readiness_score >= 85%`
+  2. 20 iterations reached
+  3. No more failing zones to mutate
+
+## Dev mode (no live API calls)
+```bash
+PIPELINE_DEV_MODE=true python scripts/run_pipeline.py
+```
+
+## Zep memory (optional)
+Set `ZEP_ENABLED=true` in `.env` ONLY after confirming `ZEP_API_KEY` works.
+Default is false — pipeline runs fully without Zep.
