@@ -4,6 +4,40 @@ Reads all learning logs across all phases to locate cross-system patterns over
 4 sequential passes. This makes the factory truly self-improving by detecting 
 Persistent Failure Patterns, Successful Mutation Patterns, Cross-Agent Correlates,
 and Audience Response Patterns.
+
+HOW IT WORKS (4-pass process):
+
+Pass 1 & 2 — Semantic Pattern Detection via Zep:
+  Runs 10 pre-written semantic queries against the Zep learning session.
+  Queries cover: script prose failures, visual anchor failures,
+  successful mutations, audience response patterns, music architecture issues.
+  Each query returns the 2 most relevant facts from the learning log.
+
+Pass 3 — Insight Generation:
+  Translates raw patterns into structured Insight objects.
+  Each Insight has: pattern_type, phases_involved, agents_implicated,
+  proposed_instruction_change, confidence (high/medium/low).
+
+Pass 4 — Report Generation:
+  Compiles SynthesisReport with executive summary + sorted insights.
+  Report saved to packages/data/synthesis_reports/{report_id}.json
+
+MONTHLY ANALYSIS:
+  execute_monthly_cross_cycle_analysis() runs 3 deeper queries looking
+  for cross-cycle patterns invisible in weekly data:
+  - Which topic+genre combinations produce best scores?
+  - Does experiment loop count correlate with YouTube engagement?
+  - Which binary questions are improving vs plateauing over 6 months?
+
+TRIGGER:
+  Called by Scheduler.run_learning_synthesis() every 168 hours (weekly).
+  Can also be triggered manually from the CLI or API.
+
+ZEP DEPENDENCY:
+  Without ZEP_ENABLED=true, returns a SynthesisReport with 0 insights.
+  The Zep learning session must be populated by the experiment loop
+  (via ZepAudienceModelStore.write_experiment_result) before synthesis
+  can find meaningful patterns.
 """
 
 from typing import Literal, Optional, Any
@@ -18,7 +52,25 @@ from packages.core.config import get_settings
 logger = get_logger("LearningSynthesis")
 
 class Insight(BaseModel):
-    """A structured conclusion drawn from cross-phase analysis."""
+    """A structured conclusion drawn from cross-phase analysis.
+    
+    Insights are the ACTIONABLE output of the synthesis engine.
+    Each insight represents a discovered pattern and proposes
+    a specific change to agent instructions.
+    
+    Fields:
+      insight_id: Unique identifier for tracking
+      pattern_type: Category of the detected pattern
+      phases_involved: Which pipeline phases show this pattern
+      genres_affected: Which genres are impacted
+      agents_implicated: Which agents should receive updated instructions
+      binary_categories_implicated: Which evaluation categories are affected
+      evidence_summary: Human-readable summary of supporting evidence
+      current_instruction: The instruction currently in use
+      proposed_instruction_change: The suggested new instruction text
+      expected_impact: What improvement this change should produce
+      confidence: How certain the engine is about this insight
+    """
     insight_id: str
     pattern_type: Literal[
         "persistent_failure", 
@@ -39,7 +91,15 @@ class Insight(BaseModel):
     confidence: Literal["high", "medium", "low"]
     
 class SynthesisReport(BaseModel):
-    """The weekly summary report passed to Human Review."""
+    """The weekly summary report passed to Human Review.
+    
+    This is the OUTPUT of the synthesis cycle. It contains all
+    discovered insights sorted by confidence, plus trend data
+    for genre performance and audience patterns.
+    
+    Stored to: packages/data/synthesis_reports/{report_id}.json
+    Read by: UpdatePipeline, ReviewInterface, HealthMonitor
+    """
     report_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     executive_summary: str
@@ -50,6 +110,27 @@ class SynthesisReport(BaseModel):
     genre_drift_alerts: list[str] = Field(default_factory=list)
 
 class SynthesisEngine:
+    """Learning Synthesis Engine — Finds patterns across all production cycles.
+    
+    This engine is the BRAIN of the self-improvement system. It reads
+    accumulated learning data and extracts actionable insights that
+    can be fed back into agent instructions.
+    
+    EXAMPLE INSIGHT FLOW:
+      1. Query finds: "Zone 1 mutations removing passive voice
+         consistently improved Category C scores by 15%"
+      2. Creates Insight with proposed_instruction_change:
+         "When revising prose, prioritize converting passive constructions
+          to active voice before other stylistic changes"
+      3. UpdatePipeline processes insight
+      4. Writer agent receives updated instruction
+      5. Future scripts score higher on Category C questions
+    
+    ZEP INTEGRATION:
+      All pattern detection happens via semantic search in Zep.
+      The ZEP_LEARNING_USER_ID session must be populated first.
+      Without Zep, this engine returns empty reports.
+    """
     def __init__(self):
         self.reports_dir = Path("packages/data/synthesis_reports")
         self.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -58,7 +139,15 @@ class SynthesisEngine:
         self.zep_session_id = f"{get_settings().ZEP_LEARNING_USER_ID}_session"
         
     def execute_synthesis_cycle(self) -> Optional[SynthesisReport]:
-        """Runs the 4-pass synthesis engine over the factory."""
+        """Runs the 4-pass synthesis engine over the factory.
+        
+        This is the MAIN ENTRY POINT for weekly learning synthesis.
+        Called automatically by the scheduler every 168 hours.
+        
+        Returns:
+          SynthesisReport if any insights found
+          None if no data available or Zep disabled
+        """
         logger.info("synthesis_cycle_started")
         
         # Pass 1 & 2: Semantic Pattern Detection via Zep
@@ -77,8 +166,18 @@ class SynthesisEngine:
         return report
 
     def _detect_patterns_semantic(self) -> list[dict]:
-        """
-        Queries Zep for semantic patterns rather than scanning local JSONL.
+        """Queries Zep for semantic patterns rather than scanning local JSONL.
+        
+        Uses 10 pre-written semantic queries designed to surface
+        the most valuable learning patterns:
+          - Script prose mutation effectiveness
+          - Visual anchor success patterns
+          - Research citation confidence trends
+          - Music architecture issues
+          - Audience response to different content types
+        
+        Returns:
+          List of pattern dicts with type, category, genre, and evidence
         """
         logger.info("synthesis_semantic_pattern_detection")
         patterns = []
@@ -114,7 +213,16 @@ class SynthesisEngine:
         return patterns
 
     def execute_monthly_cross_cycle_analysis(self) -> None:
-        """Runs the monthly analysis querying Zep for emergent Cross-Cycle Patterns."""
+        """Runs the monthly analysis querying Zep for emergent Cross-Cycle Patterns.
+        
+        These queries look for LONG-TERM patterns that only emerge
+        when analyzing data across many weeks:
+          - Topic+genre combination effectiveness
+          - Iteration count vs engagement correlation
+          - Question improvement trends over time
+        
+        Results are written back to Zep for next month's analysis.
+        """
         logger.info("monthly_cross_cycle_analysis_started")
         queries = [
             "What combinations of topic type, genre, and gap type have consistently produced the highest overall binary evaluation scores?",
@@ -134,7 +242,19 @@ class SynthesisEngine:
                 }])
 
     def _generate_insights(self, patterns: list[dict]) -> list[Insight]:
-        """Translates patterns to High/Medium/Low confidence Insights."""
+        """Translates patterns to High/Medium/Low confidence Insights.
+        
+        Each pattern becomes an Insight with:
+          - A proposed instruction change
+          - A confidence level based on evidence strength
+          - A list of affected agents and genres
+        
+        Args:
+          patterns: Raw pattern dicts from _detect_patterns_semantic()
+        
+        Returns:
+          List of Insight objects ready for UpdatePipeline
+        """
         logger.info("synthesis_pass_3_insight_generation")
         import uuid
         insights = []
@@ -156,7 +276,19 @@ class SynthesisEngine:
         return insights
 
     def _generate_report(self, insights: list[Insight]) -> SynthesisReport:
-        """Compiles the final Synthesis Report for the Weekly Handoff."""
+        """Compiles the final Synthesis Report for the Weekly Handoff.
+        
+        Separates insights by confidence level for routing:
+          - High confidence → auto-activation candidates
+          - Medium confidence → advisory window + human review
+          - Low confidence → escalated for mandatory review
+        
+        Args:
+          insights: List of Insight objects from _generate_insights()
+        
+        Returns:
+          SynthesisReport ready for storage and processing
+        """
         logger.info("synthesis_pass_4_report_generation")
         import uuid
         return SynthesisReport(
@@ -168,6 +300,10 @@ class SynthesisEngine:
         )
 
     def _save_report(self, report: SynthesisReport):
+        """Persist report to disk for audit trail.
+        
+        File: packages/data/synthesis_reports/{report_id}.json
+        """
         path = self.reports_dir / f"{report.report_id}.json"
         with open(path, "w", encoding="utf-8") as f:
             f.write(report.model_dump_json(indent=2))

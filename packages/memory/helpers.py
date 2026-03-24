@@ -1,8 +1,35 @@
-"""High-level helper functions for Zep memory operations.
+"""
+Zep Memory Helper Functions — High-level convenience wrappers.
 
-These functions provide convenient interfaces for common memory operations,
-composing the ZepMemoryClient for specific use cases in the YouTube automation
-pipeline.
+These functions wrap ZepMemoryClient for common pipeline operations.
+Use these instead of calling ZepMemoryClient directly from pipeline code.
+
+WHEN TO USE THESE vs ZepMemoryClient directly:
+  Use helpers when:    storing/retrieving within a single video production run
+  Use client directly: when writing audience intelligence or learning facts
+                       (use ZepAudienceModelStore from content_factory/memory/)
+
+HELPER FUNCTIONS:
+  store_research(session_id, topic, facts, sources)
+    → Stores a research dossier in the video's production session
+    → Called by: Researcher agent after gathering facts
+
+  store_script_feedback(session_id, feedback, revision)
+    → Records human or LLM feedback on a script revision
+    → Called by: ReviewInterface when human reviewer gives notes
+
+  recall_style(user_id)
+    → Retrieves channel style preferences for a creator
+    → Called by: Writer agent to stay consistent with channel voice
+
+  recall_video_performance(user_id, query)
+    → Semantic search over past video analytics
+    → Called by: TopicFinderAgent to find topics that worked before
+
+SESSION ID CONVENTIONS:
+  Per-video production session: use pipeline run_id (from PipelineRunner)
+  Style preferences:            f"{channel_owner_user_id}_style"
+  Analytics history:            f"{channel_owner_user_id}_analytics"
 """
 
 from packages.memory.client import ZepMemoryClient

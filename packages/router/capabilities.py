@@ -37,12 +37,24 @@ CAPABILITY_MODELS: dict[str, str] = {
     "visual_planning": "openrouter/stepfun/step-3.5-flash:free",
 }
 
-# Optional override file — create packages/capabilities.yaml to customise
+# HOW TO OVERRIDE MODELS WITHOUT CODE CHANGES:
+# Create packages/capabilities.yaml with your overrides:
+#
+# research: groq/llama-3.3-70b-versatile
+# scripting: anthropic/claude-3-5-sonnet
+# creative: openrouter/google/gemini-2.0-flash-exp:free
+#
+# This file is gitignored — safe to put experimental model names here.
+# Overrides merge with CAPABILITY_MODELS (your values win).
 _OVERRIDE_PATH = Path(__file__).parent.parent / "capabilities.yaml"
 
 
 def _load_overrides() -> dict[str, str]:
-    """Load model overrides from capabilities.yaml if it exists."""
+    """Load model overrides from capabilities.yaml if it exists.
+    
+    The override file is OPTIONAL. If it doesn't exist, defaults are used.
+    If it exists but has errors, empty dict is returned (graceful degradation).
+    """
     if not _OVERRIDE_PATH.exists():
         return {}
     try:
@@ -58,6 +70,17 @@ def get_model_for_capability(capability: str) -> str:
     Return the preferred model string for a named capability.
     Falls back to 'auto' for unknown capabilities.
     The caller should still handle 503 and retry with 'auto'.
+    
+    OVERRIDE PRIORITY:
+      1. capabilities.yaml values (if file exists)
+      2. CAPABILITY_MODELS defaults
+      3. "auto" fallback
+    
+    Args:
+        capability: The task type (e.g., "research", "scripting")
+    
+    Returns:
+        Model string like "groq/llama-3.3-70b-versatile" or "auto"
     """
     overrides = _load_overrides()
     merged = {**CAPABILITY_MODELS, **overrides}
@@ -65,5 +88,12 @@ def get_model_for_capability(capability: str) -> str:
 
 
 def list_capabilities() -> list[str]:
-    """Return all known capability names."""
+    """Return all known capability names.
+    
+    Useful for UI dropdowns or debugging.
+    Does NOT include unknown capabilities (would get "auto" anyway).
+    
+    Returns:
+        List of capability keys from CAPABILITY_MODELS
+    """
     return list(CAPABILITY_MODELS.keys())

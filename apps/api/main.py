@@ -5,7 +5,30 @@ Runs on port 3000. Single process — replaces both the old FreeRouter
 web dashboard (:8080) and the new dashboard. FreeRouter proxy (:4000)
 still runs separately for external tools (Claude Code, Cursor).
 
-Start with: python -m apps.api.main
+ROUTES (all prefixed with their router):
+  /api/pipeline/*      — start, approve, status, list pipeline runs
+  /api/providers/*     — FreeRouter provider management (proxied to :4000)
+  /api/chat/*          — direct chat with FreeRouter (proxied to :4000)
+  /api/memory/*        — browse Zep Cloud agent memory
+  /api/analytics/*     — YouTube analytics and health monitor dashboard
+  /api/visual/*        — visual asset manifest management
+  /api/settings/*      — environment and configuration management
+  /events              — SSE stream for real-time pipeline updates
+
+STATIC DASHBOARD:
+  apps/api/static/index.html — the web UI
+  JavaScript files in apps/api/static/js/ correspond to each route:
+    pipeline.js, providers.js, chat.js, memory.js, analytics.js,
+    visual.js, settings.js
+
+FREEROUTER PROXY:
+  Provider and chat routes proxy requests to FreeRouter at :4000.
+  FreeRouter MUST be running before these routes work.
+  Check: make freerouter (in a separate terminal)
+
+PORT:
+  Runs on 3000 by default (not 8000 — intentional to avoid conflicts).
+  Start: python -m apps.api.main
 """
 
 from __future__ import annotations
@@ -40,6 +63,10 @@ from apps.api.routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan handler.
+    
+    Initializes databases on startup and cleans up on shutdown.
+    """
     try:
         from freerouter.storage import init_db
         init_db()

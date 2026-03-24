@@ -2,6 +2,34 @@
 
 Maintains the persistent Production Cycle Registry using SQLite.
 Includes Optimistic Locking mechanism for State Synchronization.
+
+DATABASE TABLES:
+
+  production_registry
+    One row per production cycle. Tracks lifecycle from topic_selected
+    through all production rounds to completed/failed.
+    Key fields: cycle_id, topic_statement, genre, current_phase,
+                current_baseline_score, experiment_iterations,
+                pipeline_run_id (links to PipelineRunner run_id)
+    Locking: lock_expires_at prevents concurrent phase advances.
+             Locks expire after 30 seconds to prevent deadlocks.
+
+  human_escalations
+    Items requiring human decision before the system can proceed.
+    Created by: MasterOrchestrator.handle_escalation()
+    Read by: ReviewInterface.get_pending_escalations()
+    Status flow: pending → approved/rejected/modified
+
+  instruction_versions
+    Audit trail of all agent instruction changes.
+    Created by: UpdatePipeline._activate_version()
+    Used by: rollback monitor when post-update scores drop
+
+ALL DATA IN packages/data/pipeline.db — same file used by:
+  - PipelineRunner (pipeline_runs table)
+  - SourceVideoLibrary (source_videos table)
+  - TopicReservoirDB (topic_reservoir, video_performance tables)
+  - BaselineManager (baselines table)
 """
 
 import sqlite3
@@ -16,10 +44,34 @@ from packages.content_factory.orchestration.models import ProductionCycleRecord,
 DB_PATH = Path("packages/data/pipeline.db")
 
 class OrchestrationDB:
+    """
+    SQLite persistence layer for the orchestration system.
+    
+    Handles all database operations for production cycle state,
+    human escalations, and instruction version tracking.
+    
+    THREAD SAFETY:
+      SQLite handles concurrent reads. Writes use explicit transactions.
+      For multi-process environments, the optimistic lock (lock_expires_at)
+      prevents concurrent modifications to the same cycle.
+    
+    USAGE:
+      db = OrchestrationDB()
+      db.create_cycle(record)
+      db.acquire_lock(cycle_id)  # before modifying
+      # ... make changes ...
+      db.release_lock(cycle_id)
+    """
     def __init__(self):
         self._init_db()
         
     def _init_db(self):
+        """Initialize all tables with proper schema.
+        
+        Safe to call multiple times — uses IF NOT EXISTS.
+        Migration-safe: new columns can be added via ALTER TABLE
+        in the calling code if needed.
+        """
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
@@ -69,6 +121,14 @@ class OrchestrationDB:
             conn.commit()
 
     def create_cycle(self, record: ProductionCycleRecord):
+        """Insert a new production cycle record.
+        
+        Called by MasterOrchestrator.check_and_start_new_cycle()
+        when a Tier 1 topic is selected for production.
+        
+        Args:
+          record: ProductionCycleRecord with all required fields
+        """
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -87,7 +147,21 @@ class OrchestrationDB:
             conn.commit()
 
     def acquire_lock(self, cycle_id: str, timeout_seconds: int = 30) -> bool:
-        """Optimistic locking. Returns True if lock acquired."""
+        """Optimistic locking for safe concurrent access.
+        
+        Attempts to acquire an exclusive lock on a cycle record.
+        Returns True if the lock was acquired, False if already locked.
+        
+        Locks automatically expire after timeout_seconds to prevent
+        deadlocks if a process crashes while holding a lock.
+        
+        Args:
+          cycle_id: The cycle to lock
+          timeout_seconds: Lock expiration time (default 30s)
+        
+        Returns:
+          True if lock acquired, False if already locked by another process
+        """
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             now = datetime.now(timezone.utc)
@@ -104,6 +178,14 @@ class OrchestrationDB:
             return cursor.rowcount > 0
 
     def release_lock(self, cycle_id: str):
+        """Release a previously acquired lock.
+        
+        Always call this after completing a modification, even if
+        the operation failed — prevents lock buildup.
+        
+        Args:
+          cycle_id: The cycle to unlock
+        """
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -114,6 +196,14 @@ class OrchestrationDB:
             conn.commit()
             
     def get_active_cycles(self) -> list[ProductionCycleRecord]:
+        """Fetch all cycles currently in active production.
+        
+        Used by MasterOrchestrator to enforce the max 2 concurrent
+        cycles limit.
+        
+        Returns:
+          List of ProductionCycleRecord objects with status='active'
+        """
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -139,6 +229,14 @@ class OrchestrationDB:
             return results
 
     def escalate(self, item: EscalationItem):
+        """Create a human escalation record.
+        
+        Called by MasterOrchestrator.handle_escalation() when the system
+        encounters a situation requiring human judgment.
+        
+        Args:
+          item: EscalationItem with all required fields
+        """
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''
