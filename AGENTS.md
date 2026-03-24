@@ -129,3 +129,24 @@ freerouter/.env   ← GROQ_API_KEY, OPENROUTER_API_KEY  (managed via :8080 dashb
 ```
 
 See `.env.example` for all required root `.env` variables.
+
+---
+
+## Documentation map — where to learn about each system
+
+| System | Primary docs |
+|---|---|
+| Hermes memory architecture | `packages/content_factory/orchestration/memory.py` |
+| Zep Cloud integration | `packages/memory/client.py` (class docstring) |
+| Zep setup (first time) | `packages/memory/init_zep.py` + run the script |
+| Session naming conventions | `packages/memory/schemas.py` |
+| Self-correction loop | `packages/content_factory/evaluation/__init__.py` |
+| Binary question categories | `packages/content_factory/KNOWLEDGE_BASE.md` |
+| Knowledge base (4 JSON files) | `packages/content_factory/KNOWLEDGE_BASE.md` |
+| Music architecture | `packages/content_factory/music/__init__.py` |
+| Orchestration (7 components) | `packages/content_factory/orchestration/__init__.py` |
+| Topic finder + feedback loop | `packages/content_factory/topic_finder/__init__.py` |
+| Agent types (BaseAgent vs CrewAI) | `packages/agents/base.py` |
+| Capability → model mapping | `packages/router/capabilities.py` |
+| Pipeline hooks | `packages/pipeline/hooks.py` |
+| API routes | `apps/api/main.py` |
