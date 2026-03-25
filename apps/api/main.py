@@ -50,6 +50,7 @@ from fastapi.staticfiles import StaticFiles
 
 from apps.api.dependencies import close_all
 from apps.api.events import sse_endpoint
+from apps.api.middleware.auth import AuthMiddleware
 from apps.api.routers import (
     pipeline_routes,
     provider_routes,
@@ -58,7 +59,10 @@ from apps.api.routers import (
     analytics_routes,
     visual_routes,
     settings_routes,
+    topic_routes,
+    health_routes,
 )
+from packages.core.config import get_settings
 
 
 @asynccontextmanager
@@ -85,12 +89,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Get settings for CORS configuration
+settings = get_settings()
+
+# Add AuthMiddleware BEFORE CORSMiddleware (order matters!)
+app.add_middleware(AuthMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Health check endpoint (no auth required)
+app.include_router(health_routes.router, tags=["health"])
 
 # API routes
 app.include_router(pipeline_routes.router, prefix="/api/pipeline",  tags=["pipeline"])
@@ -100,6 +113,7 @@ app.include_router(memory_routes.router,   prefix="/api/memory",    tags=["memor
 app.include_router(analytics_routes.router,prefix="/api/analytics", tags=["analytics"])
 app.include_router(visual_routes.router,   prefix="/api/visual",    tags=["visual"])
 app.include_router(settings_routes.router, prefix="/api/settings",  tags=["settings"])
+app.include_router(topic_routes.router,    prefix="/api/topics",    tags=["topics"])
 
 # SSE endpoint
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])

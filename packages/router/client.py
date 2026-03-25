@@ -14,6 +14,7 @@ This client handles:
   - Connection errors (FreeRouter not running)
   - 503 from specific model → retry with "auto"
   - Structured output via instructor + openai client
+  - Startup health check with clear error messages
 
 Usage:
     from packages.router.client import RouterClient
@@ -22,16 +23,18 @@ Usage:
         text = await client.complete_text("Summarise this topic: ...")
         idea = await client.complete_structured(msgs, VideoIdea)
 
-Imports: httpx, instructor, openai, packages.core
+Imports: httpx, requests, instructor, openai, packages.core
 Imported by: packages/pipeline/, packages/agents/
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Type, TypeVar
 
 import httpx
+import requests
 
 from packages.core.config import get_settings
 from packages.core.errors import LLMClientError, RateLimitError
@@ -45,11 +48,98 @@ class RouterClient:
     """
     Async HTTP client for FreeRouter proxy.
     Use as an async context manager or call close() when done.
+
+    Features:
+        - Startup health check to ensure FreeRouter is running
+        - Async health_check() method for monitoring
+        - Automatic retry with exponential backoff
+        - Fallback to "auto" model on 503 errors
     """
 
-    def __init__(self, base_url: str | None = None) -> None:
-        self.base_url = (base_url or get_settings().FREEROUTER_URL).rstrip("/")
-        self._http = httpx.AsyncClient(base_url=self.base_url, timeout=90.0)
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout: float = 90.0,
+        startup_check: bool = True,
+    ) -> None:
+        """
+        Initialize the RouterClient.
+
+        Args:
+            base_url: FreeRouter URL (defaults to config FREEROUTER_URL)
+            timeout: HTTP timeout in seconds (default: 90.0)
+            startup_check: If True, perform sync health check on init (default: True)
+
+        Raises:
+            LLMClientError: If startup_check=True and FreeRouter is not running
+        """
+        settings = get_settings()
+        self.base_url = (base_url or settings.FREEROUTER_URL).rstrip("/")
+        self.timeout = timeout
+        self._healthy: bool | None = None
+
+        # Determine if startup check should run
+        should_check = startup_check and settings.FREEROUTER_STARTUP_CHECK
+        if should_check:
+            self._startup_health_check()
+
+        self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+
+    def _startup_health_check(self) -> None:
+        """
+        Synchronous health check at initialization.
+
+        Raises:
+            LLMClientError: If FreeRouter is not accessible
+        """
+        try:
+            response = requests.get(
+                f"{self.base_url}/health",
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                self._healthy = True
+                log.info("freerouter_startup_check_passed", url=self.base_url)
+                return
+        except requests.exceptions.ConnectionError:
+            pass
+        except requests.exceptions.Timeout:
+            pass
+        except Exception as e:
+            log.warning(f"freerouter_startup_check_exception: {e}")
+
+        raise LLMClientError(
+            f"FreeRouter is not running at {self.base_url}. "
+            f"Please start it with: cd freerouter && python -m freerouter"
+        )
+
+    async def health_check(self) -> dict:
+        """
+        Async health check for monitoring.
+
+        Returns:
+            Dict with keys:
+                - healthy (bool): Whether FreeRouter is responding
+                - latency_ms (float | None): Response latency in milliseconds
+        """
+        start = datetime.now(timezone.utc)
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.base_url}/health")
+                if response.status_code == 200:
+                    latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
+                    self._healthy = True
+                    return {"healthy": True, "latency_ms": latency}
+        except Exception as e:
+            log.debug(f"health_check_failed: {e}")
+
+        self._healthy = False
+        return {"healthy": False, "latency_ms": None}
+
+    @property
+    def is_healthy(self) -> bool:
+        """Return whether the last health check passed."""
+        return self._healthy or False
 
     async def __aenter__(self) -> RouterClient:
         return self
@@ -58,6 +148,7 @@ class RouterClient:
         await self.close()
 
     async def close(self) -> None:
+        """Close the HTTP client connection."""
         await self._http.aclose()
 
     async def complete(

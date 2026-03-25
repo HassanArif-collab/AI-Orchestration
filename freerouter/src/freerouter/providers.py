@@ -42,6 +42,8 @@ class ProviderDefinition:
     requires_auth: bool = True
     priority: int = 100
     soft_limit_threshold: float = 0.90
+    requires_custom_adapter: bool = False  # Flag for non-OpenAI APIs like APIFreeLLM
+    rate_limit_reset_seconds: int = 60  # Provider-specific rate limit reset time
 
 
 KNOWN_PROVIDERS: list[ProviderDefinition] = [
@@ -76,6 +78,17 @@ KNOWN_PROVIDERS: list[ProviderDefinition] = [
         signup_url="https://openrouter.ai/keys",
         priority=30,
     ),
+    # ─── NEW PROVIDERS ─────────────────────────────────────────────────────
+    ProviderDefinition(
+        name="mistral",
+        display_name="Mistral AI",
+        provider_type=ProviderType.CLOUD,
+        env_key="MISTRAL_API_KEY",
+        base_url="https://api.mistral.ai/v1",
+        health_url="https://api.mistral.ai/v1/models",
+        signup_url="https://console.mistral.ai/",
+        priority=35,
+    ),
     ProviderDefinition(
         name="together",
         display_name="Together AI (Free Tier)",
@@ -85,6 +98,16 @@ KNOWN_PROVIDERS: list[ProviderDefinition] = [
         health_url="https://api.together.xyz/v1/models",
         signup_url="https://api.together.ai/settings/api-keys",
         priority=40,
+    ),
+    ProviderDefinition(
+        name="sambanova",
+        display_name="SambaNova Cloud",
+        provider_type=ProviderType.CLOUD,
+        env_key="SAMBANOVA_API_KEY",
+        base_url="https://api.sambanova.ai/v1",
+        health_url="https://api.sambanova.ai/v1/models",
+        signup_url="https://cloud.sambanova.ai/",
+        priority=45,
     ),
     ProviderDefinition(
         name="deepinfra",
@@ -97,6 +120,16 @@ KNOWN_PROVIDERS: list[ProviderDefinition] = [
         priority=50,
     ),
     ProviderDefinition(
+        name="cerebras",
+        display_name="Cerebras AI",
+        provider_type=ProviderType.CLOUD,
+        env_key="CEREBRAS_API_KEY",
+        base_url="https://api.cerebras.ai/v1",
+        health_url="https://api.cerebras.ai/v1/models",
+        signup_url="https://cloud.cerebras.ai/",
+        priority=55,
+    ),
+    ProviderDefinition(
         name="openai",
         display_name="OpenAI (GPT Models)",
         provider_type=ProviderType.CLOUD,
@@ -107,6 +140,16 @@ KNOWN_PROVIDERS: list[ProviderDefinition] = [
         priority=60,
     ),
     ProviderDefinition(
+        name="github",
+        display_name="GitHub Models",
+        provider_type=ProviderType.CLOUD,
+        env_key="GITHUB_TOKEN",
+        base_url="https://models.inference.ai.azure.com",
+        health_url="https://models.inference.ai.azure.com/models",
+        signup_url="https://github.com/settings/tokens",
+        priority=65,
+    ),
+    ProviderDefinition(
         name="anthropic",
         display_name="Anthropic (Claude Models)",
         provider_type=ProviderType.CLOUD,
@@ -115,6 +158,29 @@ KNOWN_PROVIDERS: list[ProviderDefinition] = [
         health_url="https://api.anthropic.com/v1/models",
         signup_url="https://console.anthropic.com/account/keys",
         priority=70,
+    ),
+    # ─── NON-STANDARD API PROVIDERS (require custom adapter) ─────────────────
+    ProviderDefinition(
+        name="apifreellm",
+        display_name="APIFreeLLM (Free Tier)",
+        provider_type=ProviderType.CLOUD,
+        env_key="APIFREELLM_API_KEY",
+        base_url="https://apifreellm.com/api/v1",
+        health_url="https://apifreellm.com/api/v1/status",
+        signup_url="https://apifreellm.com/en/api-access",
+        priority=75,
+        requires_custom_adapter=True,
+        rate_limit_reset_seconds=25,  # APIFreeLLM requires 25 second wait on 429
+    ),
+    ProviderDefinition(
+        name="zai",
+        display_name="Z.AI (GLM Models)",
+        provider_type=ProviderType.CLOUD,
+        env_key="ZAI_API_KEY",
+        base_url="https://api.z.ai/v1",
+        health_url="https://api.z.ai/v1/models",
+        signup_url="https://docs.z.ai/",
+        priority=80,
     ),
 ]
 
@@ -128,10 +194,16 @@ DEFAULT_MODELS: dict[str, str] = {
     "ollama": "llama3.2",                                        # whatever you have locally
     "groq": "llama-3.3-70b-versatile",                          # fast, generous free tier
     "openrouter": "stepfun/step-3.5-flash:free",                # as requested
+    "mistral": "mistral-small-latest",                          # free tier model
     "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+    "sambanova": "Meta-Llama-3.1-8B-Instruct",                  # free tier model
     "deepinfra": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "cerebras": "llama-3.3-70b",                                # fast inference
     "openai": "gpt-4o-mini",
+    "github": "gpt-4o-mini",                                    # GitHub Models free tier
     "anthropic": "claude-3-haiku-20240307",
+    "apifreellm": "apifreellm",                                 # only model available
+    "zai": "glm-4-flash",                                       # Z.AI GLM model
 }
 
 

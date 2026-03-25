@@ -303,3 +303,95 @@ async def get_stage_output(run_id: str, stage: str):
     if output is None:
         raise HTTPException(404, f"No output for stage {stage}")
     return {"stage": stage, "output": output}
+
+
+# ─── Resume/Recovery endpoints ─────────────────────────────────────────────────
+
+@router.get("/runs/resumable")
+async def list_resumable_runs():
+    """List all pipeline runs that can be resumed.
+
+    Returns runs in 'error' or 'waiting_human' states that can be recovered.
+    Useful for dashboards to show failed runs that need attention.
+    """
+    runner = get_pipeline_runner()
+    if not runner:
+        raise HTTPException(503, "Pipeline package not available")
+
+    try:
+        resumable = runner.list_resumable_runs()
+        return {"runs": resumable, "count": len(resumable)}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to list resumable runs: {e}")
+
+
+@router.post("/runs/{run_id}/resume")
+async def resume_pipeline_run(run_id: str, bg: BackgroundTasks):
+    """Resume a crashed or paused pipeline run.
+
+    Recovers a pipeline run from:
+    - 'error' state: Resets failed stage and continues execution
+    - 'waiting_human' state: Returns the gate stage for approval
+
+    Returns the current stage after resume attempt.
+    """
+    runner = get_pipeline_runner()
+    store = get_run_store()
+    if not runner or not store:
+        raise HTTPException(503, "Pipeline package not available")
+
+    run = store.load(run_id)
+    if not run:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    try:
+        result = await runner.resume_run(run_id)
+        if result is None:
+            # Could be already completed or not resumable
+            if run.status == "completed":
+                raise HTTPException(400, f"Run {run_id} is already completed")
+            raise HTTPException(400, f"Run {run_id} cannot be resumed")
+
+        # If we recovered and got a stage, start background execution
+        if run.status == "running":
+            bg.add_task(_run_pipeline_bg, run_id)
+
+        return {
+            "status": "resumed",
+            "run_id": run_id,
+            "current_stage": result.value if result else None,
+            "run_status": run.status,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to resume run: {e}")
+
+
+@router.post("/runs/recover-all")
+async def recover_all_failed_runs(bg: BackgroundTasks):
+    """Attempt to recover all failed pipeline runs.
+
+    Finds all runs in error state and attempts to resume them.
+    Useful after system restart or transient failure resolution.
+    """
+    runner = get_pipeline_runner()
+    if not runner:
+        raise HTTPException(503, "Pipeline package not available")
+
+    try:
+        results = await runner.recover_all_failed()
+
+        # Start background tasks for successfully recovered runs
+        for result in results:
+            if result.get("success"):
+                bg.add_task(_run_pipeline_bg, result["run_id"])
+
+        return {
+            "status": "recovery_attempted",
+            "recovered": sum(1 for r in results if r.get("success")),
+            "failed": sum(1 for r in results if not r.get("success")),
+            "details": results,
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Failed to recover runs: {e}")

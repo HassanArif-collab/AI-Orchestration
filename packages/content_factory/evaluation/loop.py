@@ -26,6 +26,7 @@ from typing import Optional, TYPE_CHECKING
 import random
 
 from packages.core.config import get_settings
+from packages.core.errors import QualityGateError
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 
@@ -141,6 +142,12 @@ class ExperimentLoop:
         self.logger = LearningLogger()
         self._enable_persistence = enable_persistence
         self._snapshot = ExperimentSnapshot(persist_dir) if enable_persistence else None
+        
+        # Load quality thresholds from config
+        settings = get_settings()
+        self.threshold = settings.SCRIPT_QUALITY_THRESHOLD
+        self.floor = settings.SCRIPT_QUALITY_FLOOR
+        self.max_iterations = settings.SCRIPT_MAX_ITERATIONS
 
     async def run_iterations(
         self,
@@ -340,6 +347,92 @@ class ExperimentLoop:
             target_threshold=threshold,
             resume=True # Enable resume for long-running threshold jobs
         )
+
+    async def run_with_quality_gate(
+        self,
+        script: AdaptedScript,
+        enforce_floor: bool = True,
+        router_client: RouterClient | None = None,
+        cycle_id: Optional[str] = None,
+    ) -> AdaptedScript:
+        """Run evolution with quality floor enforcement.
+
+        This method runs the evolution loop with configurable quality gates.
+        If the final score is below the quality floor and enforce_floor is True,
+        a QualityGateError is raised.
+
+        Args:
+            script: The initial script to evolve.
+            enforce_floor: Whether to raise error if score < floor (default: True).
+            router_client: Client for LLM calls.
+            cycle_id: Optional cycle ID for tracking.
+
+        Returns:
+            The highest scoring script found.
+
+        Raises:
+            QualityGateError: If final score is below floor and enforce_floor is True.
+        """
+        best_script = await self.run_with_threshold(
+            script, 
+            threshold=self.threshold, 
+            max_iterations=self.max_iterations,
+            router_client=router_client,
+        )
+
+        final_score = best_script.production_readiness_score
+
+        if final_score >= self.threshold:
+            logger.info(
+                f"quality_gate_passed: score={final_score:.1f}% "
+                f"threshold={self.threshold}%"
+            )
+            return best_script
+
+        if final_score < self.floor:
+            if enforce_floor:
+                logger.error(
+                    f"quality_gate_failed: score={final_score:.1f}% "
+                    f"floor={self.floor}%"
+                )
+                raise QualityGateError(
+                    f"Script quality {final_score:.1f}% below minimum {self.floor}%",
+                    score=final_score,
+                    floor=self.floor
+                )
+            else:
+                logger.warning(
+                    f"quality_below_floor: score={final_score:.1f}% "
+                    f"floor={self.floor}% (enforcement disabled)"
+                )
+
+        logger.info(
+            f"quality_acceptable: score={final_score:.1f}% "
+            f"floor={self.floor}% threshold={self.threshold}%"
+        )
+        return best_script
+
+    def get_quality_report(self, script: AdaptedScript) -> dict:
+        """Generate a quality report for a script.
+
+        Args:
+            script: The script to report on.
+
+        Returns:
+            Dict with score, thresholds, and status.
+        """
+        score = script.production_readiness_score
+        return {
+            "score": score,
+            "threshold": self.threshold,
+            "floor": self.floor,
+            "max_iterations": self.max_iterations,
+            "status": (
+                "production_ready" if score >= self.threshold else
+                "acceptable" if score >= self.floor else
+                "below_floor"
+            ),
+        }
 
     def get_available_snapshots(self) -> list[dict]:
         """Get list of available experiment snapshots."""

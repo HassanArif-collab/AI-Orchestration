@@ -211,3 +211,130 @@ class PipelineRunner:
         # Re-run from_stage with new output
         run.stage_status[from_stage.value] = "pending"
         await self.execute_stage(run, from_stage)
+
+    async def resume_run(self, run_id: str) -> Optional[Stage]:
+        """Resume a crashed or paused pipeline run.
+
+        Recovers a pipeline run from error state or waiting_human state.
+        For error states, resets the failed stage and attempts to continue.
+        For waiting_human states, returns the gate stage for approval.
+
+        Args:
+            run_id: ID of the run to resume
+
+        Returns:
+            Stage where execution stopped (gate or recovered), or None if:
+            - Run not found
+            - Run already completed
+            - Run cannot be resumed
+        """
+        run = self.store.load(run_id)
+        if not run:
+            self.logger.warning(f"resume_run_not_found: run_id={run_id}")
+            return None
+
+        # Already completed - nothing to resume
+        if run.status == "completed":
+            self.logger.info(f"resume_run_already_completed: run_id={run_id}")
+            return None
+
+        # Waiting at human gate - return the gate stage
+        if run.status == "waiting_human":
+            self.logger.info(f"resume_run_waiting_gate: run_id={run_id}")
+            return run.current_stage
+
+        # Error state - attempt recovery
+        if run.status == "error":
+            self.logger.info(f"resume_run_recovering: run_id={run_id}")
+            failed_stage = run.current_stage
+            if failed_stage:
+                # Reset the failed stage to pending
+                run.stage_status[failed_stage.value] = "pending"
+                run.error_message = ""
+            run.status = "running"
+            self.store.save(run)
+            # Continue execution
+            return await self.run_until_gate(run)
+
+        # Running state - just continue from where it left off
+        if run.status == "running":
+            self.logger.info(f"resume_run_continuing: run_id={run_id}")
+            return await self.run_until_gate(run)
+
+        self.logger.warning(f"resume_run_unknown_status: run_id={run_id} status={run.status}")
+        return None
+
+    def list_resumable_runs(self) -> list[dict]:
+        """List all runs that can be resumed.
+
+        Scans all pipeline runs and returns those in error or waiting_human states.
+        These are runs that can be recovered via resume_run().
+
+        Returns:
+            List of dictionaries, each containing:
+            - run_id: The run identifier
+            - status: Current status ("error" or "waiting_human")
+            - current_stage: The stage where the run stopped
+            - error_message: Error message (if status is "error")
+            - created_at: When the run was created
+            - updated_at: When the run was last updated
+        """
+        runs = self.store.list_runs(limit=100)
+        resumable = []
+
+        for run_summary in runs:
+            run_id = run_summary.get("run_id")
+            if not run_id:
+                continue
+
+            run = self.store.load(run_id)
+            if not run:
+                continue
+
+            if run.status in ("error", "waiting_human"):
+                resumable.append({
+                    "run_id": run.run_id,
+                    "status": run.status,
+                    "current_stage": run.current_stage.value if run.current_stage else None,
+                    "error_message": run.error_message,
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                    "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+                })
+
+        return resumable
+
+    async def recover_all_failed(self) -> list[dict]:
+        """Attempt to recover all failed pipeline runs.
+
+        Finds all runs in error state and attempts to resume them.
+        Useful after system restart or transient failure resolution.
+
+        Returns:
+            List of recovery results, each containing:
+            - run_id: The run that was recovered
+            - success: Whether recovery was attempted
+            - current_stage: Where the run resumed to (if successful)
+        """
+        resumable = self.list_resumable_runs()
+        results = []
+
+        for run_info in resumable:
+            if run_info["status"] == "error":
+                try:
+                    result = await self.resume_run(run_info["run_id"])
+                    results.append({
+                        "run_id": run_info["run_id"],
+                        "success": result is not None,
+                        "current_stage": result.value if result else None,
+                    })
+                except Exception as e:
+                    self.logger.error(
+                        f"recover_all_failed_error: run_id={run_info['run_id']} error={e}"
+                    )
+                    results.append({
+                        "run_id": run_info["run_id"],
+                        "success": False,
+                        "error": str(e),
+                    })
+
+        return results

@@ -31,6 +31,9 @@ from .providers import (
     load_env,
 )
 
+# Import custom adapters for non-OpenAI-compatible providers
+from .adapters.apifreellm import APIFreeLLMAdapter
+
 logger = logging.getLogger("freerouter.router")
 
 
@@ -43,6 +46,32 @@ class Router:
 
     def __init__(self):
         load_env()
+        self._adapters: dict = {}  # Cache for custom adapters
+
+    def _get_adapter(self, provider_name: str):
+        """Get or create a custom adapter for providers that need one."""
+        defn = PROVIDER_MAP.get(provider_name)
+        if not defn or not defn.requires_custom_adapter:
+            return None
+        
+        if provider_name in self._adapters:
+            return self._adapters[provider_name]
+        
+        key = get_provider_key(provider_name)
+        if not key:
+            return None
+        
+        if provider_name == "apifreellm":
+            adapter = APIFreeLLMAdapter(api_key=key)
+            self._adapters[provider_name] = adapter
+            return adapter
+        
+        return None
+    
+    def _needs_custom_adapter(self, provider_name: str) -> bool:
+        """Check if a provider requires a custom adapter."""
+        defn = PROVIDER_MAP.get(provider_name)
+        return defn.requires_custom_adapter if defn else False
 
     def _get_provider_base_url(self, name: str) -> str:
         defn = PROVIDER_MAP[name]
@@ -133,6 +162,23 @@ class Router:
         self, provider_name: str, messages: list[dict],
         model: str, temperature: float, max_tokens: int,
     ) -> dict[str, Any]:
+        # Check if this provider needs a custom adapter
+        if self._needs_custom_adapter(provider_name):
+            adapter = self._get_adapter(provider_name)
+            if adapter:
+                try:
+                    return await adapter.complete(
+                        messages=messages,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                except Exception as e:
+                    raise RouterError(str(e))
+            else:
+                raise RouterError(f"No API key for {provider_name}")
+        
+        # Standard OpenAI-compatible providers
         base_url = self._get_provider_base_url(provider_name)
         headers = self._get_auth_headers(provider_name)
         resolved_model = self._resolve_model(provider_name, model)
@@ -210,6 +256,22 @@ class Router:
         self, provider_name: str, messages: list[dict],
         model: str, temperature: float, max_tokens: int,
     ) -> AsyncIterator[str]:
+        # Check if this provider needs a custom adapter
+        if self._needs_custom_adapter(provider_name):
+            adapter = self._get_adapter(provider_name)
+            if adapter:
+                async for chunk in adapter.stream(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    yield chunk
+                return
+            else:
+                raise RouterError(f"No API key for {provider_name}")
+        
+        # Standard OpenAI-compatible providers
         base_url = self._get_provider_base_url(provider_name)
         headers = self._get_auth_headers(provider_name)
         resolved_model = self._resolve_model(provider_name, model)

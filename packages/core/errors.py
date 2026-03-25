@@ -47,3 +47,20 @@ class IntegrationError(Exception):
     Failed to call an external API (YouTube, Notion, MiroFish).
     The integration name and endpoint should be in the message.
     """
+
+
+class QualityGateError(Exception):
+    """Raised when script quality is below minimum threshold.
+    
+    This error indicates that a script failed to meet the minimum
+    quality floor after all evolution iterations are exhausted.
+    
+    Attributes:
+        score: The actual quality score achieved
+        floor: The minimum acceptable quality floor
+    """
+    
+    def __init__(self, message: str, score: float = None, floor: float = None):
+        super().__init__(message)
+        self.score = score
+        self.floor = floor

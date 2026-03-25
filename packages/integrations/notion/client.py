@@ -6,9 +6,22 @@ with visual type color coding and formatting.
 
 from packages.core.config import get_settings
 from packages.core.logger import get_logger
+from packages.core.retry import retry_with_backoff_sync
+from packages.core.dead_letter import queue_for_retry
 from packages.integrations.notion.colors import get_color, get_emoji
 
 logger = get_logger(__name__)
+
+# Exception types from notion_client that we want to retry on
+# These are imported lazily to avoid import errors when notion_client isn't installed
+def _get_notion_exceptions():
+    """Get Notion API exception types for retry logic."""
+    try:
+        from notion_client.errors import APIResponseError, HTTPResponseError
+        return (APIResponseError, HTTPResponseError)
+    except ImportError:
+        # Fallback to generic exceptions if notion_client errors aren't available
+        return (ConnectionError, TimeoutError)
 
 
 class NotionScriptClient:
@@ -56,13 +69,18 @@ class NotionScriptClient:
             return False
         return True
 
-    def create_script_page(self, title: str, sections: list[dict]) -> str | None:
+    @retry_with_backoff_sync(max_attempts=3, base_delay=2.0, max_delay=30.0)
+    def create_script_page(self, title: str, sections: list[dict], run_id: str | None = None) -> str | None:
         """Create a Notion page for a video script.
 
         Creates a page with formatted sections, each containing:
         - Heading 2: section_type
         - Paragraph: narration text
         - Callout: visual_cue with color from get_color()
+
+        This method includes automatic retry with exponential backoff for transient
+        failures. After all retries are exhausted, failed operations are queued
+        in the dead letter queue for later manual retry.
 
         Args:
             title: Title of the script/video.
@@ -71,6 +89,7 @@ class NotionScriptClient:
                 - narration: The narration text
                 - visual_cue: Optional visual cue description
                 - visual_type: Optional visual type for coloring
+            run_id: Optional pipeline run ID for dead letter queue tracking.
 
         Returns:
             URL of the created page, or None on failure.
@@ -144,17 +163,36 @@ class NotionScriptClient:
             return page_url
 
         except Exception as e:
-            logger.warning(f"notion_error in create_script_page: {e}")
+            # Queue for dead letter queue after all retries exhausted
+            error_msg = str(e)
+            logger.error(f"notion_publish_failed_after_retries: title={title} error={error_msg}")
+
+            queue_for_retry(
+                operation="notion_publish",
+                payload={
+                    "title": title,
+                    "sections": sections,
+                    "database_id": self.database_id,
+                },
+                error_message=error_msg,
+                run_id=run_id,
+            )
             return None
 
-    def update_script_page(self, page_id: str, sections: list[dict]) -> None:
+    @retry_with_backoff_sync(max_attempts=3, base_delay=2.0, max_delay=30.0)
+    def update_script_page(self, page_id: str, sections: list[dict], run_id: str | None = None) -> None:
         """Update an existing Notion script page.
 
         Appends new sections to an existing page.
 
+        This method includes automatic retry with exponential backoff for transient
+        failures. After all retries are exhausted, failed operations are queued
+        in the dead letter queue for later manual retry.
+
         Args:
             page_id: The Notion page ID.
             sections: List of section dictionaries to append.
+            run_id: Optional pipeline run ID for dead letter queue tracking.
 
         Note:
             Does nothing on failure - never crashes the pipeline.
@@ -215,7 +253,18 @@ class NotionScriptClient:
             logger.info(f"notion_page_updated: page_id={page_id}")
 
         except Exception as e:
-            logger.warning(f"notion_error in update_script_page: {e}")
+            error_msg = str(e)
+            logger.error(f"notion_update_failed_after_retries: page_id={page_id} error={error_msg}")
+
+            queue_for_retry(
+                operation="notion_update",
+                payload={
+                    "page_id": page_id,
+                    "sections": sections,
+                },
+                error_message=error_msg,
+                run_id=run_id,
+            )
 
     def get_script(self, page_id: str) -> dict:
         """Retrieve a script page from Notion.

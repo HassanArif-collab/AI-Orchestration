@@ -38,6 +38,62 @@ async def system_status():
     components["dashboard"] = {"status": "online", "port": 3000}
     return {"overall": health.get("overall", "unknown"), "components": components}
 
+
+@router.get("/services/status")
+async def get_service_status():
+    """Get configuration status of all services.
+    
+    Returns a dict mapping service names to their status values:
+    - available: Service is properly configured
+    - not_configured: Required API key/URL is not set
+    - misconfigured: Configuration exists but is invalid
+    """
+    from packages.core.config import get_settings
+    settings = get_settings()
+    return settings.get_service_status()
+
+
+@router.post("/services/validate")
+async def validate_configuration():
+    """Validate all service configurations.
+    
+    Returns validation results with any issues found.
+    Issues include services that are not configured or misconfigured.
+    """
+    from packages.core.config import get_settings, ServiceStatus
+    settings = get_settings()
+    issues = []
+    recommendations = []
+    
+    for service in ["zep", "youtube", "notion", "freerouter"]:
+        status = settings.validate_service(service)
+        if status != ServiceStatus.AVAILABLE:
+            issue = {"service": service, "status": status.value}
+            issues.append(issue)
+            
+            # Add recommendations based on status
+            if status == ServiceStatus.NOT_CONFIGURED:
+                if service == "zep":
+                    recommendations.append("Set ZEP_API_KEY environment variable for memory features")
+                elif service == "youtube":
+                    recommendations.append("Set YOUTUBE_API_KEY for YouTube analytics integration")
+                elif service == "notion":
+                    recommendations.append("Set NOTION_API_KEY for Notion publishing")
+                elif service == "freerouter":
+                    recommendations.append("Ensure FREEROUTER_URL is set (default: http://localhost:4000)")
+            elif status == ServiceStatus.MISCONFIGURED:
+                if service == "youtube":
+                    recommendations.append("YOUTUBE_API_KEY appears invalid (too short)")
+                elif service == "notion":
+                    recommendations.append("NOTION_API_KEY should start with 'secret_'")
+    
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "recommendations": recommendations
+    }
+
+
 @router.get("/commands")
 async def get_startup_commands():
     return {

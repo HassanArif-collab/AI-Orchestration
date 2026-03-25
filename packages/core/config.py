@@ -14,10 +14,19 @@ Imports: pydantic-settings, functools
 Imported by: packages/router/client.py, packages/memory/, packages/integrations/
 """
 
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ServiceStatus(str, Enum):
+    """Status of external service configuration."""
+    AVAILABLE = "available"
+    NOT_CONFIGURED = "not_configured"
+    MISCONFIGURED = "misconfigured"
 
 
 class Settings(BaseSettings):
@@ -33,6 +42,8 @@ class Settings(BaseSettings):
     # Never import from freerouter/. Always call this URL via HTTP.
     FREEROUTER_URL: str = "http://localhost:4000"
     FREEROUTER_API_KEY: str = "not-needed"
+    # Whether to perform startup health check (set to False for lazy initialization)
+    FREEROUTER_STARTUP_CHECK: bool = True
 
     # GetZep Cloud — agent memory
     ZEP_API_KEY: str = ""
@@ -58,6 +69,97 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+
+    # API Authentication Settings
+    API_KEYS: str = ""  # Comma-separated list of valid API keys
+    API_KEY_HEADER: str = "X-API-Key"
+    API_AUTH_ENABLED: bool = True  # Set to False to disable auth (dev mode)
+
+    # CORS Settings
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def valid_api_keys(self) -> set[str]:
+        """Return set of valid API keys from configuration."""
+        if not self.API_KEYS:
+            return set()
+        return {k.strip() for k in self.API_KEYS.split(",") if k.strip()}
+
+    def is_auth_enabled(self) -> bool:
+        """Check if authentication is enabled and configured."""
+        return self.API_AUTH_ENABLED and len(self.valid_api_keys) > 0
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Return list of allowed CORS origins."""
+        if not self.CORS_ORIGINS:
+            return []
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    # Quality thresholds
+    SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
+    SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
+    SCRIPT_MAX_ITERATIONS: int = 20
+
+    def validate_service(self, service: str) -> ServiceStatus:
+        """Validate if a service is properly configured.
+        
+        Args:
+            service: Service name (zep, youtube, notion, freerouter)
+            
+        Returns:
+            ServiceStatus indicating configuration state
+            
+        Raises:
+            ValueError: If service name is unknown
+        """
+        validators = {
+            "zep": self._validate_zep,
+            "youtube": self._validate_youtube,
+            "notion": self._validate_notion,
+            "freerouter": self._validate_freerouter,
+        }
+        validator = validators.get(service.lower())
+        if not validator:
+            raise ValueError(f"Unknown service: {service}")
+        return validator()
+
+    def _validate_zep(self) -> ServiceStatus:
+        """Validate Zep memory service configuration."""
+        if not self.ZEP_API_KEY:
+            return ServiceStatus.NOT_CONFIGURED
+        return ServiceStatus.AVAILABLE
+
+    def _validate_youtube(self) -> ServiceStatus:
+        """Validate YouTube API configuration."""
+        if not self.YOUTUBE_API_KEY:
+            return ServiceStatus.NOT_CONFIGURED
+        if len(self.YOUTUBE_API_KEY) < 20:
+            return ServiceStatus.MISCONFIGURED
+        return ServiceStatus.AVAILABLE
+
+    def _validate_notion(self) -> ServiceStatus:
+        """Validate Notion API configuration."""
+        if not self.NOTION_API_KEY:
+            return ServiceStatus.NOT_CONFIGURED
+        if not self.NOTION_API_KEY.startswith("secret_"):
+            return ServiceStatus.MISCONFIGURED
+        return ServiceStatus.AVAILABLE
+
+    def _validate_freerouter(self) -> ServiceStatus:
+        """Validate FreeRouter proxy configuration."""
+        if not self.FREEROUTER_URL:
+            return ServiceStatus.NOT_CONFIGURED
+        return ServiceStatus.AVAILABLE
+
+    def get_service_status(self) -> dict[str, str]:
+        """Get status of all services.
+        
+        Returns:
+            Dict mapping service names to their status values
+        """
+        services = ["zep", "youtube", "notion", "freerouter"]
+        return {s: self.validate_service(s).value for s in services}
 
 
 @lru_cache(maxsize=1)
