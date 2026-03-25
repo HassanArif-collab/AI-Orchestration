@@ -273,10 +273,14 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
         return script_data
 
     router = ContentCreationRouter()
+    
+    threshold = (context or {}).get("threshold", 85.0)
+    max_iterations = (context or {}).get("max_iterations", 20)
+
     refined = await router.run_experiment_loop(
         script,
-        max_iterations=20,
-        threshold=85.0,
+        max_iterations=max_iterations,
+        threshold=threshold,
     )
 
     logger.info(f"script_writing_complete: final_score={refined.production_readiness_score:.1f}%")
