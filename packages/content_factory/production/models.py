@@ -9,11 +9,16 @@ The ResearchDossier is the primary output, containing:
   - Physical anchors and human characters for documentary production
   - Completeness scoring for quality validation
 
+FIXES APPLIED:
+1. Added fact validation fields (corroboration_count, validation_status)
+2. Added fact deduplication support in ResearchDossier
+3. Added _seen_statements for tracking duplicates
+
 Usage:
     from packages.content_factory.production.models import ResearchDossier
 
     dossier = ResearchDossier(topic="Pakistan Economy")
-    dossier.add_fact({"statement": "...", "source": "..."})
+    dossier.add_fact_if_unique({"statement": "...", "source": "..."})
 
 Imports: pydantic, datetime
 Imported by: packages/content_factory/production/deep_research.py
@@ -21,11 +26,12 @@ Imported by: packages/content_factory/production/deep_research.py
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 
 class InformationType(str, Enum):
@@ -47,8 +53,16 @@ class AnchorType(str, Enum):
     ARCHIVE = "archive"         # Archive footage/material
 
 
+class ValidationStatus(str, Enum):
+    """Validation status for research facts."""
+    UNVERIFIED = "unverified"           # Not yet validated
+    PARTIALLY_VERIFIED = "partially_verified"  # One source confirms
+    VERIFIED = "verified"               # Multiple sources confirm
+    DISPUTED = "disputed"               # Sources contradict
+
+
 class ResearchFact(BaseModel):
-    """A single research fact with source attribution."""
+    """A single research fact with source attribution and validation."""
     statement: str = Field(description="The factual statement")
     source_url: str = Field(default="", description="URL where fact was found")
     source_name: str = Field(default="", description="Name of the source (e.g., 'Dawn News')")
@@ -64,6 +78,21 @@ class ResearchFact(BaseModel):
     )
     extracted_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    # Fact validation fields (new)
+    corroboration_count: int = Field(
+        default=1,
+        ge=1,
+        description="Number of independent sources confirming this fact"
+    )
+    corroboration_sources: list[str] = Field(
+        default_factory=list,
+        description="URLs of sources that confirm this fact"
+    )
+    validation_status: ValidationStatus = Field(
+        default=ValidationStatus.UNVERIFIED,
+        description="Verification status of this fact"
     )
 
 
@@ -119,7 +148,13 @@ class ResearchDossier(BaseModel):
 
     This is the primary artifact passed to the script writing agents.
     It contains all gathered information structured for documentary production.
+
+    Features:
+        - Fact deduplication based on statement similarity
+        - Cross-source fact validation tracking
+        - Completeness scoring for quality validation
     """
+
     topic: str = Field(description="Main research topic")
     genre_id: str = Field(default="", description="Genre ID for structural reference")
 
@@ -220,9 +255,95 @@ class ResearchDossier(BaseModel):
         description="Time spent on research"
     )
 
+    # Private attributes for deduplication (not serialized)
+    _seen_statements: set[str] = PrivateAttr(default_factory=set)
+
+    def model_post_init(self, __context: Any) -> None:
+        """Initialize private attributes after model creation."""
+        self._seen_statements = set()
+
+        # Rebuild seen_statements from existing facts (for deserialized dossiers)
+        for fact in (
+            self.facts_and_data +
+            self.examples_cases +
+            self.expert_opinions +
+            self.trends +
+            self.comparisons +
+            self.challenges
+        ):
+            self._seen_statements.add(self._normalize_statement(fact.statement))
+
+    def _normalize_statement(self, statement: str) -> str:
+        """Normalize statement for comparison."""
+        # Remove extra whitespace, lowercase, strip punctuation
+        normalized = re.sub(r'\s+', ' ', statement.lower().strip())
+        normalized = re.sub(r'[^\w\s]', '', normalized)
+        return normalized[:100]  # Compare first 100 chars
+
+    def _is_duplicate_fact(self, fact: ResearchFact) -> bool:
+        """Check if fact is duplicate of existing one."""
+        normalized = self._normalize_statement(fact.statement)
+
+        # Exact match check
+        if normalized in self._seen_statements:
+            return True
+
+        # Similarity check (overlap ratio)
+        for seen in self._seen_statements:
+            words_seen = set(seen.split())
+            words_new = set(normalized.split())
+
+            if not words_seen or not words_new:
+                continue
+
+            # Calculate Jaccard similarity
+            intersection = len(words_seen & words_new)
+            union = len(words_seen | words_new)
+
+            if union > 0 and (intersection / union) > 0.8:  # 80% similarity threshold
+                return True
+
+        return False
+
+    def add_fact_if_unique(self, fact: ResearchFact) -> bool:
+        """
+        Add fact only if not duplicate. Returns True if added.
+
+        This method performs similarity-based deduplication to prevent
+        the same fact from being added multiple times from different sources.
+
+        Args:
+            fact: The ResearchFact to potentially add
+
+        Returns:
+            True if fact was added, False if it was a duplicate
+        """
+        if self._is_duplicate_fact(fact):
+            return False
+
+        self._seen_statements.add(self._normalize_statement(fact.statement))
+        self._add_fact_to_dossier(fact)
+        return True
+
     def add_fact(self, fact: ResearchFact) -> None:
         """Add a fact to the appropriate information type list."""
-        self.facts_and_data.append(fact)
+        self._seen_statements.add(self._normalize_statement(fact.statement))
+        self._add_fact_to_dossier(fact)
+
+    def _add_fact_to_dossier(self, fact: ResearchFact) -> None:
+        """Internal method to add fact to the correct list."""
+        if fact.information_type == InformationType.FACTS_DATA:
+            self.facts_and_data.append(fact)
+        elif fact.information_type == InformationType.EXAMPLES_CASES:
+            self.examples_cases.append(fact)
+        elif fact.information_type == InformationType.EXPERT_OPINIONS:
+            self.expert_opinions.append(fact)
+        elif fact.information_type == InformationType.TRENDS:
+            self.trends.append(fact)
+        elif fact.information_type == InformationType.COMPARISONS:
+            self.comparisons.append(fact)
+        elif fact.information_type == InformationType.CHALLENGES:
+            self.challenges.append(fact)
 
     def add_anchor(self, anchor: PhysicalAnchor) -> None:
         """Add a physical anchor."""
@@ -291,6 +412,44 @@ class ResearchDossier(BaseModel):
 
         return missing
 
+    def get_validation_stats(self) -> dict:
+        """Get statistics about fact validation status."""
+        all_facts = (
+            self.facts_and_data +
+            self.examples_cases +
+            self.expert_opinions +
+            self.trends +
+            self.comparisons +
+            self.challenges
+        )
+
+        stats = {
+            "total_facts": len(all_facts),
+            "verified": 0,
+            "partially_verified": 0,
+            "unverified": 0,
+            "disputed": 0,
+            "avg_corroboration": 0.0,
+        }
+
+        if not all_facts:
+            return stats
+
+        total_corroboration = 0
+        for fact in all_facts:
+            total_corroboration += fact.corroboration_count
+            if fact.validation_status == ValidationStatus.VERIFIED:
+                stats["verified"] += 1
+            elif fact.validation_status == ValidationStatus.PARTIALLY_VERIFIED:
+                stats["partially_verified"] += 1
+            elif fact.validation_status == ValidationStatus.DISPUTED:
+                stats["disputed"] += 1
+            else:
+                stats["unverified"] += 1
+
+        stats["avg_corroboration"] = total_corroboration / len(all_facts)
+        return stats
+
     def to_markdown(self) -> str:
         """
         Convert dossier to markdown format for downstream agents.
@@ -304,6 +463,11 @@ class ResearchDossier(BaseModel):
         sections.append(f"\n**Genre:** {self.genre_id or 'Not specified'}")
         sections.append(f"**Completeness:** {self.completeness_score:.0%}")
         sections.append(f"**Sources:** {len(self.all_sources)}")
+
+        # Validation stats
+        validation = self.get_validation_stats()
+        if validation["total_facts"] > 0:
+            sections.append(f"**Fact Verification:** {validation['verified']}/{validation['total_facts']} verified")
 
         # Big Question
         if self.big_question:
@@ -322,7 +486,8 @@ class ResearchDossier(BaseModel):
             sections.append("\n## Physical Anchors")
             for anchor in self.physical_anchors:
                 level_str = f"Level {anchor.hierarchy_level}"
-                sections.append(f"- **[{level_str}]** {anchor.description} ({anchor.anchor_type.value})")
+                verified_marker = "✓" if anchor.availability == "public" else "?"
+                sections.append(f"- **[{level_str}]** {verified_marker} {anchor.description} ({anchor.anchor_type.value})")
 
         # Human Characters
         if self.human_characters:
@@ -334,7 +499,8 @@ class ResearchDossier(BaseModel):
         if self.facts_and_data:
             sections.append("\n## Key Facts & Data")
             for fact in self.facts_and_data[:10]:  # Limit to top 10
-                sections.append(f"- {fact.statement}")
+                verified_marker = "✓" if fact.validation_status == ValidationStatus.VERIFIED else ""
+                sections.append(f"- {verified_marker} {fact.statement}")
 
         # Examples & Cases
         if self.examples_cases:
@@ -370,10 +536,12 @@ class ResearchDossier(BaseModel):
 
     def to_research_summary(self) -> str:
         """Brief summary for logging and debugging."""
+        validation = self.get_validation_stats()
         return (
             f"ResearchDossier(topic='{self.topic[:50]}...', "
             f"anchors={len(self.physical_anchors)}, "
             f"characters={len(self.human_characters)}, "
-            f"facts={len(self.facts_and_data)}, "
+            f"facts={validation['total_facts']}, "
+            f"verified={validation['verified']}, "
             f"completeness={self.completeness_score:.0%})"
         )

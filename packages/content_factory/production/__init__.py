@@ -31,6 +31,7 @@ from packages.content_factory.production.models import (
     PhysicalAnchor,
     ResearchDossier,
     ResearchFact,
+    ValidationStatus,
 )
 from packages.content_factory.production.deep_research import DeepResearchEngine
 
@@ -45,4 +46,5 @@ __all__ = [
     "InformationType",
     "AnchorType",
     "DimensionFindings",
+    "ValidationStatus",
 ]

@@ -11,6 +11,13 @@ PHASES:
   3. Diversity & Validation — Ensure all information types are covered
   4. Synthesis Check    — Verify quality bar before proceeding
 
+FIXES APPLIED:
+1. Added checkpoint system for partial results on failure
+2. Added cross-source fact validation
+3. Fact deduplication using add_fact_if_unique()
+4. Accurate search count tracking (after search, not before)
+5. Resume from checkpoint capability
+
 Usage:
     from packages.content_factory.production.deep_research import DeepResearchEngine
 
@@ -29,11 +36,15 @@ Imported by: packages/content_factory/production/workflow.py
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
+from packages.core.config import get_settings
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 from packages.router.web_search import WebSearchClient, SearchResult
@@ -46,6 +57,7 @@ from .models import (
     PhysicalAnchor,
     ResearchDossier,
     ResearchFact,
+    ValidationStatus,
 )
 
 log = get_logger(__name__)
@@ -81,12 +93,74 @@ For each fact, identify:
 Return ONLY valid JSON."""
 
 
+class ResearchCheckpoint:
+    """Manages saving and loading research checkpoints."""
+
+    def __init__(self, checkpoint_dir: Optional[Path] = None) -> None:
+        settings = get_settings()
+        self.checkpoint_dir = checkpoint_dir or Path(settings.DATA_DIR) / "research_checkpoints"
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    def _topic_hash(self, topic: str) -> str:
+        """Create hash for topic."""
+        return hashlib.sha256(topic.lower().strip().encode()).hexdigest()[:16]
+
+    def _checkpoint_path(self, topic: str) -> Path:
+        """Get checkpoint file path."""
+        return self.checkpoint_dir / f"{self._topic_hash(topic)}.checkpoint.json"
+
+    def save(self, topic: str, dossier: ResearchDossier, phase: str, iteration: int, search_count: int) -> None:
+        """Save checkpoint to disk."""
+        checkpoint = {
+            "topic": topic,
+            "phase": phase,
+            "iteration": iteration,
+            "search_count": search_count,
+            "dossier": dossier.model_dump(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        checkpoint_file = self._checkpoint_path(topic)
+
+        try:
+            temp_file = checkpoint_file.with_suffix(".tmp")
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(checkpoint, f, indent=2, default=str, ensure_ascii=False)
+            temp_file.rename(checkpoint_file)
+            log.debug(f"checkpoint_saved: phase={phase} iteration={iteration}")
+        except Exception as e:
+            log.warning(f"checkpoint_save_failed: {e}")
+
+    def load(self, topic: str) -> Optional[dict]:
+        """Load checkpoint from disk."""
+        checkpoint_file = self._checkpoint_path(topic)
+        if not checkpoint_file.exists():
+            return None
+
+        try:
+            with open(checkpoint_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            log.warning(f"checkpoint_load_failed: {e}")
+            return None
+
+    def clear(self, topic: str) -> None:
+        """Remove checkpoint file."""
+        checkpoint_file = self._checkpoint_path(topic)
+        checkpoint_file.unlink(missing_ok=True)
+
+
 class DeepResearchEngine:
     """
     Systematic research engine implementing deer-flow methodology.
 
     The engine orchestrates multiple search queries, extracts information
     from results, and assembles a comprehensive ResearchDossier.
+
+    Features:
+        - Checkpoint system for recovery from failures
+        - Cross-source fact validation
+        - Fact deduplication
+        - Rate-limited web searches
     """
 
     def __init__(
@@ -94,6 +168,8 @@ class DeepResearchEngine:
         router_client: Optional[RouterClient] = None,
         max_searches_per_dimension: int = 3,
         max_total_searches: int = 20,
+        enable_checkpoints: bool = True,
+        enable_fact_validation: bool = True,
     ) -> None:
         """
         Initialize the research engine.
@@ -102,12 +178,17 @@ class DeepResearchEngine:
             router_client: Optional RouterClient for LLM calls (creates its own if None)
             max_searches_per_dimension: Maximum searches per dimension
             max_total_searches: Total search budget
+            enable_checkpoints: Enable checkpoint saving for recovery
+            enable_fact_validation: Enable cross-source fact validation
         """
         self._router = router_client
         self._owns_router = router_client is None
         self.max_searches_per_dimension = max_searches_per_dimension
         self.max_total_searches = max_total_searches
         self._search_count = 0
+        self._enable_checkpoints = enable_checkpoints
+        self._enable_fact_validation = enable_fact_validation
+        self._checkpoint = ResearchCheckpoint() if enable_checkpoints else None
 
     async def research(
         self,
@@ -116,6 +197,7 @@ class DeepResearchEngine:
         references: Optional[list[Any]] = None,
         target_completeness: float = 0.8,
         max_iterations: int = 3,
+        resume_from_checkpoint: bool = True,
     ) -> ResearchDossier:
         """
         Execute the full 4-phase research process.
@@ -126,26 +208,48 @@ class DeepResearchEngine:
             references: Optional list of SourceVideoRecord for structural context
             target_completeness: Minimum completeness score (0.0-1.0)
             max_iterations: Maximum research iterations if completeness not met
+            resume_from_checkpoint: Whether to resume from previous checkpoint
 
         Returns:
             ResearchDossier with all findings
         """
         start_time = time.time()
 
+        # Try to resume from checkpoint
         dossier = ResearchDossier(topic=topic, genre_id=genre)
+        start_iteration = 0
+        start_phase = "begin"
+
+        if resume_from_checkpoint and self._checkpoint:
+            checkpoint_data = self._checkpoint.load(topic)
+            if checkpoint_data:
+                try:
+                    dossier = ResearchDossier(**checkpoint_data["dossier"])
+                    start_iteration = checkpoint_data.get("iteration", 0)
+                    start_phase = checkpoint_data.get("phase", "begin")
+                    self._search_count = checkpoint_data.get("search_count", 0)
+                    log.info(
+                        f"resuming_from_checkpoint: iteration={start_iteration} "
+                        f"phase={start_phase} completeness={dossier.completeness_score:.0%}"
+                    )
+                except Exception as e:
+                    log.warning(f"checkpoint_restore_failed_starting_fresh: {e}")
+                    dossier = ResearchDossier(topic=topic, genre_id=genre)
 
         # Initialize router if needed
         if self._router is None:
             self._router = RouterClient()
 
         try:
-            for iteration in range(max_iterations):
+            for iteration in range(start_iteration, max_iterations):
                 log.info(f"research_iteration_{iteration + 1}: topic='{topic[:50]}...'")
 
                 # Phase 1: Broad Exploration
-                if iteration == 0:
+                if iteration == 0 and start_phase in ("begin", "phase_1"):
                     dimensions = await self._phase_broad_exploration(topic, dossier)
                     dossier.dimensions_explored = dimensions
+                    if self._checkpoint:
+                        self._checkpoint.save(topic, dossier, "phase_1_complete", iteration, self._search_count)
                 else:
                     # Later iterations: find missing dimensions
                     missing = dossier.get_missing_elements()
@@ -157,13 +261,22 @@ class DeepResearchEngine:
                         log.warning(f"search_budget_exhausted: {self._search_count}")
                         break
                     await self._phase_deep_dive(topic, dim, dossier)
+                    if self._checkpoint:
+                        self._checkpoint.save(topic, dossier, f"phase_2_{dim}", iteration, self._search_count)
 
                 # Phase 3: Diversity & Validation
                 await self._phase_diversity_validation(topic, dossier)
+                if self._checkpoint:
+                    self._checkpoint.save(topic, dossier, "phase_3_complete", iteration, self._search_count)
 
                 # Phase 4: Synthesis Check
                 if dossier.is_complete(target_completeness):
                     log.info(f"research_complete: {dossier.to_research_summary()}")
+
+                    # Run fact validation if enabled
+                    if self._enable_fact_validation:
+                        await self._validate_facts(dossier)
+
                     break
 
                 log.info(f"research_incomplete: missing={dossier.get_missing_elements()}")
@@ -178,7 +291,18 @@ class DeepResearchEngine:
                 f"searches={self._search_count} duration={dossier.research_duration_seconds:.1f}s"
             )
 
+            # Clear checkpoint on successful completion
+            if self._checkpoint:
+                self._checkpoint.clear(topic)
+
             return dossier
+
+        except Exception as e:
+            # Save checkpoint on failure for recovery
+            if self._checkpoint:
+                self._checkpoint.save(topic, dossier, "failed", iteration, self._search_count)
+            log.error(f"research_failed_checkpoint_saved: {e}")
+            raise
 
         finally:
             # Close router if we own it
@@ -258,8 +382,9 @@ class DeepResearchEngine:
                 text = f"{r.title}\n{r.snippet}"
                 facts = await self._extract_facts(text, r.url, r.title)
                 for fact in facts:
-                    self._add_fact_to_dossier(dossier, fact)
-                    dimension_findings.facts.append(fact)
+                    # Use deduplication
+                    if dossier.add_fact_if_unique(fact):
+                        dimension_findings.facts.append(fact)
 
                 # Check for anchors
                 anchors = self._extract_anchors_from_text(text, r.url)
@@ -324,27 +449,110 @@ class DeepResearchEngine:
                 text = f"{r.title}\n{r.snippet}"
                 facts = await self._extract_facts(text, r.url, r.title, info_type)
                 for fact in facts:
-                    self._add_fact_to_dossier(dossier, fact)
+                    dossier.add_fact_if_unique(fact)
 
         log.info(f"phase_3_complete: coverage={dossier.information_type_coverage}")
 
-    async def _search(self, query: str, num_results: int = 10) -> list[SearchResult]:
-        """Execute a single search query."""
-        self._search_count += 1
+    async def _validate_facts(self, dossier: ResearchDossier) -> None:
+        """
+        Cross-validate facts across multiple sources.
 
+        Updates fact validation status based on source corroboration.
+        """
+        log.info("validating_facts_across_sources")
+
+        all_facts = (
+            dossier.facts_and_data +
+            dossier.examples_cases +
+            dossier.expert_opinions +
+            dossier.trends +
+            dossier.comparisons +
+            dossier.challenges
+        )
+
+        validated_count = 0
+
+        for fact in all_facts:
+            # Skip if already verified
+            if fact.validation_status == ValidationStatus.VERIFIED:
+                continue
+
+            # Search for corroboration
+            if fact.statement and len(fact.statement) > 20:
+                key_claim = self._extract_key_claim(fact.statement)
+
+                try:
+                    results = await self._search(f'"{key_claim}" verification', num_results=3)
+
+                    for r in results:
+                        if r.url != fact.source_url and r.url not in fact.corroboration_sources:
+                            # Check if result supports the fact
+                            if self._statements_agree(fact.statement, r.snippet):
+                                fact.corroboration_count += 1
+                                fact.corroboration_sources.append(r.url)
+
+                    # Update validation status
+                    if fact.corroboration_count >= 2:
+                        fact.validation_status = ValidationStatus.VERIFIED
+                        validated_count += 1
+                    elif fact.corroboration_count >= 1:
+                        fact.validation_status = ValidationStatus.PARTIALLY_VERIFIED
+
+                except Exception as e:
+                    log.debug(f"fact_validation_failed: {e}")
+
+        log.info(f"fact_validation_complete: newly_verified={validated_count}")
+
+    def _extract_key_claim(self, statement: str) -> str:
+        """Extract the key claim from a statement for verification search."""
+        # Simple approach: take first sentence, remove numbers and dates
+        first_sentence = statement.split('.')[0]
+        # Remove numbers (dates, statistics)
+        key_claim = re.sub(r'\d+[%\s]*(million|billion|thousand)?', '', first_sentence, flags=re.I)
+        return key_claim.strip()[:100]
+
+    def _statements_agree(self, statement1: str, statement2: str) -> bool:
+        """Check if two statements support the same claim."""
+        # Simple heuristic: check for overlapping named entities and key terms
+        words1 = set(re.findall(r'\b[A-Z][a-z]+\b', statement1))  # Named entities
+        words2 = set(re.findall(r'\b[A-Z][a-z]+\b', statement2))
+
+        if words1 and words2:
+            overlap = len(words1 & words2)
+            if overlap >= 1:  # At least one common named entity
+                return True
+
+        return False
+
+    async def _search(self, query: str, num_results: int = 10) -> list[SearchResult]:
+        """Execute a single search query with accurate count tracking."""
         async with WebSearchClient() as client:
-            return await client.search(query, num_results)
+            results = await client.search(query, num_results)
+            # Track count AFTER search completes
+            self._search_count += 1
+            return results
 
     async def _multi_search(
         self,
         queries: list[str],
         num_per_query: int = 5,
     ) -> dict[str, list[SearchResult]]:
-        """Execute multiple searches in parallel."""
-        self._search_count += len(queries)
+        """Execute multiple searches sequentially with rate limiting."""
+        output: dict[str, list[SearchResult]] = {}
 
         async with WebSearchClient() as client:
-            return await client.multi_search(queries, num_per_query)
+            for query in queries:
+                results = await client.search(query, num_per_query)
+                # Track count AFTER each search completes
+                self._search_count += 1
+                output[query] = results
+
+                # Check budget after each search
+                if self._search_count >= self.max_total_searches:
+                    log.warning(f"search_budget_reached: {self._search_count}")
+                    break
+
+        return output
 
     async def _extract_dimensions(self, text: str, topic: str) -> list[str]:
         """Use LLM to extract research dimensions from text."""
@@ -522,25 +730,6 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
                 ))
 
         return characters[:2]  # Limit per text
-
-    def _add_fact_to_dossier(
-        self,
-        dossier: ResearchDossier,
-        fact: ResearchFact,
-    ) -> None:
-        """Add a fact to the appropriate list in the dossier."""
-        if fact.information_type == InformationType.FACTS_DATA:
-            dossier.facts_and_data.append(fact)
-        elif fact.information_type == InformationType.EXAMPLES_CASES:
-            dossier.examples_cases.append(fact)
-        elif fact.information_type == InformationType.EXPERT_OPINIONS:
-            dossier.expert_opinions.append(fact)
-        elif fact.information_type == InformationType.TRENDS:
-            dossier.trends.append(fact)
-        elif fact.information_type == InformationType.COMPARISONS:
-            dossier.comparisons.append(fact)
-        elif fact.information_type == InformationType.CHALLENGES:
-            dossier.challenges.append(fact)
 
     def _derive_dimensions_from_missing(self, missing: list[str]) -> list[str]:
         """Derive research dimensions from missing elements."""
