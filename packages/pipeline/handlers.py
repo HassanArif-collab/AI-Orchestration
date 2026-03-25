@@ -252,6 +252,15 @@ async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
     Returns:
         Asset creation status as dict
     """
+    from packages.core.config import get_settings
+
+    settings = get_settings()
+    
+    # Feature flag: skip asset creation if disabled
+    if not settings.ASSET_CREATION_ENABLED:
+        logger.info("asset_creation_skipped_feature_disabled")
+        return {"status": "skipped", "assets": [], "reason": "feature_disabled"}
+
     from packages.visual.manifest import VisualManifest
 
     visual_data = run.get_output(Stage.VISUAL_PLANNING) or {}
@@ -288,6 +297,12 @@ async def handle_publish(run: PipelineRun, context: dict = None) -> dict:
     from packages.core.config import get_settings
 
     settings = get_settings()
+    
+    # Feature flag: skip publishing if disabled
+    if not settings.PUBLISH_ENABLED:
+        logger.info("publish_skipped_feature_disabled")
+        return {"status": "skipped", "reason": "feature_disabled"}
+    
     script_data = run.get_output(Stage.SCRIPT_WRITING) or {}
     seo_data = run.get_output(Stage.SEO) or {}
 

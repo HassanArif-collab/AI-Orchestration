@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # Set to true once ZEP_API_KEY is configured and verified working
     ZEP_ENABLED: bool = False
 
+    # Feature flags for pausing pipeline stages
+    # Set to false to skip asset creation (Remotion renders, shader backgrounds)
+    ASSET_CREATION_ENABLED: bool = True
+    # Set to false to skip publishing (Notion pages, YouTube upload prep)
+    PUBLISH_ENABLED: bool = True
+
     # External integrations
     YOUTUBE_API_KEY: str = ""
     NOTION_API_KEY: str = ""
