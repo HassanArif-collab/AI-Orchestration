@@ -55,3 +55,6 @@ Thumbs.db
 # FreeRouter specific
 freerouter/state/
 config/local_config.yaml
+
+# Runtime data directories
+packages/data/
