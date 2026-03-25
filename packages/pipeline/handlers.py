@@ -2,19 +2,100 @@
 
 All handlers are wired with real implementations that connect
 to the content_factory agents and evaluation loop.
+
+DEEP RESEARCH INTEGRATION:
+  The research handler now supports caching to avoid re-researching
+  the same topic. Cache TTL is 24 hours by default.
+
+FIXES APPLIED:
+  1. Cache hit now actually returns cached script instead of ignoring it
+  2. Added separate script cache for AdaptedScript objects
+  3. Proper cache invalidation and refresh
 """
 
 from typing import Any, Callable
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from packages.pipeline.stages import Stage
 from packages.pipeline.state import PipelineRun
+from packages.pipeline.research_cache import ResearchCache
 from packages.content_factory.topic_finder.finder import TopicFinderAgent
+from packages.core.config import get_settings
 from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class ScriptCache:
+    """Cache for AdaptedScript objects to enable full pipeline caching."""
+
+    def __init__(
+        self,
+        ttl_hours: int = 24,
+        cache_dir: Path | None = None,
+    ) -> None:
+        settings = get_settings()
+        self.ttl_hours = ttl_hours
+        self.cache_dir = cache_dir or Path(settings.DATA_DIR) / "script_cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cache_key(self, topic: str, genre: str) -> str:
+        """Generate cache key from topic and genre."""
+        import hashlib
+        combined = f"{topic.lower().strip()}:{genre.lower().strip()}"
+        return hashlib.sha256(combined.encode()).hexdigest()[:16]
+
+    def _cache_path(self, topic: str, genre: str) -> Path:
+        """Get cache file path."""
+        return self.cache_dir / f"{self._cache_key(topic, genre)}.json"
+
+    def get(self, topic: str, genre: str) -> dict | None:
+        """Get cached script if exists and not expired."""
+        cache_file = self._cache_path(topic, genre)
+        if not cache_file.exists():
+            return None
+
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Check TTL
+            cached_at_str = data.get("_cached_at")
+            if cached_at_str:
+                from datetime import datetime, timezone, timedelta
+                cached_at = datetime.fromisoformat(cached_at_str)
+                age = datetime.now(timezone.utc) - cached_at
+                if age > timedelta(hours=self.ttl_hours):
+                    cache_file.unlink(missing_ok=True)
+                    return None
+
+            logger.info(f"script_cache_hit: topic='{topic[:50]}...'")
+            return data.get("script")
+
+        except Exception as e:
+            logger.warning(f"script_cache_read_failed: {e}")
+            return None
+
+    def set(self, topic: str, genre: str, script: dict) -> None:
+        """Cache a script."""
+        cache_file = self._cache_path(topic, genre)
+        try:
+            data = {
+                "topic": topic,
+                "genre": genre,
+                "script": script,
+                "_cached_at": datetime.now(timezone.utc).isoformat(),
+            }
+            temp_file = cache_file.with_suffix(".tmp")
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+            temp_file.rename(cache_file)
+            logger.info(f"script_cache_set: topic='{topic[:50]}...'")
+        except Exception as e:
+            logger.warning(f"script_cache_write_failed: {e}")
 
 
 async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[dict]:
@@ -30,9 +111,9 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
     finder = TopicFinderAgent()
     seed = (context or {}).get("seed_query", "Pakistan economy")
     genre = (context or {}).get("genre_id", "current_situation")
-    
+
     logger.info(f"running_trend_analysis: seed='{seed}' genre='{genre}'")
-    
+
     # Generate 3 candidates for the user to choose from
     candidates = []
     for _ in range(3):
@@ -47,7 +128,7 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
             candidates.append(brief.model_dump())
     except Exception as e:
         logger.warning(f"adaptation_discovery_failed_non_blocking: {e}")
-            
+
     if not candidates:
         # Fallback to mock if nothing found to keep pipeline moving in dev
         logger.warning("no_tier1_topics_found_using_mock_fallback")
@@ -67,16 +148,21 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
                 "content_type": "original",
             }
         ]
-        
+
     return candidates
 
 
 async def handle_research(run: PipelineRun, context: dict = None) -> dict:
     """Routes to Mode A or Mode B via ContentCreationRouter, then scores baseline.
-    
+
+    Includes optional research caching to avoid re-researching the same topic.
+    Cache TTL is 24 hours by default.
+
+    FIX: Cache hit now actually returns cached script instead of ignoring it.
+
     Args:
         run: Current pipeline run
-        context: Additional context
+        context: Additional context (supports 'use_cache' and 'cache_ttl_hours')
 
     Returns:
         AdaptedScript object as dict
@@ -107,6 +193,40 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
             content_type=topic_data.get("content_type", "original"),
         )
 
+    # Check if caching is enabled (default: True)
+    use_cache = (context or {}).get("use_cache", True)
+    cache_ttl_hours = (context or {}).get("cache_ttl_hours", 24)
+
+    if use_cache:
+        # Check script cache first (full AdaptedScript)
+        script_cache = ScriptCache(ttl_hours=cache_ttl_hours)
+        cached_script = script_cache.get(brief.topic_statement, brief.genre_id)
+
+        if cached_script:
+            logger.info(
+                f"research_script_cache_hit: topic='{brief.topic_statement[:50]}...' "
+                f"genre='{brief.genre_id}'"
+            )
+            # Update baseline with cached script
+            try:
+                from packages.content_factory.models import AdaptedScript
+                script = AdaptedScript(**cached_script)
+                bm = BaselineManager()
+                bm.process_challenger(script)
+            except Exception as e:
+                logger.warning(f"baseline_update_from_cache_failed: {e}")
+
+            return cached_script
+
+        # Also check research cache for logging purposes
+        research_cache = ResearchCache(ttl_hours=cache_ttl_hours)
+        cached_research = research_cache.get(brief.topic_statement)
+        if cached_research:
+            logger.info(
+                f"research_dossier_cache_hit: topic='{brief.topic_statement[:50]}...' "
+                f"(will still generate script)"
+            )
+
     router = ContentCreationRouter()
     script = await router.route(brief)
 
@@ -120,12 +240,17 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
     except Exception as e:
         logger.warning(f"baseline_record_failed_non_blocking: {e}")
 
+    # Cache the full script if caching is enabled
+    if use_cache:
+        script_cache = ScriptCache(ttl_hours=cache_ttl_hours)
+        script_cache.set(brief.topic_statement, brief.genre_id, script.model_dump())
+
     return script.model_dump()
 
 
 async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     """Runs the self-correction ExperimentLoop on the script from research stage.
-    
+
     Args:
         run: Current pipeline run
         context: Additional context
@@ -155,7 +280,7 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     )
 
     logger.info(f"script_writing_complete: final_score={refined.production_readiness_score:.1f}%")
-    
+
     # Non-blocking Zep write
     try:
         from packages.content_factory.memory.zep_store import ZepAudienceModelStore
@@ -165,13 +290,13 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
         )
     except Exception as e:
         logger.debug(f"zep_write_non_blocking_failed: {e}")
-    
+
     return refined.model_dump()
 
 
 async def handle_visual_planning(run: PipelineRun, context: dict = None) -> dict:
     """Generates music architecture from the refined script.
-    
+
     Args:
         run: Current pipeline run
         context: Additional context
@@ -198,7 +323,7 @@ async def handle_visual_planning(run: PipelineRun, context: dict = None) -> dict
 
 async def handle_seo(run: PipelineRun, context: dict = None) -> dict:
     """Generates 7 title options, description, tags, thumbnail concepts via LLM.
-    
+
     Args:
         run: Current pipeline run
         context: Additional context
@@ -244,7 +369,7 @@ Return ONLY valid JSON."""
 
 async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
     """Registers render jobs with the VisualManifest.
-    
+
     Args:
         run: Current pipeline run
         context: Additional context
@@ -252,10 +377,8 @@ async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
     Returns:
         Asset creation status as dict
     """
-    from packages.core.config import get_settings
-
     settings = get_settings()
-    
+
     # Feature flag: skip asset creation if disabled
     if not settings.ASSET_CREATION_ENABLED:
         logger.info("asset_creation_skipped_feature_disabled")
@@ -264,7 +387,7 @@ async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
     from packages.visual.manifest import VisualManifest
 
     visual_data = run.get_output(Stage.VISUAL_PLANNING) or {}
-    
+
     try:
         manifest = VisualManifest(run_id=run.run_id)
 
@@ -286,7 +409,7 @@ async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
 
 async def handle_publish(run: PipelineRun, context: dict = None) -> dict:
     """Publishes script to Notion and optionally prepares YouTube upload.
-    
+
     Args:
         run: Current pipeline run
         context: Additional context
@@ -294,15 +417,13 @@ async def handle_publish(run: PipelineRun, context: dict = None) -> dict:
     Returns:
         Publish status as dict
     """
-    from packages.core.config import get_settings
-
     settings = get_settings()
-    
+
     # Feature flag: skip publishing if disabled
     if not settings.PUBLISH_ENABLED:
         logger.info("publish_skipped_feature_disabled")
         return {"status": "skipped", "reason": "feature_disabled"}
-    
+
     script_data = run.get_output(Stage.SCRIPT_WRITING) or {}
     seo_data = run.get_output(Stage.SEO) or {}
 

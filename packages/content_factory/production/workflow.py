@@ -2,6 +2,17 @@
 
 Combines the agents into a CrewAI process to generate an original
 dual-column script from a topic idea.
+
+DEEP RESEARCH INTEGRATION:
+  The RoundBasedProductionWorkflow now uses DeepResearchEngine for
+  systematic multi-angle research (from deer-flow methodology).
+
+  The workflow phases are:
+    Round 1A: Deep Research (4-phase methodology)
+    Round 1B: Anchor validation using ResearchDossier
+    Round 2:  Script opening generation
+    Round 3:  Full script assembly
+    Round 4:  Final AdaptedScript output
 """
 
 import json
@@ -13,10 +24,14 @@ from pydantic import BaseModel
 
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
+from packages.router.web_search import WebSearchClient
+from packages.pipeline.research_cache import ResearchCache
 
 from ..models import AdaptedScript, DualColumnEntry, ProcessingStatus, SectionLabel
 from ..source_library import SourceVideoLibrary
 from .agents import create_researcher, create_script_agent, create_visual_agent
+from .deep_research import DeepResearchEngine
+from .models import ResearchDossier
 
 logger = get_logger(__name__)
 
@@ -177,17 +192,29 @@ class RoundBasedProductionWorkflow:
     Iterative round-based production workflow for Mode B original content.
 
     Replaces the single-pass sequential CrewAI process with structured rounds:
-      Round 1A: Research (up to 2 iterations if completeness < 5/7 anchors found)
-      Round 1B: Visual anchor check (one more research pass if < 2 Level 1-3 anchors)
+      Round 1A: Deep Research using DeepResearchEngine (deer-flow methodology)
+      Round 1B: Anchor validation from ResearchDossier
       Round 2:  Script opening only — self-check, one rewrite if needed
       Round 2B: Opening visual review — narrow revision if visual ratio off
       Round 3:  Full script (target: 32/40 binary questions passing, up to 2 rewrites)
       Round 3B: Full visual review — section ratio check
       Round 4:  Assemble final DualColumnScript / AdaptedScript
 
-    Uses the same agents from production/agents.py.
+    Uses DeepResearchEngine for systematic multi-angle research.
     All LLM calls go through RouterClient via FreeRouter.
+    
+    Attributes:
+        use_deep_research: Enable/disable DeepResearchEngine (default: True)
+        research_completeness_threshold: Minimum completeness score (0.0-1.0)
     """
+
+    def __init__(
+        self,
+        use_deep_research: bool = True,
+        research_completeness_threshold: float = 0.8,
+    ) -> None:
+        self.use_deep_research = use_deep_research
+        self.research_completeness_threshold = research_completeness_threshold
 
     async def run(self, idea: VideoIdea) -> AdaptedScript | None:
         """Run the full round-based workflow."""
@@ -197,13 +224,27 @@ class RoundBasedProductionWorkflow:
         references = library.find_by_genre(idea.genre_id, limit=3)
 
         async with RouterClient() as router:
-            # Round 1A — Research
-            research = await self._round_research(idea, references, router)
-            if not research:
+            # Round 1A — Deep Research (using DeepResearchEngine)
+            research_result = await self._round_research(idea, references, router)
+            if not research_result:
                 return None
 
-            # Round 1B — Anchor availability check
-            research = await self._round_anchor_check(research, idea, references, router)
+            # Handle both ResearchDossier (new) and str (legacy) formats
+            if isinstance(research_result, ResearchDossier):
+                dossier = research_result
+                research = dossier.to_markdown()
+                
+                # Round 1B — Validate anchors from dossier
+                if not dossier.is_complete(self.research_completeness_threshold):
+                    logger.warning(
+                        f"research_incomplete: score={dossier.completeness_score:.0%} "
+                        f"missing={dossier.get_missing_elements()}"
+                    )
+            else:
+                # Legacy string-based research
+                research = research_result
+                # Round 1B — Anchor availability check (legacy)
+                research = await self._round_anchor_check(research, idea, references, router)
 
             # Round 2 — Script opening
             opening = await self._round_script_opening(research, idea, router)
@@ -218,11 +259,101 @@ class RoundBasedProductionWorkflow:
             # Round 4 — Assemble final output
             return self._assemble_script(full_script, idea)
 
-    async def _round_research(self, idea, references, router, max_iterations=2):
-        """Round 1A: Research with completeness check."""
-        prompt_base = self._build_research_prompt(idea, references)
+    async def _round_research(
+        self,
+        idea: VideoIdea,
+        references: list,
+        router: RouterClient,
+        max_iterations: int = 2,
+    ) -> ResearchDossier | str | None:
+        """Round 1A: Research with DeepResearchEngine (new) or legacy method.
+        
+        If use_deep_research is True (default), uses the systematic
+        4-phase deer-flow methodology:
+          1. Broad Exploration — identify key dimensions
+          2. Deep Dive — targeted research per dimension
+          3. Diversity & Validation — ensure all info types covered
+          4. Synthesis Check — verify quality bar
+        
+        Returns:
+            ResearchDossier if use_deep_research=True
+            str (markdown) if use_deep_research=False
+            None if research fails
+        """
+        if self.use_deep_research:
+            return await self._deep_research(idea, references, router)
+        else:
+            return await self._legacy_research(idea, references, router, max_iterations)
+
+    async def _deep_research(
+        self,
+        idea: VideoIdea,
+        references: list,
+        router: RouterClient,
+    ) -> ResearchDossier | None:
+        """Execute systematic deep research using DeepResearchEngine."""
+        logger.info(f"deep_research_started: topic='{idea.topic[:50]}...' genre='{idea.genre_id}'")
+        
+        try:
+            engine = DeepResearchEngine(
+                router_client=router,
+                max_searches_per_dimension=3,
+                max_total_searches=15,
+            )
+            
+            dossier = await engine.research(
+                topic=idea.topic,
+                genre=idea.genre_id,
+                references=references,
+                target_completeness=self.research_completeness_threshold,
+                max_iterations=2,
+            )
+            
+            logger.info(
+                f"deep_research_complete: completeness={dossier.completeness_score:.0%} "
+                f"anchors={len(dossier.physical_anchors)} "
+                f"characters={len(dossier.human_characters)} "
+                f"sources={len(dossier.all_sources)}"
+            )
+            
+            # Save to cache
+            self._save_research_to_cache(idea.topic, dossier.model_dump())
+            
+            return dossier
+            
+        except Exception as e:
+            logger.error(f"deep_research_failed: {e}")
+            # Fallback to legacy research
+            logger.info("falling_back_to_legacy_research")
+            return await self._legacy_research(idea, references, router, max_iterations=2)
+
+    async def _legacy_research(
+        self,
+        idea: VideoIdea,
+        references: list,
+        router: RouterClient,
+        max_iterations: int = 2,
+    ) -> str | None:
+        """Legacy research with web search support.
+        
+        Unlike the pure-LLM approach, this method:
+        1. Performs web searches to gather current information
+        2. Passes search results to LLM for synthesis
+        3. Validates anchor presence before returning
+        
+        This ensures legacy research also gets real-world data,
+        not just LLM training knowledge.
+        """
+        logger.info(f"legacy_research_started: topic='{idea.topic[:50]}...'" )
+        
+        # Step 1: Do web searches first (like deep_research but simpler)
+        search_context = await self._quick_web_search(idea.topic)
+        
+        # Step 2: Build prompt with search results
+        prompt_base = self._build_research_prompt_with_context(idea, references, search_context)
         research_text = None
 
+        # Step 3: LLM synthesis with retry
         for attempt in range(max_iterations):
             research_text = await router.complete_text(
                 prompt=prompt_base if attempt == 0
@@ -237,8 +368,90 @@ class RoundBasedProductionWorkflow:
             if anchor_count >= 5:
                 break
             logger.info(f"research_round_retry: attempt={attempt+1} anchor_signals={anchor_count}")
+        
+        # Step 4: Save to cache
+        if research_text:
+            self._save_research_to_cache(idea.topic, research_text)
 
         return research_text
+    
+    async def _quick_web_search(self, topic: str) -> str:
+        """Perform quick web searches for legacy research.
+        
+        Does 3-4 targeted searches to gather current information
+        about the topic, which is then passed to the LLM.
+        """
+        from datetime import datetime
+        current_year = datetime.now().year
+        
+        queries = [
+            f"{topic} overview {current_year}",
+            f"{topic} facts statistics data",
+            f"{topic} Pakistan",
+        ]
+        
+        try:
+            async with WebSearchClient() as client:
+                results = await client.multi_search(queries, num_per_query=3)
+                
+                # Format results for LLM context
+                context_parts = []
+                for query, search_results in results.items():
+                    for r in search_results[:2]:  # Top 2 per query
+                        context_parts.append(f"- {r.title}: {r.snippet}")
+                
+                return "\n".join(context_parts[:10])  # Max 10 results
+                
+        except Exception as e:
+            logger.warning(f"web_search_failed_non_blocking: {e}")
+            return "[Web search unavailable - using LLM knowledge only]"
+    
+    def _build_research_prompt_with_context(
+        self,
+        idea: VideoIdea,
+        references: list,
+        search_context: str,
+    ) -> str:
+        """Build research prompt with web search context."""
+        ref_list = "\n".join([f"- {r.title} ({r.genre})" for r in references]) \
+                   if references else "No references available."
+        return f"""Conduct deep investigative research for a Johnny harris-style documentary.
+
+Topic: {idea.topic}
+Genre: {idea.genre_id}
+Target Audience: Pakistani
+
+CURRENT WEB SEARCH RESULTS:
+{search_context}
+
+Structural reference videos (study their approach):
+{ref_list}
+
+Find and document:
+1. At least 3 specific physical anchors (documents, locations, objects)
+2. One human character whose personal story illustrates the macro problem
+3. Evidence contradicting the mainstream narrative
+4. A clear chronological sequence OR one central Big Question
+
+DO NOT write narrative. DO NOT write script prose. Facts only."""
+    
+    def _save_research_to_cache(self, topic: str, research: str | dict) -> None:
+        """Save research results to cache.
+        
+        Args:
+            topic: The research topic (used as cache key)
+            research: Either str (markdown) or dict (ResearchDossier)
+        """
+        try:
+            cache = ResearchCache()
+            if isinstance(research, str):
+                # Create a simple dict wrapper for string research
+                cache.set(topic, {"markdown": research, "format": "legacy"})
+            else:
+                cache.set(topic, research)
+            logger.info(f"research_cached: topic='{topic[:50]}...'" )
+        except Exception as e:
+            logger.warning(f"research_cache_save_failed: {e}")
 
     async def _round_anchor_check(self, research, idea, references, router):
         """Round 1B: Ensure at least 2 Level 1-3 anchors exist."""
