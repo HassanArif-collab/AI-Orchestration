@@ -16,6 +16,180 @@ You are analyzing the **AI-Orchestration** system - a video production pipeline 
 
 ---
 
+## Phase 0: High-Level System Understanding
+
+### Prompt 0.1 - What Does This System Do?
+```
+Your first task is to understand the big picture. Read the following files to understand 
+what this system is and what it does:
+
+1. Read README.md - Project overview
+2. Read AGENTS.md - AI session context and architecture map
+3. Read docs/ARCHITECTURE.md - Technical architecture
+4. Read pyproject.toml - Project metadata and dependencies
+
+Then explain in SIMPLE LANGUAGE:
+
+1. WHAT IS THIS SYSTEM?
+   - What problem does it solve?
+   - Who is it for?
+   - What does it produce as output?
+
+2. HOW DOES IT WORK AT A HIGH LEVEL?
+   - What are the main components?
+   - How do they connect to each other?
+   - What is the flow from start to finish?
+
+3. WHAT EXTERNAL SERVICES DOES IT NEED?
+   - What APIs or external tools are required?
+   - What needs to be running for this to work?
+
+4. WHAT ARE THE KEY TECHNOLOGIES?
+   - Programming language and version
+   - Web framework
+   - Database
+   - AI/LLM integration
+
+After reading, summarize the system in 2-3 paragraphs that a non-technical person could understand.
+```
+
+### Prompt 0.2 - Step-by-Step Flow Explanation
+```
+Now trace through the system step by step. Read these files:
+
+1. packages/pipeline/stages.py - All pipeline stages
+2. packages/pipeline/runner.py - How stages are executed
+3. packages/pipeline/handlers.py - What happens at each stage
+4. packages/content_factory/router.py - Content creation routing
+
+Then explain the FLOW in simple terms:
+
+STEP 1: How does the user start?
+- What does the user provide as input? (A topic? A video URL? A file?)
+- How does the user interact with the system? (Web UI? CLI? API call?)
+
+STEP 2: What happens first?
+- What is "Trend Analysis"?
+- Does the system suggest topics or does the user provide one?
+
+STEP 3: Research Phase
+- What information does the system gather?
+- Where does it get information from? (Web search? LLM knowledge?)
+- How long does this typically take?
+
+STEP 4: Script Writing
+- How does the system write the script?
+- What format is the script in?
+- How does the system know if the script is good enough?
+
+STEP 5: Visual Planning
+- What is visual planning?
+- What outputs does it produce?
+
+STEP 6: SEO & Publishing
+- What SEO work is done?
+- Where does the final output go? (Notion? YouTube? File?)
+
+STEP 7: Human Interaction Points
+- Where does the system pause for human approval?
+- How does the human approve or reject?
+- Can the human provide feedback?
+
+Draw a simple flow diagram using text:
+[Input] → [Stage 1] → [Stage 2] → ... → [Output]
+```
+
+### Prompt 0.3 - Component Map
+```
+Now map out all the components. Explore the directory structure and create a map:
+
+Run these commands (or equivalent file system exploration):
+- List all directories in packages/
+- List all directories in apps/
+- List all directories in freerouter/
+
+Then create a COMPONENT MAP:
+
+┌─────────────────────────────────────────────────────────────┐
+│                    AI-Orchestration System                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   INPUT      │    │   CORE       │    │   OUTPUT     │  │
+│  │              │    │              │    │              │  │
+│  │  - Topic     │───▶│  - Research  │───▶│  - Script    │  │
+│  │  - Video URL │    │  - Writing   │    │  - Notion    │  │
+│  │              │    │  - Scoring   │    │  - YouTube   │  │
+│  └──────────────┘    └──────────────┘    └──────────────┘  │
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   LLM        │    │   DATA       │    │   EXTERNAL   │  │
+│  │              │    │              │    │              │  │
+│  │  - FreeRouter│    │  - SQLite DB │    │  - Web Search│  │
+│  │  - OpenAI    │    │  - Cache     │    │  - Notion API│  │
+│  │  - Groq      │    │  - Checkpoint│    │  - YouTube   │  │
+│  └──────────────┘    └──────────────┘    └──────────────┘  │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+
+For each component, answer:
+1. What is its purpose?
+2. What files implement it?
+3. What does it depend on?
+4. What happens if it fails?
+```
+
+### Prompt 0.4 - Questions for the User
+```
+Before diving deeper, ask the user these clarifying questions:
+
+ABOUT THE GOAL:
+1. What is the main output you want from this system? 
+   - A script document?
+   - A published video?
+   - Just research notes?
+
+2. Who is the target audience for the generated content?
+   - Pakistani viewers?
+   - YouTube audience?
+   - Internal documentation?
+
+ABOUT THE WORKFLOW:
+3. How do you currently use this system?
+   - Through the web dashboard?
+   - Through API calls?
+   - Through scripts/CLI?
+
+4. How often do you run it?
+   - Daily?
+   - Weekly?
+   - On-demand?
+
+ABOUT THE PROBLEMS:
+5. What are the main issues you're facing right now?
+   - Does it crash?
+   - Does it produce bad output?
+   - Does it hang or timeout?
+   - Is it too slow?
+
+6. Are there any parts that definitely work and you don't want changed?
+
+ABOUT THE INFRASTRUCTURE:
+7. Where is this system running?
+   - Local machine?
+   - Cloud server?
+   - Docker container?
+
+8. What external services are you actually using?
+   - Which LLM providers do you have API keys for?
+   - Do you have Notion set up?
+   - Is FreeRouter running?
+
+DOCUMENT THE ANSWERS in a clear format for reference in later phases.
+```
+
+---
+
 ## Phase 1: Core Configuration & Environment
 
 ### Prompt 1.1 - Environment & Settings
