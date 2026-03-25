@@ -206,7 +206,7 @@ class TopicFinderAgent:
         """
         try:
             from packages.integrations.mirofish.client import MiroFishClient
-            from packages.integrations.mirofish.seeds import get_default_seeds
+            from packages.integrations.mirofish.seeds import create_combined_seed
 
             client = MiroFishClient()
 
@@ -216,8 +216,13 @@ class TopicFinderAgent:
                 logger.debug("mirofish_unavailable_skipping")
                 return []
 
-            seeds = get_default_seeds()
-            report = client.submit_seeds(seeds)
+            # Create default seeds for Pakistan context
+            seed_text, forecast_demand = create_combined_seed(
+                geopolitical=["Pakistan economic situation", "Political transitions"],
+                tech=["AI adoption in Pakistan", "Digital regulation"]
+            )
+            
+            report = client.submit_seed(seed_text=seed_text, forecast_demand=forecast_demand)
             if not report:
                 return []
 
