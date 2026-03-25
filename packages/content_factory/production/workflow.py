@@ -24,6 +24,8 @@ from pydantic import BaseModel
 
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
+from packages.router.web_search import WebSearchClient
+from packages.pipeline.research_cache import ResearchCache
 
 from ..models import AdaptedScript, DualColumnEntry, ProcessingStatus, SectionLabel
 from ..source_library import SourceVideoLibrary
@@ -314,6 +316,9 @@ class RoundBasedProductionWorkflow:
                 f"sources={len(dossier.all_sources)}"
             )
             
+            # Save to cache
+            self._save_research_to_cache(idea.topic, dossier.model_dump())
+            
             return dossier
             
         except Exception as e:
@@ -329,10 +334,26 @@ class RoundBasedProductionWorkflow:
         router: RouterClient,
         max_iterations: int = 2,
     ) -> str | None:
-        """Legacy single-prompt research method."""
-        prompt_base = self._build_research_prompt(idea, references)
+        """Legacy research with web search support.
+        
+        Unlike the pure-LLM approach, this method:
+        1. Performs web searches to gather current information
+        2. Passes search results to LLM for synthesis
+        3. Validates anchor presence before returning
+        
+        This ensures legacy research also gets real-world data,
+        not just LLM training knowledge.
+        """
+        logger.info(f"legacy_research_started: topic='{idea.topic[:50]}...'" )
+        
+        # Step 1: Do web searches first (like deep_research but simpler)
+        search_context = await self._quick_web_search(idea.topic)
+        
+        # Step 2: Build prompt with search results
+        prompt_base = self._build_research_prompt_with_context(idea, references, search_context)
         research_text = None
 
+        # Step 3: LLM synthesis with retry
         for attempt in range(max_iterations):
             research_text = await router.complete_text(
                 prompt=prompt_base if attempt == 0
@@ -347,8 +368,90 @@ class RoundBasedProductionWorkflow:
             if anchor_count >= 5:
                 break
             logger.info(f"research_round_retry: attempt={attempt+1} anchor_signals={anchor_count}")
+        
+        # Step 4: Save to cache
+        if research_text:
+            self._save_research_to_cache(idea.topic, research_text)
 
         return research_text
+    
+    async def _quick_web_search(self, topic: str) -> str:
+        """Perform quick web searches for legacy research.
+        
+        Does 3-4 targeted searches to gather current information
+        about the topic, which is then passed to the LLM.
+        """
+        from datetime import datetime
+        current_year = datetime.now().year
+        
+        queries = [
+            f"{topic} overview {current_year}",
+            f"{topic} facts statistics data",
+            f"{topic} Pakistan",
+        ]
+        
+        try:
+            async with WebSearchClient() as client:
+                results = await client.multi_search(queries, num_per_query=3)
+                
+                # Format results for LLM context
+                context_parts = []
+                for query, search_results in results.items():
+                    for r in search_results[:2]:  # Top 2 per query
+                        context_parts.append(f"- {r.title}: {r.snippet}")
+                
+                return "\n".join(context_parts[:10])  # Max 10 results
+                
+        except Exception as e:
+            logger.warning(f"web_search_failed_non_blocking: {e}")
+            return "[Web search unavailable - using LLM knowledge only]"
+    
+    def _build_research_prompt_with_context(
+        self,
+        idea: VideoIdea,
+        references: list,
+        search_context: str,
+    ) -> str:
+        """Build research prompt with web search context."""
+        ref_list = "\n".join([f"- {r.title} ({r.genre})" for r in references]) \
+                   if references else "No references available."
+        return f"""Conduct deep investigative research for a Johnny harris-style documentary.
+
+Topic: {idea.topic}
+Genre: {idea.genre_id}
+Target Audience: Pakistani
+
+CURRENT WEB SEARCH RESULTS:
+{search_context}
+
+Structural reference videos (study their approach):
+{ref_list}
+
+Find and document:
+1. At least 3 specific physical anchors (documents, locations, objects)
+2. One human character whose personal story illustrates the macro problem
+3. Evidence contradicting the mainstream narrative
+4. A clear chronological sequence OR one central Big Question
+
+DO NOT write narrative. DO NOT write script prose. Facts only."""
+    
+    def _save_research_to_cache(self, topic: str, research: str | dict) -> None:
+        """Save research results to cache.
+        
+        Args:
+            topic: The research topic (used as cache key)
+            research: Either str (markdown) or dict (ResearchDossier)
+        """
+        try:
+            cache = ResearchCache()
+            if isinstance(research, str):
+                # Create a simple dict wrapper for string research
+                cache.set(topic, {"markdown": research, "format": "legacy"})
+            else:
+                cache.set(topic, research)
+            logger.info(f"research_cached: topic='{topic[:50]}...'" )
+        except Exception as e:
+            logger.warning(f"research_cache_save_failed: {e}")
 
     async def _round_anchor_check(self, research, idea, references, router):
         """Round 1B: Ensure at least 2 Level 1-3 anchors exist."""
