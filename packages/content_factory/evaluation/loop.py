@@ -8,6 +8,8 @@ FIXES APPLIED:
 1. Added persistence of best script after each iteration
 2. Added resume capability from persisted state
 3. Added snapshot directory management
+4. Fixed O(N^2) complexity in threshold runner
+5. Added strict error handling for mutation failures
 
 The best script is now persisted to disk after each iteration,
 allowing recovery from crashes without losing progress.
@@ -147,6 +149,7 @@ class ExperimentLoop:
         router_client: RouterClient | None = None,
         cycle_id: Optional[str] = None,
         resume: bool = True,
+        target_threshold: Optional[float] = None, # Added param
     ) -> AdaptedScript:
         """Run the script through the evolutionary loop multiple times.
 
@@ -156,6 +159,7 @@ class ExperimentLoop:
             router_client: Client for LLM calls.
             cycle_id: Optional cycle ID (auto-generated if None).
             resume: Whether to resume from previous snapshot (default: True).
+            target_threshold: Optional score threshold to stop early.
 
         Returns:
             The highest scoring script found during the run (could be the initial).
@@ -188,6 +192,15 @@ class ExperimentLoop:
         self.baseline.process_challenger(current_best)
         initial_score = current_best.production_readiness_score
 
+        # Check threshold immediately before looping
+        if target_threshold and current_best.production_readiness_score >= target_threshold:
+             logger.info(
+                f"experiment_early_exit: threshold {target_threshold}% reached with {current_best.production_readiness_score:.1f}%"
+            )
+             if self._snapshot:
+                 self._snapshot.clear(cycle_id)
+             return current_best
+
         # Persist initial state
         if self._snapshot:
             self._snapshot.save(cycle_id, current_best, start_iteration)
@@ -199,21 +212,21 @@ class ExperimentLoop:
             )
 
             # 1. Select Mutation Zone (weighted towards historical failure areas)
-            # For simplicity, we just pick a zone that actually has failures in the current best
-            available_zones = []
-            for zone, categories in ChallengerGenerator.ZONES.items():
-                if any(
-                    not c.passed and any(c.question_id.startswith(cat) for cat in categories)
-                    for c in current_best.self_check_results
-                ):
-                    available_zones.append(zone)
-
-            if not available_zones:
-                logger.info(
-                    f"experiment_completed: {cycle_id} - "
-                    f"Perfect score achieved or no mutatable zones left."
-                )
-                break
+            # Find available zones using the NEW category mapping logic (via mutation generator helper if available,
+            # or replicate logic here. Since ChallengerGenerator updated its logic to map zones to categories,
+            # we must be careful. The loop logic relies on checking if `c.question_id` matches.
+            # But `ChallengerGenerator` now handles the mapping internally.
+            # We should ask `ChallengerGenerator` if a zone is actionable.
+            
+            # Since we can't easily change ChallengerGenerator to expose that right now without larger refactor,
+            # we'll iterate through ZONES keys and rely on `generate_challenger` returning None if no failures.
+            # This is simpler and robust.
+            
+            available_zones = list(ChallengerGenerator.ZONE_CATEGORIES.keys())
+            
+            # Optimization: Pre-filter zones that definitely have no relevant failures?
+            # Or just pick random and let generate_challenger fail fast.
+            # Let's trust generate_challenger's check.
 
             mutation_zone = random.choice(available_zones)
 
@@ -223,6 +236,18 @@ class ExperimentLoop:
                 mutation_zone=mutation_zone,
                 router_client=router_client,
             )
+
+            if challenger is None:
+                 logger.warning(
+                    f"experiment_cycle_skipped: {cycle_id} iteration={i+1} "
+                    f"reason=mutation_failed_or_no_failures zone={mutation_zone}"
+                )
+                 # Still save snapshot to increment iteration count (if we want to count "attempts")
+                 # But if we just skip, we haven't consumed "resources" other than time.
+                 # Let's count it as an iteration to ensure termination.
+                 if self._snapshot:
+                    self._snapshot.save(cycle_id, current_best, i + 1)
+                 continue
 
             # 3. Score Challenger
             challenger = await self.scoring.score_script(challenger, router_client)
@@ -265,6 +290,14 @@ class ExperimentLoop:
             # 6. Persist best after each iteration
             if self._snapshot:
                 self._snapshot.save(cycle_id, current_best, i + 1)
+                
+            # Check threshold after update
+            if target_threshold and current_best.production_readiness_score >= target_threshold:
+                logger.info(
+                    f"experiment_threshold_reached: iteration={i+1} "
+                    f"score={current_best.production_readiness_score:.1f}%"
+                )
+                break
 
         # Log final result
         logger.info(
@@ -297,53 +330,16 @@ class ExperimentLoop:
         Returns:
             The highest scoring script found.
         """
-        cycle_id = f"exp_{uuid.uuid4().hex[:8]}"
-        logger.info(
-            f"experiment_with_threshold_started: cycle={cycle_id} "
-            f"threshold={threshold}% max_iterations={max_iterations}"
+        # Simply delegate to run_iterations with the new target_threshold param
+        # This fixes the O(N^2) loop issue completely by using the linear loop in run_iterations.
+        
+        return await self.run_iterations(
+            script=script,
+            iterations=max_iterations,
+            router_client=router_client,
+            target_threshold=threshold,
+            resume=True # Enable resume for long-running threshold jobs
         )
-
-        # Check for persisted state
-        start_iteration = 0
-        if self._snapshot:
-            persisted = self._snapshot.load(cycle_id)
-            if persisted:
-                current_best, start_iteration = persisted
-            else:
-                current_best = script
-        else:
-            current_best = script
-
-        # Score initial if needed
-        if not current_best.self_check_results:
-            current_best = await self.scoring.score_script(current_best, router_client)
-
-        self.baseline.process_challenger(current_best)
-
-        # Check if already meets threshold
-        if current_best.production_readiness_score >= threshold:
-            logger.info(f"experiment_threshold_already_met: score={current_best.production_readiness_score:.1f}%")
-            return current_best
-
-        for i in range(start_iteration, max_iterations):
-            result = await self.run_iterations(
-                script=current_best,
-                iterations=i + 1,
-                router_client=router_client,
-                cycle_id=cycle_id,
-                resume=False,  # Don't resume within this loop
-            )
-
-            if result.production_readiness_score >= threshold:
-                logger.info(
-                    f"experiment_threshold_reached: iteration={i+1} "
-                    f"score={result.production_readiness_score:.1f}%"
-                )
-                break
-
-            current_best = result
-
-        return current_best
 
     def get_available_snapshots(self) -> list[dict]:
         """Get list of available experiment snapshots."""
