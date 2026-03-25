@@ -2,6 +2,17 @@
 
 Combines the agents into a CrewAI process to generate an original
 dual-column script from a topic idea.
+
+DEEP RESEARCH INTEGRATION:
+  The RoundBasedProductionWorkflow now uses DeepResearchEngine for
+  systematic multi-angle research (from deer-flow methodology).
+
+  The workflow phases are:
+    Round 1A: Deep Research (4-phase methodology)
+    Round 1B: Anchor validation using ResearchDossier
+    Round 2:  Script opening generation
+    Round 3:  Full script assembly
+    Round 4:  Final AdaptedScript output
 """
 
 import json
@@ -17,6 +28,8 @@ from packages.router.client import RouterClient
 from ..models import AdaptedScript, DualColumnEntry, ProcessingStatus, SectionLabel
 from ..source_library import SourceVideoLibrary
 from .agents import create_researcher, create_script_agent, create_visual_agent
+from .deep_research import DeepResearchEngine
+from .models import ResearchDossier
 
 logger = get_logger(__name__)
 
@@ -177,17 +190,29 @@ class RoundBasedProductionWorkflow:
     Iterative round-based production workflow for Mode B original content.
 
     Replaces the single-pass sequential CrewAI process with structured rounds:
-      Round 1A: Research (up to 2 iterations if completeness < 5/7 anchors found)
-      Round 1B: Visual anchor check (one more research pass if < 2 Level 1-3 anchors)
+      Round 1A: Deep Research using DeepResearchEngine (deer-flow methodology)
+      Round 1B: Anchor validation from ResearchDossier
       Round 2:  Script opening only — self-check, one rewrite if needed
       Round 2B: Opening visual review — narrow revision if visual ratio off
       Round 3:  Full script (target: 32/40 binary questions passing, up to 2 rewrites)
       Round 3B: Full visual review — section ratio check
       Round 4:  Assemble final DualColumnScript / AdaptedScript
 
-    Uses the same agents from production/agents.py.
+    Uses DeepResearchEngine for systematic multi-angle research.
     All LLM calls go through RouterClient via FreeRouter.
+    
+    Attributes:
+        use_deep_research: Enable/disable DeepResearchEngine (default: True)
+        research_completeness_threshold: Minimum completeness score (0.0-1.0)
     """
+
+    def __init__(
+        self,
+        use_deep_research: bool = True,
+        research_completeness_threshold: float = 0.8,
+    ) -> None:
+        self.use_deep_research = use_deep_research
+        self.research_completeness_threshold = research_completeness_threshold
 
     async def run(self, idea: VideoIdea) -> AdaptedScript | None:
         """Run the full round-based workflow."""
@@ -197,13 +222,27 @@ class RoundBasedProductionWorkflow:
         references = library.find_by_genre(idea.genre_id, limit=3)
 
         async with RouterClient() as router:
-            # Round 1A — Research
-            research = await self._round_research(idea, references, router)
-            if not research:
+            # Round 1A — Deep Research (using DeepResearchEngine)
+            research_result = await self._round_research(idea, references, router)
+            if not research_result:
                 return None
 
-            # Round 1B — Anchor availability check
-            research = await self._round_anchor_check(research, idea, references, router)
+            # Handle both ResearchDossier (new) and str (legacy) formats
+            if isinstance(research_result, ResearchDossier):
+                dossier = research_result
+                research = dossier.to_markdown()
+                
+                # Round 1B — Validate anchors from dossier
+                if not dossier.is_complete(self.research_completeness_threshold):
+                    logger.warning(
+                        f"research_incomplete: score={dossier.completeness_score:.0%} "
+                        f"missing={dossier.get_missing_elements()}"
+                    )
+            else:
+                # Legacy string-based research
+                research = research_result
+                # Round 1B — Anchor availability check (legacy)
+                research = await self._round_anchor_check(research, idea, references, router)
 
             # Round 2 — Script opening
             opening = await self._round_script_opening(research, idea, router)
@@ -218,8 +257,79 @@ class RoundBasedProductionWorkflow:
             # Round 4 — Assemble final output
             return self._assemble_script(full_script, idea)
 
-    async def _round_research(self, idea, references, router, max_iterations=2):
-        """Round 1A: Research with completeness check."""
+    async def _round_research(
+        self,
+        idea: VideoIdea,
+        references: list,
+        router: RouterClient,
+        max_iterations: int = 2,
+    ) -> ResearchDossier | str | None:
+        """Round 1A: Research with DeepResearchEngine (new) or legacy method.
+        
+        If use_deep_research is True (default), uses the systematic
+        4-phase deer-flow methodology:
+          1. Broad Exploration — identify key dimensions
+          2. Deep Dive — targeted research per dimension
+          3. Diversity & Validation — ensure all info types covered
+          4. Synthesis Check — verify quality bar
+        
+        Returns:
+            ResearchDossier if use_deep_research=True
+            str (markdown) if use_deep_research=False
+            None if research fails
+        """
+        if self.use_deep_research:
+            return await self._deep_research(idea, references, router)
+        else:
+            return await self._legacy_research(idea, references, router, max_iterations)
+
+    async def _deep_research(
+        self,
+        idea: VideoIdea,
+        references: list,
+        router: RouterClient,
+    ) -> ResearchDossier | None:
+        """Execute systematic deep research using DeepResearchEngine."""
+        logger.info(f"deep_research_started: topic='{idea.topic[:50]}...' genre='{idea.genre_id}'")
+        
+        try:
+            engine = DeepResearchEngine(
+                router_client=router,
+                max_searches_per_dimension=3,
+                max_total_searches=15,
+            )
+            
+            dossier = await engine.research(
+                topic=idea.topic,
+                genre=idea.genre_id,
+                references=references,
+                target_completeness=self.research_completeness_threshold,
+                max_iterations=2,
+            )
+            
+            logger.info(
+                f"deep_research_complete: completeness={dossier.completeness_score:.0%} "
+                f"anchors={len(dossier.physical_anchors)} "
+                f"characters={len(dossier.human_characters)} "
+                f"sources={len(dossier.all_sources)}"
+            )
+            
+            return dossier
+            
+        except Exception as e:
+            logger.error(f"deep_research_failed: {e}")
+            # Fallback to legacy research
+            logger.info("falling_back_to_legacy_research")
+            return await self._legacy_research(idea, references, router, max_iterations=2)
+
+    async def _legacy_research(
+        self,
+        idea: VideoIdea,
+        references: list,
+        router: RouterClient,
+        max_iterations: int = 2,
+    ) -> str | None:
+        """Legacy single-prompt research method."""
         prompt_base = self._build_research_prompt(idea, references)
         research_text = None
 
