@@ -149,7 +149,7 @@ apps/api/
 
 ## Requirements
 
-- **Python 3.10 - 3.13** (Python 3.14+ is NOT supported)
+- **Python 3.10+** (Python 3.10, 3.11, 3.12, 3.13, 3.14 all supported)
 - API keys in `freerouter/.env`:
   - `GROQ_API_KEY` — Required for Groq provider
   - `OPENROUTER_API_KEY` — Optional, for OpenRouter models

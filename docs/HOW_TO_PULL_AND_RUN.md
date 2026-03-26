@@ -10,12 +10,12 @@ Before starting, make sure you have:
 
 | Requirement | Version | How to Check | How to Install |
 |-------------|---------|--------------|----------------|
-| Python | **3.10 - 3.13** | `python --version` | Download from python.org |
+| Python | **3.10+** | `python --version` | Download from python.org |
 | pip | Latest | `pip --version` | `python -m pip install --upgrade pip` |
 | Git | Any | `git --version` | Download from git-scm.com |
 | (Optional) Redis | Any | `redis-cli ping` | For production rate limiting |
 
-> ⚠️ **Important:** Python 3.14+ is NOT supported. Use Python 3.10, 3.11, 3.12, or 3.13.
+> ✅ Python 3.10, 3.11, 3.12, 3.13, and 3.14 are all supported.
 
 ### API Keys You'll Need
 
