@@ -27,7 +27,8 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from freerouter.router import get_router, RouterError
+from freerouter.router import get_router
+from freerouter.exceptions import RouterError
 from freerouter.providers import PROVIDER_MAP, reset_provider
 
 logger = logging.getLogger("freerouter.proxy_server")

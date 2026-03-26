@@ -39,14 +39,17 @@ from .circuit_breaker import (
     get_circuit_breaker_manager,
 )
 
-# Import custom adapters for non-OpenAI-compatible providers
-from .adapters.apifreellm import APIFreeLLMAdapter
+# Import exceptions (separate module to avoid circular imports)
+from .exceptions import RouterError
 
 logger = logging.getLogger("freerouter.router")
 
 
-class RouterError(Exception):
-    pass
+# Lazy import for adapters to avoid circular import
+def _get_apifreellm_adapter():
+    """Lazy import of APIFreeLLMAdapter to avoid circular imports."""
+    from .adapters.apifreellm import APIFreeLLMAdapter
+    return APIFreeLLMAdapter
 
 
 class Router:
@@ -70,6 +73,7 @@ class Router:
             return None
         
         if provider_name == "apifreellm":
+            APIFreeLLMAdapter = _get_apifreellm_adapter()
             adapter = APIFreeLLMAdapter(api_key=key)
             self._adapters[provider_name] = adapter
             return adapter

@@ -52,7 +52,7 @@ from typing import Any, Optional
 
 import httpx
 
-from ..router import RouterError
+from ..exceptions import RouterError
 
 
 class APIFreeLLMAdapter:
