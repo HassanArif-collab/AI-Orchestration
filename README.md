@@ -2,6 +2,8 @@
 
 Multi-agent YouTube video production pipeline built on FreeRouter, with a unified web dashboard for pipeline management, LLM provider configuration, and real-time monitoring.
 
+> **New to this project?** See the [Step-by-Step Guide](docs/HOW_TO_PULL_AND_RUN.md) for detailed instructions on how to pull, setup, and run this codebase.
+
 ## Quick start
 
 ```bash
@@ -185,6 +187,7 @@ apps/api/
 
 | Document | Audience | Description |
 |----------|----------|-------------|
+| `docs/HOW_TO_PULL_AND_RUN.md` | **New Users** | **Step-by-step guide to pull, setup, and run** |
 | `docs/ARCHITECTURE.md` | Developers | System architecture overview |
 | `docs/PHASE_2_3_IMPLEMENTATION_GUIDE.md` | Developers | Phase 2 & 3 implementation details |
 | `docs/KIDS_GUIDE.md` | Everyone | Simple explanations of changes |

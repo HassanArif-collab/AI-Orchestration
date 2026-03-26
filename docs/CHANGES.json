@@ -304,5 +304,53 @@
       "circuit_breaker": ">=80%",
       "escalation": ">=70%"
     }
+  },
+  
+  "documentation": {
+    "files": {
+      "docs/HOW_TO_PULL_AND_RUN.md": {
+        "audience": ["new_users", "developers", "beginners"],
+        "purpose": "Step-by-step guide for cloning, installing, configuring, and running the AI-Orchestration system",
+        "sections": [
+          "Prerequisites checklist",
+          "API key requirements",
+          "Clone repository instructions",
+          "Virtual environment setup",
+          "Dependency installation",
+          "Environment variable configuration",
+          "Running FreeRouter proxy",
+          "Running Web Dashboard",
+          "Dashboard tab descriptions",
+          "API endpoint examples",
+          "Troubleshooting guide",
+          "Quick reference commands"
+        ],
+        "added_date": "2026-03-26"
+      },
+      "docs/PHASE_2_3_IMPLEMENTATION_GUIDE.md": {
+        "audience": ["developers"],
+        "purpose": "Detailed implementation guide for Phase 2 & 3 fixes",
+        "added_date": "2026-03-26"
+      },
+      "docs/KIDS_GUIDE.md": {
+        "audience": ["everyone", "children", "non_technical"],
+        "purpose": "Simple explanations of all changes made in Phase 2 & 3",
+        "added_date": "2026-03-26"
+      },
+      "docs/CHANGES.json": {
+        "audience": ["ai_systems", "automated_tools"],
+        "purpose": "Structured machine-readable documentation of all changes",
+        "added_date": "2026-03-26"
+      },
+      "freerouter/FIXES_APPLIED.md": {
+        "audience": ["developers"],
+        "purpose": "FreeRouter-specific fixes and implementation details",
+        "added_date": "2026-03-26"
+      }
+    },
+    "readme_updated": {
+      "added_section": "Link to HOW_TO_PULL_AND_RUN.md for new users",
+      "updated_documentation_table": "Added new documentation file to the table"
+    }
   }
 }
