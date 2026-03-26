@@ -22,6 +22,13 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
+# Background task implementations for pipeline integration
+from apps.api.background_tasks import (
+    start_research_for_topic,
+    evaluate_script,
+    run_daily_scan,
+)
+
 router = APIRouter()
 
 
@@ -200,8 +207,8 @@ async def approve_topic(
             topics[i] = topic
             _save_topics(topics)
             
-            # TODO: Trigger research in background
-            # bg.add_task(start_research_for_topic, request.topic_id)
+            # Trigger research in background
+            bg.add_task(start_research_for_topic, request.topic_id)
             
             return {
                 "status": "approved",
@@ -270,9 +277,8 @@ async def submit_custom_topic(
     topics.append(topic)
     _save_topics(topics)
     
-    # TODO: Trigger research if requested
-    # if request.start_research:
-    #     bg.add_task(start_research_for_topic, topic_id)
+    # Trigger research in background
+    bg.add_task(start_research_for_topic, topic_id)
     
     return {
         "status": "created",
@@ -338,9 +344,8 @@ async def submit_custom_script(
     scripts.append(script)
     scripts_file.write_text(json.dumps(scripts, indent=2, ensure_ascii=False))
     
-    # TODO: Trigger evaluation if requested
-    # if not request.skip_research:
-    #     bg.add_task(evaluate_script, script_id)
+    # Trigger evaluation in background
+    bg.add_task(evaluate_script, script_id)
     
     return {
         "status": "created",
@@ -362,9 +367,8 @@ async def trigger_rescan(
     """
     genre_list = genres.split(",") if genres else None
     
-    # TODO: Import and run the scan
-    # from scripts.daily_topic_scan import run_daily_scan
-    # bg.add_task(run_daily_scan, genre_list)
+    # Trigger scan in background
+    bg.add_task(run_daily_scan, genre_list)
     
     return {
         "status": "started",

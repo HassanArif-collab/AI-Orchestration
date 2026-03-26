@@ -28,7 +28,15 @@ from .providers import (
     get_provider_key, should_skip_provider,
     mark_hard_limited, update_usage_from_headers,
     get_configured_providers, fetch_ollama_models,
-    load_env,
+    load_env, get_provider_timeouts,
+)
+
+# Import circuit breaker for fault tolerance
+from .circuit_breaker import (
+    is_provider_available,
+    record_circuit_success,
+    record_circuit_failure,
+    get_circuit_breaker_manager,
 )
 
 # Import custom adapters for non-OpenAI-compatible providers
@@ -123,14 +131,20 @@ class Router:
         return model
 
     def _get_ordered_providers(self) -> list[str]:
-        """Return configured providers in priority order, skipping rate-limited ones."""
+        """Return configured providers in priority order, skipping rate-limited and circuit-broken ones."""
         load_env()
         providers = []
         for defn in sorted(KNOWN_PROVIDERS, key=lambda x: x.priority):
             name = defn.name
+            # Skip rate-limited providers
             if should_skip_provider(name):
                 logger.info(f"Skipping {name}: rate limited (will auto-reset)")
                 continue
+            # Skip providers with open circuits
+            if not is_provider_available(name):
+                logger.info(f"Skipping {name}: circuit breaker open")
+                continue
+            # Skip providers without configured API keys
             if defn.requires_auth and not get_provider_key(name):
                 continue
             providers.append(name)
@@ -162,18 +176,25 @@ class Router:
         self, provider_name: str, messages: list[dict],
         model: str, temperature: float, max_tokens: int,
     ) -> dict[str, Any]:
+        # Check circuit breaker before attempting request
+        if not is_provider_available(provider_name):
+            raise RouterError(f"Circuit breaker open for {provider_name}")
+
         # Check if this provider needs a custom adapter
         if self._needs_custom_adapter(provider_name):
             adapter = self._get_adapter(provider_name)
             if adapter:
                 try:
-                    return await adapter.complete(
+                    result = await adapter.complete(
                         messages=messages,
                         model=model,
                         temperature=temperature,
                         max_tokens=max_tokens,
                     )
+                    record_circuit_success(provider_name)
+                    return result
                 except Exception as e:
+                    record_circuit_failure(provider_name)
                     raise RouterError(str(e))
             else:
                 raise RouterError(f"No API key for {provider_name}")
@@ -183,8 +204,13 @@ class Router:
         headers = self._get_auth_headers(provider_name)
         resolved_model = self._resolve_model(provider_name, model)
 
+        # Get configurable timeouts
+        connect_timeout, read_timeout = get_provider_timeouts(provider_name)
+
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(read_timeout, connect=connect_timeout)
+            ) as client:
                 resp = await client.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
@@ -195,22 +221,28 @@ class Router:
 
                 if resp.status_code == 429:
                     mark_hard_limited(provider_name)
+                    record_circuit_failure(provider_name)
                     raise RouterError(f"Rate limited by {provider_name}")
                 if resp.status_code != 200:
+                    record_circuit_failure(provider_name)
                     raise RouterError(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
                 data = resp.json()
                 data["_provider"] = provider_name
                 data["_model"] = resolved_model
+                record_circuit_success(provider_name)
                 return data
 
-        except httpx.ConnectError:
+        except httpx.ConnectError as e:
+            record_circuit_failure(provider_name)
             raise RouterError(f"Cannot connect to {provider_name}")
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
+            record_circuit_failure(provider_name)
             raise RouterError(f"Timeout from {provider_name}")
         except RouterError:
             raise
         except Exception as e:
+            record_circuit_failure(provider_name)
             raise RouterError(f"Unexpected error from {provider_name}: {e}")
 
     # ─── Streaming ────────────────────────────────────────────────────────────
@@ -256,18 +288,27 @@ class Router:
         self, provider_name: str, messages: list[dict],
         model: str, temperature: float, max_tokens: int,
     ) -> AsyncIterator[str]:
+        # Check circuit breaker before attempting request
+        if not is_provider_available(provider_name):
+            raise RouterError(f"Circuit breaker open for {provider_name}")
+
         # Check if this provider needs a custom adapter
         if self._needs_custom_adapter(provider_name):
             adapter = self._get_adapter(provider_name)
             if adapter:
-                async for chunk in adapter.stream(
-                    messages=messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                ):
-                    yield chunk
-                return
+                try:
+                    async for chunk in adapter.stream(
+                        messages=messages,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    ):
+                        yield chunk
+                    record_circuit_success(provider_name)
+                    return
+                except Exception as e:
+                    record_circuit_failure(provider_name)
+                    raise RouterError(str(e))
             else:
                 raise RouterError(f"No API key for {provider_name}")
         
@@ -278,12 +319,18 @@ class Router:
 
         logger.info(f"Routing to {provider_name} with model {resolved_model}")
 
+        # Get configurable timeouts
+        connect_timeout, read_timeout = get_provider_timeouts(provider_name)
+
         # Send meta chunk so the UI knows which provider is being used
         meta = {"_provider": provider_name, "_model": resolved_model}
         yield f"data: {json.dumps({'choices': [{'delta': {'role': 'assistant'}, 'index': 0}], 'meta': meta})}\n\n"
 
+        stream_successful = False
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(read_timeout, connect=connect_timeout)
+            ) as client:
                 async with client.stream(
                     "POST",
                     f"{base_url}/chat/completions",
@@ -295,24 +342,34 @@ class Router:
 
                     if resp.status_code == 429:
                         mark_hard_limited(provider_name)
+                        record_circuit_failure(provider_name)
                         raise RouterError(f"Rate limited by {provider_name}")
 
                     if resp.status_code != 200:
                         body = await resp.aread()
+                        record_circuit_failure(provider_name)
                         raise RouterError(f"HTTP {resp.status_code}: {body[:300].decode()}")
 
                     async for line in resp.aiter_lines():
                         if line:
                             yield line + "\n\n"
 
-        except httpx.ConnectError:
+                    stream_successful = True
+
+        except httpx.ConnectError as e:
+            record_circuit_failure(provider_name)
             raise RouterError(f"Cannot connect to {provider_name}")
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
+            record_circuit_failure(provider_name)
             raise RouterError(f"Timeout from {provider_name}")
         except RouterError:
             raise
         except Exception as e:
+            record_circuit_failure(provider_name)
             raise RouterError(f"Unexpected error from {provider_name}: {e}")
+        finally:
+            if stream_successful:
+                record_circuit_success(provider_name)
 
     # ─── Model listing ────────────────────────────────────────────────────────
 

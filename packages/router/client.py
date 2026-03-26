@@ -15,6 +15,7 @@ This client handles:
   - 503 from specific model → retry with "auto"
   - Structured output via instructor + openai client
   - Startup health check with clear error messages
+  - SSRF prevention in health check URLs (P2-09)
 
 Usage:
     from packages.router.client import RouterClient
@@ -30,8 +31,11 @@ Imported by: packages/pipeline/, packages/agents/
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import re
 from datetime import datetime, timezone
 from typing import Any, Type, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 import requests
@@ -42,6 +46,113 @@ from packages.core.logger import get_logger
 
 log = get_logger(__name__)
 T = TypeVar("T")
+
+
+# ─── SSRF Prevention (P2-09) ─────────────────────────────────────────────────────
+
+# Private IP ranges that should be blocked for health checks
+PRIVATE_IP_RANGES = [
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC 1918
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC 1918
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC 1918
+    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
+    ipaddress.ip_network("169.254.0.0/16"),    # Link-local
+    ipaddress.ip_network("0.0.0.0/8"),         # Current network
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+]
+
+# Allowed URL schemes for health checks
+ALLOWED_SCHEMES = frozenset(["http", "https"])
+
+# Hostnames that are explicitly allowed (for development/testing)
+# Can be extended via FREEROUTER_ALLOWED_HOSTS env var
+DEFAULT_ALLOWED_HOSTS = frozenset(["localhost", "127.0.0.1", "::1"])
+
+
+def is_private_ip(ip_str: str) -> bool:
+    """Check if an IP address falls within private/internal ranges.
+
+    Args:
+        ip_str: IP address string to check
+
+    Returns:
+        True if the IP is private/internal, False otherwise
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        for network in PRIVATE_IP_RANGES:
+            if ip in network:
+                return True
+        return False
+    except ValueError:
+        # Not a valid IP address
+        return False
+
+
+def validate_health_check_url(url: str, allowed_hosts: set[str] | None = None) -> tuple[bool, str]:
+    """Validate a URL for health check to prevent SSRF attacks.
+
+    This function validates that a health check URL is safe to request,
+    blocking attempts to access internal resources via Server-Side Request
+    Forgery (SSRF).
+
+    Args:
+        url: The URL to validate
+        allowed_hosts: Set of additional allowed hostnames
+
+    Returns:
+        Tuple of (is_valid, error_message)
+        - is_valid: True if URL is safe to use
+        - error_message: Description of why validation failed (empty if valid)
+    """
+    if not url:
+        return False, "URL is empty"
+
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        return False, f"Invalid URL format: {e}"
+
+    # Check scheme
+    if parsed.scheme.lower() not in ALLOWED_SCHEMES:
+        return False, f"URL scheme '{parsed.scheme}' not allowed. Use http or https."
+
+    # Check for empty hostname
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "URL has no hostname"
+
+    # Check against allowed hosts list
+    allowed = DEFAULT_ALLOWED_HOSTS | (allowed_hosts or set())
+    if hostname.lower() in [h.lower() for h in allowed]:
+        return True, ""
+
+    # Check if hostname resolves to a private IP
+    # First check if it's already an IP address
+    try:
+        if is_private_ip(hostname):
+            return False, f"Hostname '{hostname}' resolves to a private IP address"
+    except Exception:
+        pass  # Not an IP address, continue with DNS resolution check
+
+    # Try DNS resolution for domain names
+    import socket
+    try:
+        resolved_ips = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        for family, socktype, proto, canonname, sockaddr in resolved_ips:
+            ip_str = sockaddr[0]
+            if is_private_ip(ip_str):
+                return False, f"Hostname '{hostname}' resolves to private IP '{ip_str}'"
+    except socket.gaierror as e:
+        log.debug(f"DNS resolution failed for health check URL: {hostname}: {e}")
+        # Don't block on DNS failure - let the request proceed and fail naturally
+        pass
+    except Exception as e:
+        log.debug(f"Error checking DNS for health check URL: {e}")
+
+    return True, ""
 
 
 class RouterClient:
@@ -87,11 +198,20 @@ class RouterClient:
 
     def _startup_health_check(self) -> None:
         """
-        Synchronous health check at initialization.
+        Synchronous health check at initialization with SSRF prevention.
 
         Raises:
-            LLMClientError: If FreeRouter is not accessible
+            LLMClientError: If FreeRouter is not accessible or URL is invalid
         """
+        # Validate URL for SSRF prevention (P2-09)
+        is_valid, error_msg = validate_health_check_url(self.base_url)
+        if not is_valid:
+            log.warning(f"health_check_url_validation_failed: {error_msg}")
+            raise LLMClientError(
+                f"Invalid FreeRouter URL: {error_msg}. "
+                f"URL must point to a valid public endpoint or be in the allowed hosts list."
+            )
+
         try:
             response = requests.get(
                 f"{self.base_url}/health",
@@ -141,11 +261,49 @@ class RouterClient:
         """Return whether the last health check passed."""
         return self._healthy or False
 
+    # Async context manager support (existing)
     async def __aenter__(self) -> RouterClient:
         return self
 
     async def __aexit__(self, *_: Any) -> None:
         await self.close()
+
+    # P2-06: Sync context manager support
+    def __enter__(self) -> RouterClient:
+        """Sync context manager entry.
+
+        Note: For async operations, prefer the async context manager.
+        This is provided for convenience in sync-only contexts.
+        """
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        """Sync context manager exit.
+
+        Closes the HTTP client synchronously using asyncio.run().
+        Note: This may cause issues if called from within an async context.
+        Prefer the async context manager for async code.
+        """
+        try:
+            # Try to close the async client properly
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context - can't use run_until_complete
+                # Schedule the close for later (not ideal but prevents crash)
+                log.warning(
+                    "sync_context_manager_in_async_context: "
+                    "Consider using async with RouterClient() instead"
+                )
+                # Create a task to close later
+                loop.create_task(self._http.aclose())
+            else:
+                # No running loop, we can close synchronously
+                loop.run_until_complete(self._http.aclose())
+        except RuntimeError:
+            # No event loop exists - create one to close
+            asyncio.run(self._http.aclose())
+        except Exception as e:
+            log.debug(f"context_manager_close_error: {e}")
 
     async def close(self) -> None:
         """Close the HTTP client connection."""

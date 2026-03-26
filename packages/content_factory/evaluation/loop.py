@@ -28,6 +28,7 @@ import random
 from packages.core.config import get_settings
 from packages.core.errors import QualityGateError
 from packages.core.logger import get_logger
+from packages.core.escalation import get_escalation_service
 from packages.router.client import RouterClient
 
 from ..models import AdaptedScript
@@ -359,7 +360,7 @@ class ExperimentLoop:
 
         This method runs the evolution loop with configurable quality gates.
         If the final score is below the quality floor and enforce_floor is True,
-        a QualityGateError is raised.
+        a QualityGateError is raised and an escalation is triggered.
 
         Args:
             script: The initial script to evolve.
@@ -395,6 +396,21 @@ class ExperimentLoop:
                     f"quality_gate_failed: score={final_score:.1f}% "
                     f"floor={self.floor}%"
                 )
+                
+                # Escalate the quality gate failure to operators
+                escalation_service = get_escalation_service()
+                try:
+                    await escalation_service.escalate_quality_gate_failure(
+                        score=final_score,
+                        floor=self.floor,
+                        script_id=best_script.video_id if hasattr(best_script, 'video_id') else None,
+                        video_id=script.video_id if hasattr(script, 'video_id') else None,
+                        iteration_count=self.max_iterations,
+                    )
+                except Exception as e:
+                    # Don't let escalation failure prevent the error from being raised
+                    logger.warning(f"escalation_failed: {e}")
+                
                 raise QualityGateError(
                     f"Script quality {final_score:.1f}% below minimum {self.floor}%",
                     score=final_score,

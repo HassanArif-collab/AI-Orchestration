@@ -28,12 +28,61 @@ log = get_logger(__name__)
 P = ParamSpec("P")
 T = TypeVar("T")
 
+# Default retryable exceptions - network/timeout related errors that are typically transient
+# P2-02: Use specific exception types instead of catching all exceptions
+DEFAULT_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    ConnectionError,
+    ConnectionRefusedError,
+    ConnectionResetError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    OSError,  # Base for network errors
+)
+
+
+def is_retryable_exception(exc: Exception, retryable_types: tuple[type[Exception], ...]) -> bool:
+    """Check if an exception should trigger a retry.
+
+    Args:
+        exc: The exception that was raised
+        retryable_types: Tuple of exception types that should trigger retry
+
+    Returns:
+        True if the exception should trigger a retry, False otherwise
+    """
+    # Check if it's an instance of any retryable type
+    if isinstance(exc, retryable_types):
+        return True
+
+    # Check for common HTTP/network error patterns by name
+    # This handles exceptions from httpx, requests, etc. that may not be in our type tuple
+    exc_name = type(exc).__name__
+    retryable_names = {
+        "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
+        "ConnectionError", "ConnectError", "HTTPStatusError",
+        "RemoteProtocolError", "LocalProtocolError",
+        "SSLError", "ProtocolError",
+    }
+
+    # Check if exception name matches known retryable errors
+    if exc_name in retryable_names:
+        return True
+
+    # Check for status code based retry (5xx server errors)
+    if hasattr(exc, 'response') and hasattr(exc.response, 'status_code'):
+        status_code = exc.response.status_code
+        # Retry on server errors (5xx) and rate limits (429)
+        if status_code >= 500 or status_code == 429:
+            return True
+
+    return False
+
 
 def retry_with_backoff(
     max_attempts: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
-    exceptions: tuple[type[Exception], ...] = (Exception,),
+    exceptions: tuple[type[Exception], ...] | None = None,
 ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """Retry decorator with exponential backoff for async functions.
 
@@ -45,7 +94,8 @@ def retry_with_backoff(
         max_attempts: Maximum number of retry attempts (default 3).
         base_delay: Initial delay in seconds (default 1.0).
         max_delay: Maximum delay cap in seconds (default 30.0).
-        exceptions: Tuple of exception types to retry on (default all exceptions).
+        exceptions: Tuple of exception types to retry on (default: network/timeout errors).
+                   Pass None to use DEFAULT_RETRYABLE_EXCEPTIONS.
 
     Returns:
         Decorated async function with retry logic.
@@ -62,7 +112,11 @@ def retry_with_backoff(
         - Logs warning on each retry attempt
         - Logs error when all retries exhausted
         - Re-raises the last exception after all retries fail
+        - P2-02: Only retries on specified exception types, others propagate immediately
     """
+    # Use default retryable exceptions if none specified
+    retryable_exceptions = exceptions if exceptions is not None else DEFAULT_RETRYABLE_EXCEPTIONS
+
     def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -71,7 +125,16 @@ def retry_with_backoff(
             for attempt in range(1, max_attempts + 1):
                 try:
                     return await func(*args, **kwargs)
-                except exceptions as e:
+                except Exception as e:
+                    # P2-02: Check if this exception should trigger a retry
+                    if not is_retryable_exception(e, retryable_exceptions):
+                        # Non-retryable exception - log and re-raise immediately
+                        log.error(
+                            f"non_retryable_exception: func={func.__name__} error_type={type(e).__name__}",
+                            extra={"error": str(e)}
+                        )
+                        raise
+
                     last_exception = e
 
                     if attempt == max_attempts:
@@ -106,7 +169,7 @@ def retry_with_backoff_sync(
     max_attempts: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 30.0,
-    exceptions: tuple[type[Exception], ...] = (Exception,),
+    exceptions: tuple[type[Exception], ...] | None = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Retry decorator with exponential backoff for sync functions.
 
@@ -116,12 +179,16 @@ def retry_with_backoff_sync(
         max_attempts: Maximum number of retry attempts (default 3).
         base_delay: Initial delay in seconds (default 1.0).
         max_delay: Maximum delay cap in seconds (default 30.0).
-        exceptions: Tuple of exception types to retry on (default all exceptions).
+        exceptions: Tuple of exception types to retry on (default: network/timeout errors).
+                   Pass None to use DEFAULT_RETRYABLE_EXCEPTIONS.
 
     Returns:
         Decorated sync function with retry logic.
     """
     import time
+
+    # Use default retryable exceptions if none specified
+    retryable_exceptions = exceptions if exceptions is not None else DEFAULT_RETRYABLE_EXCEPTIONS
 
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @wraps(func)
@@ -131,7 +198,16 @@ def retry_with_backoff_sync(
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
-                except exceptions as e:
+                except Exception as e:
+                    # P2-02: Check if this exception should trigger a retry
+                    if not is_retryable_exception(e, retryable_exceptions):
+                        # Non-retryable exception - log and re-raise immediately
+                        log.error(
+                            f"non_retryable_exception: func={func.__name__} error_type={type(e).__name__}",
+                            extra={"error": str(e)}
+                        )
+                        raise
+
                     last_exception = e
 
                     if attempt == max_attempts:

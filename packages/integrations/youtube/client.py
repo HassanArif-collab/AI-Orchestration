@@ -3,8 +3,12 @@
 This client provides methods for interacting with the YouTube Data API v3
 with graceful degradation - all methods return empty/default values when
 the API is unavailable or not configured.
+
+P2-08: Added concurrent fetching for competitor videos to avoid N+1 pattern.
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
@@ -13,6 +17,9 @@ from packages.core.errors import IntegrationError
 from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Thread pool for concurrent sync API calls
+_youtube_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="youtube_")
 
 
 class YouTubeClient:
@@ -417,7 +424,10 @@ class YouTubeClient:
         channel_ids: list[str],
         max_results: int = 10,
     ) -> list[dict]:
-        """Get recent videos from competitor channels.
+        """Get recent videos from competitor channels with concurrent fetching.
+
+        P2-08: Uses concurrent fetching with ThreadPoolExecutor to avoid
+        N+1 pattern when fetching from multiple channels.
 
         Args:
             channel_ids: List of competitor channel IDs.
@@ -429,11 +439,88 @@ class YouTubeClient:
         if not self._check_service():
             return []
 
+        if not channel_ids:
+            return []
+
         all_videos = []
 
-        for channel_id in channel_ids:
-            videos = self.get_recent_videos(channel_id, max_results=max_results)
-            all_videos.extend(videos)
+        # P2-08: Use concurrent fetching for multiple channels
+        if len(channel_ids) == 1:
+            # Single channel - no need for concurrency
+            all_videos = self.get_recent_videos(channel_ids[0], max_results=max_results)
+        else:
+            # Multiple channels - use concurrent fetching
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+
+            # Run fetches in parallel using thread pool
+            futures = [
+                _youtube_executor.submit(self.get_recent_videos, channel_id, max_results)
+                for channel_id in channel_ids
+            ]
+
+            # Collect results with timeout
+            for future in futures:
+                try:
+                    videos = future.result(timeout=30.0)  # 30 second timeout per channel
+                    if videos:
+                        all_videos.extend(videos)
+                except Exception as e:
+                    logger.warning(f"youtube_competitor_fetch_error: {e}")
+                    continue
+
+        # Sort by views descending
+        all_videos.sort(key=lambda v: v.get("views", 0), reverse=True)
+
+        return all_videos
+
+    async def get_competitor_videos_async(
+        self,
+        channel_ids: list[str],
+        max_results: int = 10,
+    ) -> list[dict]:
+        """Async version of get_competitor_videos for use in async contexts.
+
+        P2-08: Provides async interface for concurrent channel fetching.
+
+        Args:
+            channel_ids: List of competitor channel IDs.
+            max_results: Maximum results per channel.
+
+        Returns:
+            List of video dictionaries from all channels, or empty list on failure.
+        """
+        if not self._check_service():
+            return []
+
+        if not channel_ids:
+            return []
+
+        all_videos = []
+
+        # Run sync method in thread pool for async compatibility
+        loop = asyncio.get_event_loop()
+        futures = [
+            loop.run_in_executor(
+                _youtube_executor,
+                self.get_recent_videos,
+                channel_id,
+                max_results
+            )
+            for channel_id in channel_ids
+        ]
+
+        # Wait for all futures concurrently
+        results = await asyncio.gather(*futures, return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"youtube_competitor_fetch_error: {result}")
+                continue
+            if result:
+                all_videos.extend(result)
 
         # Sort by views descending
         all_videos.sort(key=lambda v: v.get("views", 0), reverse=True)

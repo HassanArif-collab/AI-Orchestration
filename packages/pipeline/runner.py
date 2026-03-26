@@ -21,6 +21,7 @@ class PipelineRunner:
     """Orchestrates pipeline execution.
 
     Handles stage execution, dependency management, and human gates.
+    Thread-safe for parallel stage execution via asyncio.Lock.
     """
 
     def __init__(self, store: Optional[RunStore] = None, hooks: Optional[PipelineHooks] = None):
@@ -33,6 +34,8 @@ class PipelineRunner:
         self.store = store or RunStore()
         self.hooks = hooks or PipelineHooks()
         self.logger = get_logger(__name__)
+        # Lock for thread-safe state modifications during parallel execution
+        self._state_lock = asyncio.Lock()
 
     async def create_run(self) -> PipelineRun:
         """Create a new pipeline run.
@@ -43,6 +46,41 @@ class PipelineRunner:
         run = PipelineRun.new()
         self.store.save(run)
         return run
+
+    async def _update_stage_status_atomic(
+        self, run: PipelineRun, stage: Stage, status: str
+    ) -> None:
+        """Thread-safe wrapper for updating stage status.
+
+        Acquires lock before modifying stage_status dictionary to prevent
+        race conditions during parallel stage execution.
+
+        Args:
+            run: PipelineRun to update
+            stage: Stage whose status is being updated
+            status: New status value
+        """
+        async with self._state_lock:
+            run.stage_status[stage.value] = status
+            self.store.save(run)
+
+    async def _update_run_state_atomic(
+        self, run: PipelineRun, **kwargs
+    ) -> None:
+        """Thread-safe wrapper for updating run state.
+
+        Acquires lock before modifying run attributes to prevent
+        race conditions during parallel stage execution.
+
+        Args:
+            run: PipelineRun to update
+            **kwargs: Attributes to update (e.g., status, current_stage, error_message)
+        """
+        async with self._state_lock:
+            for key, value in kwargs.items():
+                if hasattr(run, key):
+                    setattr(run, key, value)
+            self.store.save(run)
 
     async def execute_stage(
         self, run: PipelineRun, stage: Stage, context: dict = None
@@ -62,7 +100,7 @@ class PipelineRunner:
         """
         context = context or {}
 
-        # Check dependencies
+        # Check dependencies (read-only, no lock needed)
         if not run.can_start(stage):
             raise PipelineError(
                 f"Cannot start {stage.value}: dependencies not met",
@@ -71,15 +109,17 @@ class PipelineRunner:
 
         # Check if human gate - pause instead of executing
         if is_human_gate(stage):
-            run.status = "waiting_human"
-            run.current_stage = stage
-            run.stage_status[stage.value] = "waiting_human"
-            self.store.save(run)
+            await self._update_run_state_atomic(
+                run,
+                status="waiting_human",
+                current_stage=stage,
+            )
+            await self._update_stage_status_atomic(run, stage, "waiting_human")
             if self.hooks:
                 await self.hooks.on_human_gate(run.run_id, stage)
             return None
 
-        # Get handler
+        # Get handler (read-only, no lock needed)
         handler = STAGE_HANDLERS.get(stage.value)
         if not handler:
             raise PipelineError(
@@ -87,18 +127,19 @@ class PipelineRunner:
                 stage=stage.value,
             )
 
-        # Execute stage
-        run.stage_status[stage.value] = "running"
-        run.current_stage = stage
-        self.store.save(run)
+        # Mark stage as running (atomic update)
+        await self._update_stage_status_atomic(run, stage, "running")
+        await self._update_run_state_atomic(run, current_stage=stage)
 
         if self.hooks:
             await self.hooks.on_stage_start(run.run_id, stage)
 
         try:
             output = await handler(run, context)
-            run.set_output(stage, output)
-            self.store.save(run)
+            # Atomic update for stage output
+            async with self._state_lock:
+                run.set_output(stage, output)
+                self.store.save(run)
 
             if self.hooks:
                 await self.hooks.on_stage_complete(run.run_id, stage, output)
@@ -106,10 +147,12 @@ class PipelineRunner:
             return output
 
         except Exception as e:
-            run.stage_status[stage.value] = "error"
-            run.error_message = str(e)
-            run.status = "error"
-            self.store.save(run)
+            # Atomic update for error state
+            async with self._state_lock:
+                run.stage_status[stage.value] = "error"
+                run.error_message = str(e)
+                run.status = "error"
+                self.store.save(run)
 
             if self.hooks:
                 await self.hooks.on_stage_error(run.run_id, stage, e)
@@ -173,6 +216,7 @@ class PipelineRunner:
                 return None
 
             # Run parallel stages concurrently (e.g., SEO + VISUAL_PLANNING)
+            # Each stage uses atomic state updates via _state_lock to prevent races
             if len(runnable) > 1:
                 await asyncio.gather(
                     *[self.execute_stage(run, s) for s in runnable]

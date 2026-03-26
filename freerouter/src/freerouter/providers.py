@@ -22,6 +22,13 @@ from typing import Optional
 import httpx
 from dotenv import load_dotenv, set_key
 
+# Import rate limit store (uses in-memory by default, Redis when configured)
+from .rate_limit_store import (
+    RateLimitStore,
+    ProviderUsage,
+    get_rate_limit_store,
+)
+
 
 # ─── Provider Definitions ─────────────────────────────────────────────────────
 
@@ -44,6 +51,9 @@ class ProviderDefinition:
     soft_limit_threshold: float = 0.90
     requires_custom_adapter: bool = False  # Flag for non-OpenAI APIs like APIFreeLLM
     rate_limit_reset_seconds: int = 60  # Provider-specific rate limit reset time
+    # HTTP Timeout configuration (in seconds)
+    connect_timeout: float = 10.0  # Timeout for establishing connection
+    read_timeout: float = 120.0  # Timeout for reading response
 
 
 KNOWN_PROVIDERS: list[ProviderDefinition] = [
@@ -208,108 +218,52 @@ DEFAULT_MODELS: dict[str, str] = {
 
 
 # ─── Rate Limit Tracking ──────────────────────────────────────────────────────
-
-@dataclass
-class ProviderUsage:
-    name: str
-    requests_limit: int = 0
-    requests_remaining: int = -1
-    tokens_limit: int = 0
-    tokens_remaining: int = -1
-    last_updated: float = field(default_factory=time.time)
-    is_soft_limited: bool = False
-    is_hard_limited: bool = False
-    # Track when hard limit was set so we can auto-reset after a window
-    hard_limited_at: float = 0.0
-
-    @property
-    def requests_used_pct(self) -> Optional[float]:
-        if self.requests_limit > 0 and self.requests_remaining >= 0:
-            return 1.0 - (self.requests_remaining / self.requests_limit)
-        return None
-
-
-_usage: dict[str, ProviderUsage] = {}
+# NOTE: ProviderUsage is now imported from rate_limit_store.py
+# The rate limit store provides pluggable backends (in-memory or Redis)
+# Set RATE_LIMIT_BACKEND=redis and REDIS_URL for distributed deployments
 
 # Auto-reset hard limits after this many seconds (1 minute)
 # OpenRouter rate limits reset per minute
 HARD_LIMIT_RESET_SECONDS = 60
 
 
+def _get_store() -> RateLimitStore:
+    """Get the rate limit store instance."""
+    return get_rate_limit_store()
+
+
 def get_usage(name: str) -> ProviderUsage:
-    if name not in _usage:
-        _usage[name] = ProviderUsage(name=name)
-    return _usage[name]
+    """Get usage data for a provider (backward compatible wrapper)."""
+    return _get_store().get_usage(name)
 
 
 def get_all_usage() -> dict[str, ProviderUsage]:
-    return dict(_usage)
+    """Get all provider usage data (backward compatible wrapper)."""
+    return _get_store().get_all_usage()
 
 
 def update_usage_from_headers(name: str, headers: dict) -> None:
-    usage = get_usage(name)
-
-    def _get_int(key: str) -> Optional[int]:
-        for k, v in headers.items():
-            if k.lower() == key.lower():
-                try:
-                    return int(v)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-    rem = _get_int("x-ratelimit-remaining-requests")
-    lim = _get_int("x-ratelimit-limit-requests")
-    if rem is not None:
-        usage.requests_remaining = rem
-    if lim is not None:
-        usage.requests_limit = lim
-    tok_rem = _get_int("x-ratelimit-remaining-tokens")
-    tok_lim = _get_int("x-ratelimit-limit-tokens")
-    if tok_rem is not None:
-        usage.tokens_remaining = tok_rem
-    if tok_lim is not None:
-        usage.tokens_limit = tok_lim
-
-    usage.last_updated = time.time()
+    """Update usage from HTTP headers (backward compatible wrapper)."""
     defn = PROVIDER_MAP.get(name)
     threshold = defn.soft_limit_threshold if defn else 0.90
-    pct = usage.requests_used_pct
-    usage.is_soft_limited = (pct is not None and pct >= threshold)
-
-    # If we got a successful response, clear any hard limit
-    if rem is not None and rem > 0:
-        usage.is_hard_limited = False
-        usage.hard_limited_at = 0.0
+    _get_store().update_from_headers(name, headers, threshold)
 
 
 def mark_hard_limited(name: str) -> None:
-    usage = get_usage(name)
-    usage.is_hard_limited = True
-    usage.requests_remaining = 0
-    usage.hard_limited_at = time.time()
+    """Mark provider as hard limited (backward compatible wrapper)."""
+    _get_store().mark_hard_limited(name)
 
 
 def should_skip_provider(name: str) -> bool:
-    u = _usage.get(name)
-    if not u:
-        return False
-    # Auto-reset hard limits after the window expires
-    if u.is_hard_limited and u.hard_limited_at > 0:
-        if time.time() - u.hard_limited_at > HARD_LIMIT_RESET_SECONDS:
-            u.is_hard_limited = False
-            u.hard_limited_at = 0.0
-            return False
-    return u.is_hard_limited or u.is_soft_limited
+    """Check if provider should be skipped (backward compatible wrapper)."""
+    defn = PROVIDER_MAP.get(name)
+    reset_seconds = defn.rate_limit_reset_seconds if defn else HARD_LIMIT_RESET_SECONDS
+    return _get_store().should_skip(name, reset_seconds)
 
 
 def reset_provider(name: str) -> None:
     """Manually reset a provider's rate limit state."""
-    if name in _usage:
-        _usage[name].is_hard_limited = False
-        _usage[name].is_soft_limited = False
-        _usage[name].hard_limited_at = 0.0
-        _usage[name].requests_remaining = -1
+    _get_store().reset_provider(name)
 
 
 # ─── API Key Management ───────────────────────────────────────────────────────
@@ -339,6 +293,67 @@ def get_provider_key(name: str) -> Optional[str]:
     if not defn:
         return None
     return os.getenv(defn.env_key, "").strip() or None
+
+
+def get_provider_timeouts(name: str) -> tuple[float, float]:
+    """Get timeout configuration for a provider.
+
+    Returns connect_timeout and read_timeout from provider definition,
+    with environment variable overrides.
+
+    Environment overrides:
+        FREEROUTER_CONNECT_TIMEOUT: Override connect timeout for all providers
+        FREEROUTER_READ_TIMEOUT: Override read timeout for all providers
+        <PROVIDER>_CONNECT_TIMEOUT: Provider-specific connect timeout (e.g., OPENAI_CONNECT_TIMEOUT)
+        <PROVIDER>_READ_TIMEOUT: Provider-specific read timeout (e.g., OPENAI_READ_TIMEOUT)
+
+    Args:
+        name: Provider name
+
+    Returns:
+        Tuple of (connect_timeout, read_timeout) in seconds
+    """
+    defn = PROVIDER_MAP.get(name)
+    if not defn:
+        # Default fallbacks
+        connect_timeout = float(os.getenv("FREEROUTER_CONNECT_TIMEOUT", "10.0"))
+        read_timeout = float(os.getenv("FREEROUTER_READ_TIMEOUT", "120.0"))
+        return connect_timeout, read_timeout
+
+    # Start with provider defaults
+    connect_timeout = defn.connect_timeout
+    read_timeout = defn.read_timeout
+
+    # Apply global overrides
+    global_connect = os.getenv("FREEROUTER_CONNECT_TIMEOUT")
+    global_read = os.getenv("FREEROUTER_READ_TIMEOUT")
+    if global_connect:
+        try:
+            connect_timeout = float(global_connect)
+        except ValueError:
+            pass
+    if global_read:
+        try:
+            read_timeout = float(global_read)
+        except ValueError:
+            pass
+
+    # Apply provider-specific overrides
+    provider_prefix = name.upper().replace("-", "_")
+    provider_connect = os.getenv(f"{provider_prefix}_CONNECT_TIMEOUT")
+    provider_read = os.getenv(f"{provider_prefix}_READ_TIMEOUT")
+    if provider_connect:
+        try:
+            connect_timeout = float(provider_connect)
+        except ValueError:
+            pass
+    if provider_read:
+        try:
+            read_timeout = float(provider_read)
+        except ValueError:
+            pass
+
+    return connect_timeout, read_timeout
 
 
 def get_configured_providers() -> list[tuple[ProviderDefinition, bool]]:

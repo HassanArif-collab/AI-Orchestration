@@ -1,12 +1,89 @@
-# FreeRouter - Critical Fixes Applied
+# FreeRouter - Fixes Applied
 
 ## Summary of Fixes
 
-This document outlines the critical flaws identified in the original FreeRouter codebase and the fixes that have been applied.
+This document outlines all fixes applied to FreeRouter, including the original Phase 0-1 fixes and the Phase 2-3 improvements.
 
 ---
 
-## 1. Health-Based Fallback Adjustment ✅
+## Phase 2 & 3 Additions (2026-03-26)
+
+### Circuit Breaker Pattern ✅ NEW
+
+**File**: `freerouter/src/freerouter/circuit_breaker.py`
+
+Implements automatic circuit breaking for failing providers:
+- Tracks consecutive failures per provider
+- Opens circuit after threshold failures
+- Allows recovery attempts after timeout
+- Automatically closes on successful responses
+
+**Configuration**:
+```bash
+CIRCUIT_BREAKER_FAILURE_THRESHOLD=5  # Failures before circuit opens
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT=60  # Seconds before retry
+CIRCUIT_BREAKER_SUCCESS_THRESHOLD=1  # Successes to close circuit
+```
+
+**States**:
+- `CLOSED`: Normal operation, requests flow through
+- `OPEN`: Provider bypassed, too many recent failures
+- `HALF_OPEN`: Testing if provider recovered
+
+---
+
+### Redis-Backed Rate Limit Store ✅ NEW
+
+**File**: `freerouter/src/freerouter/rate_limit_store.py`
+
+Distributed rate limit storage for multi-instance deployments:
+- Abstract base class for swappable backends
+- InMemoryRateLimitStore (default, single instance)
+- RedisRateLimitStore (recommended for production)
+
+**Configuration**:
+```bash
+RATE_LIMIT_BACKEND=redis  # or 'memory'
+REDIS_URL=redis://localhost:6379/0
+```
+
+**Usage**:
+```python
+from freerouter.rate_limit_store import get_rate_limit_store
+
+store = get_rate_limit_store()
+if store.is_rate_limited("groq"):
+    # Try another provider
+```
+
+---
+
+### Configurable Timeouts ✅ NEW
+
+**Files**: `freerouter/src/freerouter/providers.py`, `freerouter/src/freerouter/router.py`
+
+All HTTP timeouts are now configurable:
+- Global defaults via environment variables
+- Per-provider overrides supported
+- Applied to both streaming and non-streaming requests
+
+**Configuration**:
+```bash
+# Global timeouts
+FREEROUTER_CONNECT_TIMEOUT=10.0
+FREEROUTER_READ_TIMEOUT=120.0
+
+# Provider-specific (override global)
+OPENAI_CONNECT_TIMEOUT=15.0
+OPENAI_READ_TIMEOUT=180.0
+GROQ_CONNECT_TIMEOUT=8.0
+```
+
+---
+
+## Phase 0-1 Fixes
+
+### 1. Health-Based Fallback Adjustment ✅
 
 **Problem**: The health checker was tracking provider status but the proxy never used this information to adjust fallback chains. Unhealthy providers remained in fallback chains, causing unnecessary request failures.
 

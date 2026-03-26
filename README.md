@@ -167,6 +167,31 @@ apps/api/
 | `NOTION_API_KEY` | `.env` | Notion API integration |
 | `LOG_LEVEL` | `.env` | Logging verbosity (default: INFO) |
 
+### New Configuration (Phase 2 & 3)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RATE_LIMIT_BACKEND` | `memory` | Rate limit storage: `memory` or `redis` |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | `5` | Failures before circuit opens |
+| `CIRCUIT_BREAKER_RECOVERY_TIMEOUT` | `60` | Seconds before retry |
+| `FREEROUTER_CONNECT_TIMEOUT` | `10.0` | HTTP connect timeout (seconds) |
+| `FREEROUTER_READ_TIMEOUT` | `120.0` | HTTP read timeout (seconds) |
+| `ESCALATION_ENABLED` | `true` | Enable escalation alerts |
+| `ESCALATION_WEBHOOK_URL` | - | Webhook URL for alerts |
+| `ESCALATION_MIN_SCORE` | `50.0` | Minimum score to trigger escalation |
+
+## Documentation
+
+| Document | Audience | Description |
+|----------|----------|-------------|
+| `docs/ARCHITECTURE.md` | Developers | System architecture overview |
+| `docs/PHASE_2_3_IMPLEMENTATION_GUIDE.md` | Developers | Phase 2 & 3 implementation details |
+| `docs/KIDS_GUIDE.md` | Everyone | Simple explanations of changes |
+| `docs/CHANGES.json` | AI Systems | Structured change documentation |
+| `freerouter/FIXES_APPLIED.md` | Developers | FreeRouter-specific fixes |
+| `freerouter/USAGE.md` | Developers | FreeRouter usage examples |
+
 ## API Reference
 
 | Endpoint | Method | Description |

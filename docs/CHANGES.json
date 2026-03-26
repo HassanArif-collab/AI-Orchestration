@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Orchestration System - Phase 2 & 3 Changes",
+  "version": "2.0.0",
+  "generated": "2026-03-26",
+  "description": "Structured documentation of all Phase 2 and Phase 3 implementations for AI system consumption",
+  
+  "phases": {
+    "phase_2": {
+      "name": "High Priority Fixes",
+      "priority": "P1",
+      "issues": {
+        "P1-01": {
+          "title": "Redis-backed Rate Limit Store",
+          "category": "reliability",
+          "severity": "high",
+          "files_created": ["freerouter/src/freerouter/rate_limit_store.py"],
+          "files_modified": ["freerouter/src/freerouter/providers.py"],
+          "description": "Added Redis as a distributed storage backend for rate limit tracking, enabling multi-instance deployments",
+          "configuration": {
+            "RATE_LIMIT_BACKEND": {"type": "string", "default": "memory", "options": ["memory", "redis"]},
+            "REDIS_URL": {"type": "string", "default": "redis://localhost:6379/0"}
+          },
+          "classes": {
+            "RateLimitStore": {"type": "abstract_base_class", "methods": ["get", "set", "increment"]},
+            "InMemoryRateLimitStore": {"type": "concrete_class", "inherits": "RateLimitStore"},
+            "RedisRateLimitStore": {"type": "concrete_class", "inherits": "RateLimitStore", "dependencies": ["redis"]}
+          },
+          "backward_compatible": true
+        },
+        "P1-02": {
+          "title": "Circuit Breaker Pattern",
+          "category": "reliability",
+          "severity": "high",
+          "files_created": ["freerouter/src/freerouter/circuit_breaker.py"],
+          "files_modified": ["freerouter/src/freerouter/router.py"],
+          "description": "Implemented circuit breaker to automatically stop using failing providers and allow recovery",
+          "configuration": {
+            "CIRCUIT_BREAKER_FAILURE_THRESHOLD": {"type": "integer", "default": 5},
+            "CIRCUIT_BREAKER_RECOVERY_TIMEOUT": {"type": "integer", "default": 60, "unit": "seconds"},
+            "CIRCUIT_BREAKER_SUCCESS_THRESHOLD": {"type": "integer", "default": 1}
+          },
+          "classes": {
+            "CircuitBreaker": {
+              "type": "class",
+              "states": ["CLOSED", "OPEN", "HALF_OPEN"],
+              "methods": ["record_success", "record_failure", "should_allow_request"]
+            },
+            "CircuitBreakerManager": {
+              "type": "class",
+              "methods": ["get_circuit_breaker", "reset_all"]
+            }
+          },
+          "backward_compatible": true
+        },
+        "P1-03": {
+          "title": "Configurable HTTP Timeouts",
+          "category": "performance",
+          "severity": "high",
+          "files_modified": ["freerouter/src/freerouter/providers.py", "freerouter/src/freerouter/router.py"],
+          "description": "Made HTTP timeout values configurable through environment variables",
+          "configuration": {
+            "FREEROUTER_CONNECT_TIMEOUT": {"type": "float", "default": 10.0, "unit": "seconds"},
+            "FREEROUTER_READ_TIMEOUT": {"type": "float", "default": 120.0, "unit": "seconds"},
+            "{PROVIDER}_CONNECT_TIMEOUT": {"type": "float", "description": "Provider-specific connect timeout override"},
+            "{PROVIDER}_READ_TIMEOUT": {"type": "float", "description": "Provider-specific read timeout override"}
+          },
+          "functions": {
+            "get_provider_timeouts": {
+              "parameters": ["provider_name"],
+              "returns": {"connect_timeout": "float", "read_timeout": "float"}
+            }
+          },
+          "backward_compatible": true
+        },
+        "P1-09": {
+          "title": "Escalation System",
+          "category": "reliability",
+          "severity": "high",
+          "files_created": ["packages/core/escalation.py"],
+          "files_modified": ["packages/content_factory/evaluation/loop.py"],
+          "description": "Created escalation service to send alerts when quality gate failures occur",
+          "configuration": {
+            "ESCALATION_ENABLED": {"type": "boolean", "default": true},
+            "ESCALATION_WEBHOOK_URL": {"type": "string", "required": false},
+            "ESCALATION_WEBHOOK_TYPE": {"type": "string", "default": "default", "options": ["default", "slack", "discord"]},
+            "ESCALATION_MIN_SCORE": {"type": "float", "default": 50.0}
+          },
+          "classes": {
+            "EscalationService": {
+              "type": "class",
+              "methods": ["escalate", "escalate_quality_gate_failure"],
+              "levels": ["INFO", "WARNING", "ERROR", "CRITICAL"]
+            }
+          },
+          "backward_compatible": true
+        },
+        "P1-11": {
+          "title": "Race Condition Fix in Parallel Stages",
+          "category": "reliability",
+          "severity": "high",
+          "files_modified": ["packages/pipeline/runner.py"],
+          "description": "Added asyncio.Lock to prevent race conditions when multiple parallel stages update shared state",
+          "changes": {
+            "added": ["_state_lock", "_update_stage_status_atomic", "_update_run_state_atomic"],
+            "pattern": "All state modifications now acquire lock before updating"
+          },
+          "backward_compatible": true
+        }
+      }
+    },
+    "phase_3": {
+      "name": "Medium Priority Fixes",
+      "priority": "P2",
+      "issues": {
+        "P2-01": {
+          "title": "Logging Initialization Fix",
+          "category": "performance",
+          "severity": "medium",
+          "files_modified": ["packages/core/logger.py"],
+          "description": "Made logging.basicConfig() run only once per process using module-level flags and threading.Lock",
+          "functions_added": ["_configure_logging_once", "_configure_structlog_once"],
+          "variables_added": ["_logging_configured", "_structlog_configured", "_config_lock"],
+          "backward_compatible": true
+        },
+        "P2-02": {
+          "title": "Specific Exception Handling in Retry",
+          "category": "reliability",
+          "severity": "medium",
+          "files_modified": ["packages/core/retry.py"],
+          "description": "Changed retry logic to only retry on transient network errors, not on programming errors",
+          "constants_added": {
+            "DEFAULT_RETRYABLE_EXCEPTIONS": ["ConnectionError", "ConnectionRefusedError", "ConnectionResetError", "TimeoutError", "asyncio.TimeoutError", "OSError"]
+          },
+          "functions_added": ["is_retryable_exception"],
+          "behavior_change": "Non-retryable exceptions are logged and re-raised immediately",
+          "backward_compatible": true
+        },
+        "P2-03": {
+          "title": "Resource Leak Fix in run_async",
+          "category": "reliability",
+          "severity": "medium",
+          "files_modified": ["packages/memory/client.py"],
+          "description": "Fixed event loop handling to properly close loops that were created, preventing resource leaks",
+          "changes": {
+            "added": ["created_loop flag", "finally block with loop.close()"],
+            "fixed": "Event loops are now properly closed when created by run_async"
+          },
+          "backward_compatible": true
+        },
+        "P2-04": {
+          "title": "Environment Variable Validation",
+          "category": "code_quality",
+          "severity": "medium",
+          "files_modified": ["packages/core/config.py"],
+          "description": "Added pydantic field validators for configuration values with clear error messages",
+          "validators_added": [
+            "validate_log_level",
+            "validate_freerouter_url",
+            "validate_zep_base_url",
+            "validate_quality_threshold",
+            "validate_max_iterations",
+            "validate_data_dir",
+            "validate_user_id"
+          ],
+          "classes_added": ["ConfigurationError"],
+          "functions_added": ["validate_startup_config"],
+          "backward_compatible": true
+        },
+        "P2-06": {
+          "title": "Sync Context Manager for RouterClient",
+          "category": "code_quality",
+          "severity": "medium",
+          "files_modified": ["packages/router/client.py"],
+          "description": "Added __enter__ and __exit__ methods to RouterClient for sync context manager support",
+          "methods_added": ["__enter__", "__exit__"],
+          "backward_compatible": true
+        },
+        "P2-07": {
+          "title": "Async-Native ZepMemoryClient",
+          "category": "performance",
+          "severity": "medium",
+          "files_modified": ["packages/memory/client.py"],
+          "description": "Created AsyncZepMemoryClient class with native async methods, avoiding event loop bridging",
+          "classes_added": {
+            "AsyncZepMemoryClient": {
+              "methods": ["create_user", "create_session", "add_message", "add_facts", "search_memory", "clear_cache"],
+              "context_manager": true,
+              "all_async": true
+            }
+          },
+          "functions_added": ["with_retry_async", "get_async_zep_client"],
+          "backward_compatible": true
+        },
+        "P2-08": {
+          "title": "Concurrent YouTube Fetching",
+          "category": "performance",
+          "severity": "medium",
+          "files_modified": ["packages/integrations/youtube/client.py"],
+          "description": "Made competitor video fetching run in parallel using ThreadPoolExecutor",
+          "changes": {
+            "added": ["_youtube_executor ThreadPoolExecutor", "get_competitor_videos_async method"],
+            "optimized": "get_competitor_videos now uses concurrent fetching for multiple channels"
+          },
+          "backward_compatible": true
+        },
+        "P2-09": {
+          "title": "SSRF Prevention in Health Check",
+          "category": "security",
+          "severity": "high",
+          "files_modified": ["packages/router/client.py"],
+          "description": "Added URL validation to prevent Server-Side Request Forgery attacks",
+          "constants_added": {
+            "PRIVATE_IP_RANGES": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "0.0.0.0/8", "::1/128", "fc00::/7", "fe80::/10"],
+            "ALLOWED_SCHEMES": ["http", "https"],
+            "DEFAULT_ALLOWED_HOSTS": ["localhost", "127.0.0.1", "::1"]
+          },
+          "functions_added": ["is_private_ip", "validate_health_check_url"],
+          "security_impact": "Prevents requests to private/internal IP addresses",
+          "backward_compatible": true
+        },
+        "P2-10": {
+          "title": "Log Sanitization",
+          "category": "security",
+          "severity": "high",
+          "files_modified": ["packages/core/logger.py"],
+          "description": "Added functions to sanitize sensitive data before logging",
+          "constants_added": {
+            "SENSITIVE_FIELDS": ["api_key", "apikey", "token", "access_token", "refresh_token", "password", "passwd", "secret", "secret_key", "authorization", "bearer", "credential", "private_key"]
+          },
+          "functions_added": ["_sanitize_value", "sanitize_dict"],
+          "security_impact": "Prevents sensitive data from appearing in logs",
+          "backward_compatible": true
+        }
+      }
+    }
+  },
+  
+  "api_changes": {
+    "new_classes": [
+      {"name": "RateLimitStore", "module": "freerouter.rate_limit_store", "type": "abstract_base_class"},
+      {"name": "InMemoryRateLimitStore", "module": "freerouter.rate_limit_store", "type": "class"},
+      {"name": "RedisRateLimitStore", "module": "freerouter.rate_limit_store", "type": "class"},
+      {"name": "CircuitBreaker", "module": "freerouter.circuit_breaker", "type": "class"},
+      {"name": "CircuitBreakerManager", "module": "freerouter.circuit_breaker", "type": "class"},
+      {"name": "EscalationService", "module": "packages.core.escalation", "type": "class"},
+      {"name": "AsyncZepMemoryClient", "module": "packages.memory.client", "type": "class"},
+      {"name": "ConfigurationError", "module": "packages.core.config", "type": "exception"}
+    ],
+    "new_functions": [
+      {"name": "get_rate_limit_store", "module": "freerouter.rate_limit_store"},
+      {"name": "get_provider_timeouts", "module": "freerouter.providers"},
+      {"name": "is_retryable_exception", "module": "packages.core.retry"},
+      {"name": "sanitize_dict", "module": "packages.core.logger"},
+      {"name": "validate_startup_config", "module": "packages.core.config"},
+      {"name": "get_async_zep_client", "module": "packages.memory.client"},
+      {"name": "validate_health_check_url", "module": "packages.router.client"},
+      {"name": "is_private_ip", "module": "packages.router.client"}
+    ]
+  },
+  
+  "configuration_schema": {
+    "rate_limiting": {
+      "RATE_LIMIT_BACKEND": {"type": "enum", "values": ["memory", "redis"], "default": "memory"},
+      "REDIS_URL": {"type": "string", "format": "uri", "default": "redis://localhost:6379/0"}
+    },
+    "circuit_breaker": {
+      "CIRCUIT_BREAKER_FAILURE_THRESHOLD": {"type": "integer", "minimum": 1, "default": 5},
+      "CIRCUIT_BREAKER_RECOVERY_TIMEOUT": {"type": "integer", "minimum": 1, "default": 60},
+      "CIRCUIT_BREAKER_SUCCESS_THRESHOLD": {"type": "integer", "minimum": 1, "default": 1}
+    },
+    "timeouts": {
+      "FREEROUTER_CONNECT_TIMEOUT": {"type": "number", "minimum": 1.0, "default": 10.0},
+      "FREEROUTER_READ_TIMEOUT": {"type": "number", "minimum": 1.0, "default": 120.0}
+    },
+    "escalation": {
+      "ESCALATION_ENABLED": {"type": "boolean", "default": true},
+      "ESCALATION_WEBHOOK_URL": {"type": "string", "format": "uri", "required": false},
+      "ESCALATION_WEBHOOK_TYPE": {"type": "enum", "values": ["default", "slack", "discord"], "default": "default"},
+      "ESCALATION_MIN_SCORE": {"type": "number", "minimum": 0, "maximum": 100, "default": 50.0}
+    }
+  },
+  
+  "migration": {
+    "breaking_changes": [],
+    "deprecations": [],
+    "recommended_actions": [
+      "Use AsyncZepMemoryClient instead of ZepMemoryClient for async code",
+      "Add validate_startup_config() call at application startup",
+      "Use context managers for RouterClient",
+      "Use sanitize_dict() when logging potentially sensitive data"
+    ]
+  },
+  
+  "testing": {
+    "new_test_files": [],
+    "updated_test_files": [
+      "tests/test_router.py",
+      "tests/test_memory.py",
+      "tests/test_core.py"
+    ],
+    "coverage_requirements": {
+      "rate_limit_store": ">=80%",
+      "circuit_breaker": ">=80%",
+      "escalation": ">=70%"
+    }
+  }
+}
