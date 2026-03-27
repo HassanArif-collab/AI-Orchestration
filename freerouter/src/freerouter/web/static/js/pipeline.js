@@ -21,7 +21,9 @@ const Pipeline = {
       this.tasks = data.tasks || [];
     } catch (err) {
       console.error("Pipeline: failed to fetch tasks", err);
-      UI.toast("Failed to load pipeline tasks", "error");
+      if (typeof showToast === 'function') {
+        showToast("Failed to load pipeline tasks", "error");
+      }
     }
   },
 
@@ -30,6 +32,7 @@ const Pipeline = {
     columns.forEach(col => {
       const stage = parseInt(col.dataset.stage);
       const list = col.querySelector('.task-list');
+      if (!list) return;
       list.innerHTML = '';
 
       const stageTasks = this.tasks.filter(t => t.stage === stage);
@@ -47,10 +50,13 @@ const Pipeline = {
     card.draggable = true;
     card.style.borderLeftColor = task.color || '#ccc';
 
+    const safeTitle = typeof escapeHtml === 'function' ? escapeHtml(task.title) : this.escapeHtml(task.title);
+    const safeStatus = typeof escapeHtml === 'function' ? escapeHtml(task.status) : this.escapeHtml(task.status);
+
     card.innerHTML = `
-      <div class="task-title">${UI.escapeHtml(task.title)}</div>
+      <div class="task-title">${safeTitle}</div>
       <div class="task-meta">
-        <span class="task-status">${task.status}</span>
+        <span class="task-status">${safeStatus}</span>
         <span class="task-time">${this.formatTime(task.updated_at)}</span>
       </div>
     `;
@@ -67,6 +73,12 @@ const Pipeline = {
     };
 
     return card;
+  },
+
+  // Fallback escapeHtml if ui.js not loaded
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   },
 
   formatTime(iso) {
@@ -86,9 +98,17 @@ const Pipeline = {
       };
     });
 
-    // Drawer close
-    document.querySelector('.close-drawer').onclick = () => this.closeDrawer();
-    document.querySelector('.drawer-overlay').onclick = () => this.closeDrawer();
+    // Close drawer button
+    const closeBtn = document.querySelector('.drawer .close-btn');
+    if (closeBtn) {
+      closeBtn.onclick = () => this.closeDrawer();
+    }
+
+    // Drawer overlay click to close
+    const overlay = document.querySelector('.drawer-overlay');
+    if (overlay) {
+      overlay.onclick = () => this.closeDrawer();
+    }
   },
 
   async createTask(title, stage) {
@@ -99,11 +119,15 @@ const Pipeline = {
         body: JSON.stringify({ title, stage })
       });
       if (resp.ok) {
-        UI.toast("Task created", "success");
+        if (typeof showToast === 'function') {
+          showToast("Task created", "success");
+        }
         // Task will be added via SSE
       }
     } catch (err) {
-      UI.toast("Failed to create task", "error");
+      if (typeof showToast === 'function') {
+        showToast("Failed to create task", "error");
+      }
     }
   },
 
@@ -186,9 +210,13 @@ const Pipeline = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stage })
       });
-      if (!resp.ok) UI.toast("Failed to move task", "error");
+      if (!resp.ok && typeof showToast === 'function') {
+        showToast("Failed to move task", "error");
+      }
     } catch (err) {
-      UI.toast("Network error", "error");
+      if (typeof showToast === 'function') {
+        showToast("Network error", "error");
+      }
     }
   },
 
@@ -211,54 +239,73 @@ const Pipeline = {
 
   updateDrawer(task) {
     document.getElementById('drawer-title').textContent = task.title;
-    document.getElementById('drawer-status').textContent = `Status: ${task.status}`;
-    document.getElementById('drawer-id').textContent = `ID: ${task.id.substring(0,8)}`;
+    
+    const statusEl = document.getElementById('drawer-status');
+    if (statusEl) statusEl.textContent = `Status: ${task.status}`;
+    
+    const idEl = document.getElementById('drawer-id');
+    if (idEl) idEl.textContent = `ID: ${task.id.substring(0,8)}`;
     
     const stageBadge = document.getElementById('drawer-stage-badge');
     const stages = ["", "Topic Finding", "Suggested Topics", "Researching", "Scripting", "Visuals", "Notion"];
-    stageBadge.textContent = stages[task.stage] || "Stage " + task.stage;
+    if (stageBadge) {
+      stageBadge.textContent = stages[task.stage] || "Stage " + task.stage;
+    }
 
     // Artifacts
     const artifactBox = document.getElementById('drawer-artifact');
-    let content = "";
-    if (task.stage === 3) content = task.research || "Researching...";
-    else if (task.stage === 4) content = task.script || "Writing script...";
-    else if (task.stage === 5) content = task.visual_cues || "Generating visual cues...";
-    else if (task.stage === 6) content = task.script || task.content || "Final content";
-    else content = task.content || "Waiting for output...";
-    
-    artifactBox.textContent = content;
+    if (artifactBox) {
+      let content = "";
+      if (task.stage === 3) content = task.research || "Researching...";
+      else if (task.stage === 4) content = task.script || "Writing script...";
+      else if (task.stage === 5) content = task.visual_cues || "Generating visual cues...";
+      else if (task.stage === 6) content = task.script || task.content || "Final content";
+      else content = task.content || "Waiting for output...";
+      
+      artifactBox.textContent = content;
+    }
 
     // Notion Link
     const notionContainer = document.getElementById('notion-link-container');
     const notionLink = document.getElementById('notion-link');
-    if (task.notion_url) {
-      notionContainer.classList.remove('hidden');
-      notionLink.href = task.notion_url;
-    } else {
-      notionContainer.classList.add('hidden');
+    if (notionContainer && notionLink) {
+      if (task.notion_url) {
+        notionContainer.classList.remove('hidden');
+        notionLink.href = task.notion_url;
+      } else {
+        notionContainer.classList.add('hidden');
+      }
     }
 
     // Thoughts (if not already rendered)
     const thoughtLog = document.getElementById('drawer-thoughts');
-    if (thoughtLog.dataset.taskId !== task.id) {
+    if (thoughtLog && thoughtLog.dataset.taskId !== task.id) {
         thoughtLog.innerHTML = '';
         thoughtLog.dataset.taskId = task.id;
-        const thoughts = JSON.parse(task.thoughts || '[]');
-        thoughts.forEach(t => this.appendThought(t));
+        try {
+          const thoughts = JSON.parse(task.thoughts || '[]');
+          thoughts.forEach(t => this.appendThought(t));
+        } catch (e) {
+          console.error("Failed to parse thoughts:", e);
+        }
     }
   },
 
   appendThought(thought) {
     const thoughtLog = document.getElementById('drawer-thoughts');
+    if (!thoughtLog) return;
+    
     const item = document.createElement('div');
     item.className = 'thought-item';
     
     const time = thought.timestamp ? new Date(thought.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+    const safeText = typeof escapeHtml === 'function' 
+      ? escapeHtml(thought.content || thought.text || '') 
+      : this.escapeHtml(thought.content || thought.text || '');
     
     item.innerHTML = `
       <div class="thought-time">${time}</div>
-      <div class="thought-text">${UI.escapeHtml(thought.content || thought.text || '')}</div>
+      <div class="thought-text">${safeText}</div>
     `;
     
     thoughtLog.appendChild(item);
@@ -267,7 +314,10 @@ const Pipeline = {
 
   closeDrawer() {
     this.activeTaskId = null;
-    document.getElementById('task-drawer').classList.add('hidden');
-    document.getElementById('drawer-thoughts').dataset.taskId = '';
+    const drawer = document.getElementById('task-drawer');
+    if (drawer) drawer.classList.add('hidden');
+    
+    const thoughtLog = document.getElementById('drawer-thoughts');
+    if (thoughtLog) thoughtLog.dataset.taskId = '';
   }
 };

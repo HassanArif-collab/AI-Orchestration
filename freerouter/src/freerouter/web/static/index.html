@@ -94,40 +94,39 @@
 
   <!-- Task Detail Drawer -->
   <div id="task-drawer" class="drawer hidden">
+    <div class="drawer-overlay"></div>
     <div class="drawer-content">
       <div class="drawer-header">
-        <button class="close-btn" onclick="Pipeline.closeDrawer()">×</button>
+        <button class="close-btn" id="close-drawer-btn">×</button>
         <h2 id="drawer-title">Task Title</h2>
         <div class="drawer-meta">
           <span id="drawer-status">Status: idle</span>
           <span id="drawer-id">ID: ...</span>
-          <span id="drawer-stage-badge" class="stage-badge">Stage 1</span>
         </div>
+        <div class="stage-badge" id="drawer-stage-badge">Stage 1</div>
       </div>
 
       <div class="drawer-body">
         <!-- Artifact Display -->
-        <div class="artifact-section">
+        <div class="drawer-section">
           <h3>Current Output</h3>
           <div id="drawer-artifact" class="artifact-box">Loading...</div>
         </div>
 
         <!-- Notion Link -->
-        <div id="notion-link-container" class="notion-section hidden">
+        <div id="notion-link-container" class="drawer-section hidden">
           <h3>Published to Notion</h3>
           <a id="notion-link" href="#" target="_blank" class="notion-link">Open in Notion</a>
         </div>
 
         <!-- Agent Thoughts Stream -->
-        <div class="thoughts-section">
+        <div class="drawer-section">
           <h3>Agent Monologue</h3>
           <div id="drawer-thoughts" class="thought-log" data-task-id=""></div>
         </div>
       </div>
     </div>
   </div>
-
-  <!-- Load order matters: ui.js first (defines helpers), then feature modules -->
 
   <!-- Load order matters: ui.js first (defines helpers), then feature modules -->
   <script src="/static/js/ui.js"></script>
