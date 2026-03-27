@@ -35,18 +35,20 @@ ZEP INTEGRATION:
   analysis and TopicFinderAgent's context string.
 """
 
+import asyncio
 import json
 from pathlib import Path
 from datetime import datetime, timezone
 
 from packages.core.logger import get_logger
 from packages.content_factory.topic_finder.models import AudienceModel
-from packages.memory.client import ZepMemoryClient
+from packages.memory.client import AsyncZepMemoryClient
 from packages.core.config import get_settings
 
 logger = get_logger(__name__)
 
 AUDIENCE_MODEL_PATH = Path("packages/data/audience_model.json")
+
 
 class FeedbackLoop:
     """Closes the loop between published analytics and future topic discovery.
@@ -72,7 +74,7 @@ class FeedbackLoop:
     """
     def __init__(self) -> None:
         self.model = self._load_audience_model()
-        self.zep_client = ZepMemoryClient()
+        self.zep_client = AsyncZepMemoryClient()
         self.audience_user_id = get_settings().ZEP_AUDIENCE_USER_ID
         self.zep_session_id = f"{self.audience_user_id}_session"
 
@@ -207,9 +209,16 @@ class FeedbackLoop:
         self.model.last_updated = datetime.now(timezone.utc)
         self.save_audience_model()
         
-        # Write facts to Zep
+        # Write facts to Zep (async, non-blocking)
         if facts:
-            self.zep_client.add_facts(session_id=self.zep_session_id, facts=facts)
+            asyncio.create_task(self._write_facts_to_zep(facts))
             logger.info(f"wrote_{len(facts)}_facts_to_zep_for_genre: {genre}")
             
         logger.info(f"recalibrated_feedback_loop_for_genre: {genre}")
+
+    async def _write_facts_to_zep(self, facts: list[dict]) -> None:
+        """Write facts to Zep (async helper for background execution)."""
+        try:
+            await self.zep_client.add_facts(session_id=self.zep_session_id, facts=facts)
+        except Exception as e:
+            logger.debug(f"zep_write_failed: {e}")

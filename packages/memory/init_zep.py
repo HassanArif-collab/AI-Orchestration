@@ -28,16 +28,18 @@ Data sources migrated:
   packages/data/audience_model.json  — audience intelligence baseline
   packages/data/learning_log.jsonl   — experiment mutation history
 """
+import asyncio
 import json
 import logging
 from pathlib import Path
 from packages.core.config import get_settings
-from packages.memory.client import ZepMemoryClient
+from packages.memory.client import AsyncZepMemoryClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("InitZep")
 
-def migrate_audience_model(client: ZepMemoryClient, audience_user_id: str):
+
+async def migrate_audience_model(client: AsyncZepMemoryClient, audience_user_id: str):
     """Migrate local audience_model.json to Zep.
     
     Reads the existing audience model JSON file and converts each
@@ -92,13 +94,14 @@ def migrate_audience_model(client: ZepMemoryClient, audience_user_id: str):
             })
 
         session_id = f"{audience_user_id}_session"
-        client.create_session(session_id=session_id, user_id=audience_user_id)
-        client.add_facts(session_id=session_id, facts=facts)
+        await client.create_session(session_id=session_id, user_id=audience_user_id)
+        await client.add_facts(session_id=session_id, facts=facts)
         logger.info(f"Successfully migrated {len(facts)} facts to audience model.")
     except Exception as e:
         logger.error(f"Migration error for audience model: {e}")
 
-def migrate_learning_logs(client: ZepMemoryClient, learning_user_id: str):
+
+async def migrate_learning_logs(client: AsyncZepMemoryClient, learning_user_id: str):
     """Migrate local learning_log.jsonl to Zep.
     
     Reads each line of the JSONL file (one experiment result per line)
@@ -145,15 +148,16 @@ def migrate_learning_logs(client: ZepMemoryClient, learning_user_id: str):
                 facts.append(fact_dict)
 
         session_id = f"{learning_user_id}_session"
-        client.create_session(session_id=session_id, user_id=learning_user_id)
+        await client.create_session(session_id=session_id, user_id=learning_user_id)
         
         # client.add_facts already batches sizes of 50 internally
-        client.add_facts(session_id=session_id, facts=facts)
+        await client.add_facts(session_id=session_id, facts=facts)
         logger.info(f"Successfully migrated {len(facts)} learning logs.")
     except Exception as e:
         logger.error(f"Migration error for learning logs: {e}")
 
-def main():
+
+async def async_main():
     """Main entry point for Zep initialization.
     
     Creates both Zep users and migrates existing local data.
@@ -167,18 +171,24 @@ def main():
     if not settings.ZEP_API_KEY:
         logger.warning("No ZEP_API_KEY found. Operating in degraded mode. Migration will be a no-op.")
 
-    client = ZepMemoryClient()
+    client = AsyncZepMemoryClient()
     
     # Init users
     logger.info("Initializing Zep Users...")
-    client.create_user(user_id=audience_user_id, metadata={"purpose": "Pakistani Audience Model evolution"})
-    client.create_user(user_id=learning_user_id, metadata={"purpose": "Cross-Cycle Pattern Synthesis from Learning Logs"})
+    await client.create_user(user_id=audience_user_id, metadata={"purpose": "Pakistani Audience Model evolution"})
+    await client.create_user(user_id=learning_user_id, metadata={"purpose": "Cross-Cycle Pattern Synthesis from Learning Logs"})
     
     # Migrate data
-    migrate_audience_model(client, audience_user_id)
-    migrate_learning_logs(client, learning_user_id)
+    await migrate_audience_model(client, audience_user_id)
+    await migrate_learning_logs(client, learning_user_id)
 
     logger.info("Initialization and Migration Complete.")
+
+
+def main():
+    """Sync entry point that wraps async_main."""
+    asyncio.run(async_main())
+
 
 if __name__ == "__main__":
     main()

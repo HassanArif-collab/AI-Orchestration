@@ -1,4 +1,4 @@
-"""Tests for ZepMemoryClient and memory helpers.
+"""Tests for AsyncZepMemoryClient and memory helpers.
 
 Tests verify graceful degradation - all methods return empty values
 when Zep is unavailable, and no exceptions are raised.
@@ -8,105 +8,106 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-class TestZepMemoryClient:
-    """Tests for ZepMemoryClient."""
+class TestAsyncZepMemoryClient:
+    """Tests for AsyncZepMemoryClient."""
 
     def test_no_exception_when_api_key_empty(self):
-        """ZepMemoryClient should not crash when api_key is empty."""
-        from packages.memory.client import ZepMemoryClient
+        """AsyncZepMemoryClient should not crash when api_key is empty."""
+        from packages.memory.client import AsyncZepMemoryClient
 
         # Should not raise any exception
-        client = ZepMemoryClient(api_key="")
+        client = AsyncZepMemoryClient(api_key="")
         assert client._client is None
 
     def test_no_exception_when_api_key_none(self):
-        """ZepMemoryClient should not crash when api_key is None."""
-        from packages.memory.client import ZepMemoryClient
+        """AsyncZepMemoryClient should not crash when api_key is None."""
+        from packages.memory.client import AsyncZepMemoryClient
 
         # Should not raise any exception
-        client = ZepMemoryClient(api_key=None)
+        client = AsyncZepMemoryClient(api_key=None)
         assert client._client is None
 
     @pytest.mark.asyncio
     async def test_create_user_returns_none_when_client_none(self):
         """create_user should return None (not crash) when _client is None."""
-        from packages.memory.client import ZepMemoryClient
+        from packages.memory.client import AsyncZepMemoryClient
 
-        client = ZepMemoryClient(api_key="")
+        client = AsyncZepMemoryClient(api_key="")
         result = await client.create_user("test_user")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_create_session_returns_none_when_client_none(self):
         """create_session should return None (not crash) when _client is None."""
-        from packages.memory.client import ZepMemoryClient
+        from packages.memory.client import AsyncZepMemoryClient
 
-        client = ZepMemoryClient(api_key="")
+        client = AsyncZepMemoryClient(api_key="")
         result = await client.create_session("test_session", "test_user")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_add_message_doesnt_crash_when_client_none(self):
         """add_message should not crash when _client is None."""
-        from packages.memory.client import ZepMemoryClient
+        from packages.memory.client import AsyncZepMemoryClient
 
-        client = ZepMemoryClient(api_key="")
+        client = AsyncZepMemoryClient(api_key="")
         # Should not raise
         await client.add_message("test_session", "user", "test message")
 
     @pytest.mark.asyncio
-    async def test_get_memory_returns_empty_dict_when_client_none(self):
-        """get_memory should return {} when _client is None."""
-        from packages.memory.client import ZepMemoryClient
-
-        client = ZepMemoryClient(api_key="")
-        result = await client.get_memory("test_session")
-        assert result == {}
-
-    @pytest.mark.asyncio
     async def test_search_memory_returns_empty_list_when_client_none(self):
         """search_memory should return [] when _client is None."""
-        from packages.memory.client import ZepMemoryClient
+        from packages.memory.client import AsyncZepMemoryClient
 
-        client = ZepMemoryClient(api_key="")
+        client = AsyncZepMemoryClient(api_key="")
         result = await client.search_memory("test_session", "test query")
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_get_facts_returns_empty_list_when_client_none(self):
-        """get_facts should return [] when _client is None."""
-        from packages.memory.client import ZepMemoryClient
+    async def test_add_facts_doesnt_crash_when_client_none(self):
+        """add_facts should not crash when _client is None."""
+        from packages.memory.client import AsyncZepMemoryClient
 
-        client = ZepMemoryClient(api_key="")
-        result = await client.get_facts("test_session")
-        assert result == []
+        client = AsyncZepMemoryClient(api_key="")
+        # Should not raise
+        await client.add_facts("test_session", [{"fact": "test fact"}])
 
     @pytest.mark.asyncio
     async def test_methods_handle_exceptions_gracefully(self):
         """All methods should catch exceptions and return default values."""
-        from packages.memory.client import ZepMemoryClient
+        from packages.memory.client import AsyncZepMemoryClient
 
-        client = ZepMemoryClient(api_key="fake_key")
+        client = AsyncZepMemoryClient(api_key="fake_key")
 
         # Mock the client to raise an exception
         client._client = MagicMock()
         client._client.user.add = AsyncMock(side_effect=Exception("API Error"))
         client._client.thread.create = AsyncMock(side_effect=Exception("API Error"))
         client._client.thread.add_messages = AsyncMock(side_effect=Exception("API Error"))
-        client._client.thread.get_user_context = AsyncMock(side_effect=Exception("API Error"))
+        client._client.graph.search = AsyncMock(side_effect=Exception("API Error"))
 
         # All should return defaults without raising
         await client.create_user("test_user")  # Should not raise
         await client.create_session("test_session", "test_user")  # Should not raise
         await client.add_message("test_session", "user", "test")  # Should not raise
-        result = await client.get_memory("test_session")
-        assert result == {}
+        await client.add_facts("test_session", [{"fact": "test"}])  # Should not raise
 
         result = await client.search_memory("test_session", "query")
         assert result == []
 
-        result = await client.get_facts("test_session")
-        assert result == []
+    def test_get_async_zep_client_factory(self):
+        """get_async_zep_client should return AsyncZepMemoryClient instance."""
+        from packages.memory.client import get_async_zep_client, AsyncZepMemoryClient
+
+        client = get_async_zep_client()
+        assert isinstance(client, AsyncZepMemoryClient)
+
+    def test_get_async_zep_client_with_custom_key(self):
+        """get_async_zep_client should accept custom API key."""
+        from packages.memory.client import get_async_zep_client
+
+        client = get_async_zep_client(api_key="custom_key")
+        assert client._api_key == "custom_key"
 
 
 class TestMemorySchemas:

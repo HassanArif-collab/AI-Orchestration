@@ -11,8 +11,8 @@ from packages.content_factory.orchestration.models import ProductionCycleRecord,
 from packages.content_factory.topic_finder.models import TopicBrief
 from datetime import datetime, timezone
 import uuid
-import time
-from packages.memory.client import ZepMemoryClient
+import asyncio
+from packages.memory.client import AsyncZepMemoryClient
 
 logger = get_logger("HermesMasterOrchestrator")
 
@@ -20,9 +20,9 @@ class MasterOrchestrator:
     def __init__(self):
         self.db = OrchestrationDB()
         self.max_concurrent_cycles = 2
-        self.zep_client = ZepMemoryClient()
+        self.zep_client = AsyncZepMemoryClient()
         
-    def check_and_start_new_cycle(self, reservoir_topics: list[TopicBrief]):
+    async def check_and_start_new_cycle(self, reservoir_topics: list[TopicBrief]):
         """Triggered by the Cron Scheduler or manual events. Scans for availability."""
         active = self.db.get_active_cycles()
         
@@ -50,16 +50,15 @@ class MasterOrchestrator:
         logger.info(f"started_new_cycle | cycle_id={cycle.cycle_id} topic={cycle.topic_statement[:40]}")
         
         # Initialize Zep Session for this Production Cycle
-        self.zep_client.create_user(user_id=cycle.cycle_id, metadata={"topic": cycle.topic_statement})
-        self.zep_client.create_session(session_id=cycle.cycle_id, user_id=cycle.cycle_id)
-        self.zep_client.add_facts(session_id=cycle.cycle_id, facts=[{
+        await self.zep_client.create_user(user_id=cycle.cycle_id, metadata={"topic": cycle.topic_statement})
+        await self.zep_client.create_session(session_id=cycle.cycle_id, user_id=cycle.cycle_id)
+        await self.zep_client.add_facts(session_id=cycle.cycle_id, facts=[{
             "fact": f"Started production cycle {cycle.cycle_id} for topic: {cycle.topic_statement} (Genre: {cycle.genre})",
             "source": "orchestrator",
             "phase": cycle.current_phase
         }])
         
         # Trigger the pipeline runner for this cycle (non-blocking)
-        import asyncio
         asyncio.create_task(self._trigger_pipeline(cycle.cycle_id, selected_topic))
 
     async def _trigger_pipeline(self, cycle_id: str, topic: TopicBrief) -> None:
@@ -73,7 +72,7 @@ class MasterOrchestrator:
         except Exception as e:
             logger.error(f"pipeline_trigger_failed: {e} cycle={cycle_id}")
         
-    def advance_phase(self, cycle_id: str, new_phase: str):
+    async def advance_phase(self, cycle_id: str, new_phase: str):
         """Sequential Routing enforcement."""
         # 1. Acquire Lock
         if not self.db.acquire_lock(cycle_id):
@@ -83,7 +82,7 @@ class MasterOrchestrator:
         try:
             # 2. Update DB (mocked as simple release for now)
             # Fetch, modify, save logic would go here.
-            self.zep_client.add_facts(session_id=cycle_id, facts=[{
+            await self.zep_client.add_facts(session_id=cycle_id, facts=[{
                 "fact": f"Advanced to phase {new_phase}",
                 "source": "orchestrator",
                 "phase": new_phase
@@ -93,7 +92,7 @@ class MasterOrchestrator:
             self.db.release_lock(cycle_id)
             return True
 
-    def handle_escalation(self, cycle_id: str, error_type: str, severity: str, context: dict):
+    async def handle_escalation(self, cycle_id: str, error_type: str, severity: str, context: dict):
         """Escalation Handler wrapping."""
         escalation = EscalationItem(
             escalation_id=str(uuid.uuid4()),
@@ -104,7 +103,7 @@ class MasterOrchestrator:
         )
         self.db.escalate(escalation)
         
-        self.zep_client.add_facts(session_id=cycle_id, facts=[{
+        await self.zep_client.add_facts(session_id=cycle_id, facts=[{
             "fact": f"Escalation triggered: {error_type} (Severity: {severity}). Context: {context}",
             "source": "orchestrator",
             "error_type": error_type,
@@ -122,7 +121,7 @@ class MasterOrchestrator:
         finally:
             self.db.release_lock(cycle_id)
 
-    def write_production_cycle_summary(
+    async def write_production_cycle_summary(
         self, 
         cycle_id: str, 
         topic_statement: str,
@@ -152,8 +151,8 @@ class MasterOrchestrator:
             "production_date": datetime.now(timezone.utc).isoformat()
         }
         
-        self.zep_client.add_facts(session_id=cycle_id, facts=[{
-            "content": narrative_summary,
+        await self.zep_client.add_facts(session_id=cycle_id, facts=[{
+            "fact": narrative_summary,
             "source": "production_cycle_summary",
             **metadata
         }])

@@ -32,13 +32,14 @@ MUTATION ZONES (three per script):
   Zone 3 only mutated AFTER Zone 1 and Zone 2 have been tried.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel
 
 from packages.core.logger import get_logger
-from packages.memory.client import ZepMemoryClient
+from packages.memory.client import AsyncZepMemoryClient
 from packages.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -115,7 +116,7 @@ class LearningLogger:
     def __init__(self, log_path: str = DEFAULT_LOG_PATH) -> None:
         self.log_path = Path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self.zep_client = ZepMemoryClient()
+        self.zep_client = AsyncZepMemoryClient()
         self.learning_user_id = get_settings().ZEP_LEARNING_USER_ID
         self.zep_session_id = f"{self.learning_user_id}_session"
 
@@ -132,7 +133,7 @@ class LearningLogger:
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write(entry.model_dump_json() + "\n")
             
-        # Zep dual-write
+        # Zep dual-write (async, run in background)
         content = (f"Experiment in cycle {entry.cycle_id} for genre {entry.genre_id}. "
                    f"Zone '{entry.mutation_zone}' mutation resulted in score "
                    f"{entry.baseline_score}% -> {entry.challenger_score}%. "
@@ -151,12 +152,21 @@ class LearningLogger:
             "score_after": entry.challenger_score,
             "promotion_decision": "Promoted" if entry.beat_baseline else "Discarded"
         }
-        self.zep_client.add_facts(session_id=self.zep_session_id, facts=[{"fact": content, **metadata}])
+        
+        # Run async Zep write in background
+        asyncio.create_task(self._write_to_zep(content, metadata))
 
         if entry.beat_baseline:
             logger.info(f"experiment_success: Zone {entry.mutation_zone} improved score from {entry.baseline_score:.1f}% to {entry.challenger_score:.1f}%")
         else:
             logger.info(f"experiment_failure: Zone {entry.mutation_zone} failed to beat {entry.baseline_score:.1f}%")
+
+    async def _write_to_zep(self, content: str, metadata: dict) -> None:
+        """Write a fact to Zep (async helper for background execution)."""
+        try:
+            await self.zep_client.add_facts(session_id=self.zep_session_id, facts=[{"fact": content, **metadata}])
+        except Exception as e:
+            logger.debug(f"zep_write_failed: {e}")
 
     def read_logs(self) -> list[LearningLogEntry]:
         """Read all experiment logs from local file.
