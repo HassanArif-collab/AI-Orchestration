@@ -11,6 +11,9 @@ FIXES APPLIED:
   1. Cache hit now actually returns cached script instead of ignoring it
   2. Added separate script cache for AdaptedScript objects
   3. Proper cache invalidation and refresh
+
+REFACTORED:
+  - ScriptCache replaced with unified FileCache from packages.core.cache
 """
 
 from typing import Any, Callable
@@ -24,78 +27,10 @@ from packages.pipeline.state import PipelineRun
 from packages.pipeline.research_cache import ResearchCache
 from packages.content_factory.topic_finder.finder import TopicFinderAgent
 from packages.core.config import get_settings
+from packages.core.cache import FileCache
 from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-class ScriptCache:
-    """Cache for AdaptedScript objects to enable full pipeline caching."""
-
-    def __init__(
-        self,
-        ttl_hours: int = 24,
-        cache_dir: Path | None = None,
-    ) -> None:
-        settings = get_settings()
-        self.ttl_hours = ttl_hours
-        self.cache_dir = cache_dir or Path(settings.DATA_DIR) / "script_cache"
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def _cache_key(self, topic: str, genre: str) -> str:
-        """Generate cache key from topic and genre."""
-        import hashlib
-        combined = f"{topic.lower().strip()}:{genre.lower().strip()}"
-        return hashlib.sha256(combined.encode()).hexdigest()[:16]
-
-    def _cache_path(self, topic: str, genre: str) -> Path:
-        """Get cache file path."""
-        return self.cache_dir / f"{self._cache_key(topic, genre)}.json"
-
-    def get(self, topic: str, genre: str) -> dict | None:
-        """Get cached script if exists and not expired."""
-        cache_file = self._cache_path(topic, genre)
-        if not cache_file.exists():
-            return None
-
-        try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Check TTL
-            cached_at_str = data.get("_cached_at")
-            if cached_at_str:
-                from datetime import datetime, timezone, timedelta
-                cached_at = datetime.fromisoformat(cached_at_str)
-                age = datetime.now(timezone.utc) - cached_at
-                if age > timedelta(hours=self.ttl_hours):
-                    cache_file.unlink(missing_ok=True)
-                    return None
-
-            logger.info(f"script_cache_hit: topic='{topic[:50]}...'")
-            return data.get("script")
-
-        except Exception as e:
-            logger.warning(f"script_cache_read_failed: {e}")
-            return None
-
-    def set(self, topic: str, genre: str, script: dict) -> None:
-        """Cache a script."""
-        cache_file = self._cache_path(topic, genre)
-        try:
-            data = {
-                "topic": topic,
-                "genre": genre,
-                "script": script,
-                "_cached_at": datetime.now(timezone.utc).isoformat(),
-            }
-            temp_file = cache_file.with_suffix(".tmp")
-            with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-            temp_file.rename(cache_file)
-            logger.info(f"script_cache_set: topic='{topic[:50]}...'")
-        except Exception as e:
-            logger.warning(f"script_cache_write_failed: {e}")
 
 
 async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[dict]:
@@ -171,6 +106,8 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
     from packages.content_factory.topic_finder.models import TopicBrief
     from packages.content_factory.evaluation.baseline import BaselineManager
 
+    settings = get_settings()
+    
     topic_data = run.get_output(Stage.HUMAN_TOPIC_APPROVAL)
     if not topic_data:
         logger.error("research_handler_missing_approved_topic")
@@ -199,7 +136,10 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
 
     if use_cache:
         # Check script cache first (full AdaptedScript)
-        script_cache = ScriptCache(ttl_hours=cache_ttl_hours)
+        script_cache = FileCache(
+            cache_dir=Path(settings.DATA_DIR) / "script_cache",
+            ttl_hours=cache_ttl_hours,
+        )
         cached_script = script_cache.get(brief.topic_statement, brief.genre_id)
 
         if cached_script:
@@ -242,7 +182,10 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
 
     # Cache the full script if caching is enabled
     if use_cache:
-        script_cache = ScriptCache(ttl_hours=cache_ttl_hours)
+        script_cache = FileCache(
+            cache_dir=Path(settings.DATA_DIR) / "script_cache",
+            ttl_hours=cache_ttl_hours,
+        )
         script_cache.set(brief.topic_statement, brief.genre_id, script.model_dump())
 
     return script.model_dump()

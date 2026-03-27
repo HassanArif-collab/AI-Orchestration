@@ -20,6 +20,7 @@ from packages.core.errors import (
     ZepMemoryError, IntegrationError,
 )
 from packages.core.logger import get_logger
+from packages.core.cache import FileCache
 
 __all__ = [
     "VideoIdea", "ResearchOutput", "Script", "ScriptSection",
@@ -30,5 +31,5 @@ __all__ = [
     "Settings", "get_settings",
     "PipelineError", "LLMClientError", "RateLimitError",
     "ZepMemoryError", "IntegrationError",
-    "get_logger",
+    "get_logger", "FileCache",
 ]
