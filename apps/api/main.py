@@ -85,6 +85,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Could not init Kanban DB: {e}")
     
+    # Bootstrap agents into registry
+    try:
+        from packages.agents.bootstrap import bootstrap_agents
+        bootstrap_agents()
+    except Exception as e:
+        print(f"Warning: Agent bootstrap failed (non-fatal): {e}")
+    
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
