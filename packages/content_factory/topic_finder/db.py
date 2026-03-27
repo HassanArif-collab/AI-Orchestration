@@ -131,6 +131,13 @@ class TopicReservoirDB:
 
     def _row_to_brief(self, row: sqlite3.Row) -> TopicBrief:
         """Convert a database row to a TopicBrief object."""
+        # Helper to safely get optional columns from sqlite3.Row
+        def get_col(row: sqlite3.Row, name: str, default=None):
+            if name in row.keys():
+                val = row[name]
+                return val if val is not None else default
+            return default
+
         return TopicBrief(
             brief_id=row["brief_id"],
             topic_statement=row["topic_statement"],
@@ -144,9 +151,9 @@ class TopicReservoirDB:
             timing_rationale=row["timing_rationale"],
             created_at=datetime.fromisoformat(row["created_at"]),
             status=row["status"],
-            content_type=row.get("content_type", "original") if "content_type" in row.keys() else "original",
-            adaptation_source_video_id=row.get("adaptation_source_video_id") if "adaptation_source_video_id" in row.keys() else None,
-            structural_reference_video_id=row.get("structural_reference_video_id") if "structural_reference_video_id" in row.keys() else None,
+            content_type=get_col(row, "content_type", "original"),
+            adaptation_source_video_id=get_col(row, "adaptation_source_video_id"),
+            structural_reference_video_id=get_col(row, "structural_reference_video_id"),
         )
 
 
