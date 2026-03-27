@@ -69,6 +69,11 @@ class MasterOrchestrator:
             run = await runner.create_run()
             self.db.update_pipeline_run_id(cycle_id, run.run_id)
             logger.info(f"pipeline_triggered | cycle={cycle_id} run={run.run_id}")
+            gate = await runner.run_until_gate(run)
+            if gate:
+                logger.info(f"pipeline_paused_at_gate | cycle={cycle_id} run={run.run_id} gate={gate.value}")
+            else:
+                logger.info(f"pipeline_completed | cycle={cycle_id} run={run.run_id}")
         except Exception as e:
             logger.error(f"pipeline_trigger_failed: {e} cycle={cycle_id}")
         
