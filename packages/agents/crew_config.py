@@ -5,12 +5,7 @@ and the CrewAI-based content creation agents (packages/content_factory/productio
 
 CURRENT STATUS:
   The functions here (create_research_crew, create_script_crew, create_visual_crew)
-  are skeleton implementations with TODOs. They exist to provide a consistent
-  interface for the pipeline runner to call without knowing whether CrewAI
-  is installed.
-
-  The REAL CrewAI agents are in packages/content_factory/production/agents.py
-  and are called directly from the RoundBasedProductionWorkflow.
+  create real CrewAI crews using agents from packages/content_factory/production/agents.py.
 
 CREWAI_AVAILABLE FLAG:
   Imported by packages/agents/__init__.py and exposed as a module-level flag.
@@ -22,16 +17,13 @@ CREWAI_AVAILABLE FLAG:
 WHEN TO USE THIS vs production/agents.py:
   This module: pipeline infrastructure that needs crew-level orchestration
   production/agents.py: Mode B original content creation (the real CrewAI work)
-
-TODO: Wire these skeleton functions to call production/agents.py so the
-pipeline infrastructure can trigger Mode B through a consistent interface.
 """
 
 from typing import Any
 
 # Try to import CrewAI, but make it optional
 try:
-    from crewai import Agent, Task, Crew
+    from crewai import Task, Crew, Process
 
     CREWAI_AVAILABLE = True
 except ImportError:
@@ -41,93 +33,80 @@ except ImportError:
 def create_research_crew(topic: str) -> Any:
     """Create a CrewAI crew for the research stage.
 
-    This is a SKELETON IMPLEMENTATION. The actual research crew is
-    created in packages/content_factory/production/agents.py: create_researcher()
-    
+    Uses the real Researcher agent from packages/content_factory/production/agents.py.
+
     Args:
         topic: Research topic
 
     Returns:
-        Crew object (or placeholder dict if CrewAI not available)
-    
-    TODO: Connect to RoundBasedProductionWorkflow._round_research()
+        Crew object when CrewAI is available, None otherwise
     """
-    if CREWAI_AVAILABLE:
-        # TODO: Implement with actual CrewAI crew
-        # Skills will be loaded from data/skills/researcher.md
-        agent = Agent(
-            role="Researcher",
-            goal="Research the given topic thoroughly",
-            backstory="Expert researcher with deep domain knowledge",
-            verbose=True,
-        )
-        task = Task(
-            description=f"Research the following topic: {topic}",
-            agent=agent,
-        )
-        return Crew(agents=[agent], tasks=[task], verbose=True)
+    if not CREWAI_AVAILABLE:
+        return None
 
-    # Return placeholder when CrewAI is not available
-    return {"crew": "research", "topic": topic, "status": "skeleton"}
+    from packages.content_factory.production.agents import create_researcher
+    from crewai import Task, Crew, Process
+
+    researcher = create_researcher(architectural_references=[])
+    task = Task(
+        description=f"Research '{topic}': find 3+ physical anchors, one human character, "
+        "evidence against mainstream narrative. Output structured markdown dossier.",
+        expected_output="Structured markdown research dossier.",
+        agent=researcher,
+    )
+    return Crew(agents=[researcher], tasks=[task], process=Process.sequential, verbose=False)
 
 
 def create_script_crew(research: dict) -> Any:
     """Create a CrewAI crew for script writing.
 
-    This is a SKELETON IMPLEMENTATION. The actual writer crew is
-    created in packages/content_factory/production/agents.py: create_script_agent()
+    Uses the real Script Agent from packages/content_factory/production/agents.py.
 
     Args:
         research: Research data from research stage
 
     Returns:
-        Crew object (or placeholder dict if CrewAI not available)
-    
-    TODO: Connect to RoundBasedProductionWorkflow._round_script_opening()
+        Crew object when CrewAI is available, None otherwise
     """
-    if CREWAI_AVAILABLE:
-        # TODO: Implement with actual CrewAI crew
-        agent = Agent(
-            role="Script Writer",
-            goal="Write an engaging video script",
-            backstory="Experienced YouTube script writer",
-            verbose=True,
-        )
-        task = Task(
-            description=f"Write a script based on this research: {research}",
-            agent=agent,
-        )
-        return Crew(agents=[agent], tasks=[task], verbose=True)
+    if not CREWAI_AVAILABLE:
+        return None
 
-    return {"crew": "script", "research": research, "status": "skeleton"}
+    from packages.content_factory.production.agents import create_script_agent
+    from crewai import Task, Crew, Process
+
+    writer = create_script_agent()
+    topic = research.get("topic", "the topic") if isinstance(research, dict) else str(research)
+    task = Task(
+        description=f"Write dual-column documentary script for '{topic}'. "
+        "Output strictly valid JSON matching AdaptedScript schema.",
+        expected_output="JSON object matching AdaptedScript schema.",
+        agent=writer,
+    )
+    return Crew(agents=[writer], tasks=[task], process=Process.sequential, verbose=False)
 
 
 def create_visual_crew(script: dict) -> Any:
     """Create a CrewAI crew for visual planning.
 
-    This is a SKELETON IMPLEMENTATION. The actual visual crew is
-    created in packages/content_factory/production/agents.py: create_visual_agent()
+    Uses the real Visual Agent from packages/content_factory/production/agents.py.
 
     Args:
         script: Script data for visual planning
 
     Returns:
-        Crew object (or placeholder dict if CrewAI not available)
-    
-    TODO: Connect to Visual Director agent from production/agents.py
+        Crew object when CrewAI is available, None otherwise
     """
-    if CREWAI_AVAILABLE:
-        # TODO: Implement with actual CrewAI crew
-        agent = Agent(
-            role="Visual Planner",
-            goal="Plan engaging visuals for the video",
-            backstory="Expert in video production and visual storytelling",
-            verbose=True,
-        )
-        task = Task(
-            description=f"Plan visuals for this script: {script}",
-            agent=agent,
-        )
-        return Crew(agents=[agent], tasks=[task], verbose=True)
+    if not CREWAI_AVAILABLE:
+        return None
 
-    return {"crew": "visual", "script": script, "status": "skeleton"}
+    from packages.content_factory.production.agents import create_visual_agent
+    from crewai import Task, Crew, Process
+
+    visual = create_visual_agent()
+    title = script.get("adapted_title", "the video") if isinstance(script, dict) else str(script)
+    task = Task(
+        description=f"Plan visuals for '{title}'. Assign visual types and anchor hierarchy levels.",
+        expected_output="Sequence of visual directions.",
+        agent=visual,
+    )
+    return Crew(agents=[visual], tasks=[task], process=Process.sequential, verbose=False)
