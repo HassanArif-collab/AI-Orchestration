@@ -66,6 +66,7 @@ function statusDot(status) {
 
 const TAB_INITS = {
   pipeline:  () => initPipeline(),
+  kanban:    () => Kanban.init(),
   chat:      () => initChat(),
   providers: () => initProviders(),
   memory:    () => initMemory(),
@@ -76,6 +77,7 @@ const TAB_INITS = {
 
 const TAB_REFRESH = {
   pipeline:  () => refreshPipeline(),
+  kanban:    () => Kanban.refresh(),
   chat:      () => {},
   providers: () => refreshProviders(),
   memory:    () => refreshMemory(),
