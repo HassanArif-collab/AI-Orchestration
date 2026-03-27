@@ -637,6 +637,10 @@ a:hover { text-decoration: underline; }
 }
 
 .kanban-drawer.hidden {
+  display: none !important;
+}
+
+.drawer-section.hidden {
   display: none;
 }
 
