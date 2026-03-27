@@ -38,7 +38,7 @@ def load_evaluation_suite() -> dict:
 async def stage4_generate(
     smap: StructuralMap,
     lmap: LocalizationMap,
-    router_client: RouterClient | None = None,
+    router_client: RouterClient,
     source_library: SourceVideoLibrary | None = None,
     error_logger: ErrorLogger | None = None,
     cycle_id: str | None = None,
@@ -48,7 +48,7 @@ async def stage4_generate(
     Args:
         smap: StructuralMap from Stage 2.
         lmap: LocalizationMap from Stage 3.
-        router_client: FreeRouter client.
+        router_client: FreeRouter client (required).
         source_library: Source Video Library.
         error_logger: Error logger.
         cycle_id: Production cycle ID.
@@ -62,7 +62,7 @@ async def stage4_generate(
 
     eval_suite = load_evaluation_suite()
 
-    system_prompt = \"\"\"
+    system_prompt = """
 You are generating a final dual-column script in the Johnny Harris style.
 You are given the structural sections and the exact Pakistani localization mappings.
 Apply the mappings. Write the narrative prose and pair it with visual production directions.
@@ -82,26 +82,25 @@ Respond strictly in JSON matching this schema:
     }
   ]
 }
-\"\"\"
+"""
 
-    user_prompt = f\"\"\"
+    user_prompt = f"""
 Source Sections: {[s.model_dump() for s in smap.sections]}
 Localization Mappings: {lmap.model_dump_json(exclude={'video_id'})}
-\"\"\"
+"""
 
     try:
-        async with RouterClient() if not router_client else router_client as client:
-            response_text = await client.complete_text(
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-            )
+        response_text = await router_client.complete_text(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+        )
 
-            import re
-            json_match = re.search(r'\\{.*\\}', response_text, re.DOTALL)
-            if not json_match:
-                raise ValueError("Could not extract JSON from LLM response")
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if not json_match:
+            raise ValueError("Could not extract JSON from LLM response")
 
-            data = json.loads(json_match.group(0))
+        data = json.loads(json_match.group(0))
 
     except Exception as e:
         errors.log_error(cycle_id, 4, "Script Generation Failed", str(e), content_element=smap.video_id)

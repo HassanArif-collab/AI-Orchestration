@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 async def stage3_localize(
     smap: StructuralMap,
     extraction: RawExtraction,
-    router_client: RouterClient | None = None,
+    router_client: RouterClient,
     error_logger: ErrorLogger | None = None,
     cycle_id: str | None = None,
 ) -> LocalizationMap | None:
@@ -40,7 +40,7 @@ async def stage3_localize(
     Args:
         smap: The structural map of the video.
         extraction: The raw extraction data.
-        router_client: FreeRouter client.
+        router_client: FreeRouter client (required).
         error_logger: Error logger.
         cycle_id: Production cycle ID.
 
@@ -50,7 +50,7 @@ async def stage3_localize(
     cycle_id = cycle_id or smap.video_id
     errors = error_logger or ErrorLogger()
 
-    system_prompt = \"\"\"
+    system_prompt = """
 You are an expert cultural localization engine adapting western documentary
 content for a Pakistani audience. Identify and map substitutions across 5 categories:
 1. Monetary (price mappings by class reality, not just exchange rates)
@@ -67,26 +67,25 @@ Respond in strictly valid JSON matching this schema:
   "cultural": [{ "original_reference": "", "cultural_work": "", "pakistani_replacement": "", "replacement_cultural_work": "", "confidence": "high|medium|low", "section_index": 0 }],
   "structural_argument": { "original_argument": "", "translates_directly": true, "pakistani_argument": "", "sections_requiring_major_changes": [], "confidence": "high|medium|low" }
 }
-\"\"\"
+"""
 
-    user_prompt = f\"\"\"
+    user_prompt = f"""
 Transcript to localize:
 {extraction.full_transcript[:15000]}
-\"\"\"
+"""
 
     try:
-        async with RouterClient() if not router_client else router_client as client:
-            response_text = await client.complete_text(
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-            )
+        response_text = await router_client.complete_text(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+        )
 
-            import re
-            json_match = re.search(r'\\{.*\\}', response_text, re.DOTALL)
-            if not json_match:
-                raise ValueError("Could not extract JSON from LLM response")
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if not json_match:
+            raise ValueError("Could not extract JSON from LLM response")
 
-            data = json.loads(json_match.group(0))
+        data = json.loads(json_match.group(0))
 
     except Exception as e:
         errors.log_error(cycle_id, 3, "Localization Failed", f"LLM mapping failed: {e}", content_element=smap.video_id)
