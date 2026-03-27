@@ -193,26 +193,26 @@ select.form-input { cursor: pointer; }
 .stage-time  { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 2px; }
 .pipeline-arrow { color: var(--text-muted); font-size: 16px; line-height: 1; }
 
-/* ─── Kanban board ───────────────────────────────────────────────────────── */
+/* ─── Pipeline board (for Pipeline tab) ───────────────────────────────────────────── */
 
-.kanban-board {
+.pipeline-board {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 14px;
   align-items: start;
 }
-.kanban-col { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-.kanban-col-header {
+.pipeline-col { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.pipeline-col-header {
   padding: 12px 14px; font-size: 12px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; gap: 8px;
 }
-.kanban-col-header.running  { color: var(--accent-blue); }
-.kanban-col-header.waiting  { color: var(--accent-warning); }
-.kanban-col-header.complete { color: var(--accent-success); }
-.kanban-col-header.error    { color: var(--accent-error); }
-.kanban-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 80px; }
+.pipeline-col-header.running  { color: var(--accent-blue); }
+.pipeline-col-header.waiting  { color: var(--accent-warning); }
+.pipeline-col-header.complete { color: var(--accent-success); }
+.pipeline-col-header.error    { color: var(--accent-error); }
+.pipeline-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 80px; }
 
 .run-card {
   background: var(--bg-tertiary); border: 1px solid var(--border);
@@ -424,7 +424,7 @@ a:hover { text-decoration: underline; }
   .nav-label, .badge, .sidebar-header h1, .sidebar-footer { display: none; }
   .sidebar-logo { margin: 0 auto; }
   #content { padding: 14px; }
-  .kanban-board { grid-template-columns: 1fr 1fr; }
+  .pipeline-board { grid-template-columns: 1fr 1fr; }
   .chat-layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .chat-sidebar { display: none; }
 }
