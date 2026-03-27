@@ -5,10 +5,6 @@ Context: Every stage of the YouTube pipeline passes data using these models.
 They define the data contract between agents. If a model changes here,
 all agents are affected — change carefully.
 
-Pipeline data flow:
-    VideoIdea → ResearchOutput → Script → VisualPlan → SEOPackage
-    All are fields on PipelineState which tracks the full run.
-
 Imports: pydantic, datetime
 Imported by: packages/pipeline/, packages/agents/, packages/router/
 """
@@ -21,73 +17,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class VideoIdea(BaseModel):
-    """A validated YouTube video concept."""
-    title: str
-    angle: str
-    curiosity_gap: str
-    timeliness: str
-    viral_score: int = Field(ge=1, le=10)
-    competition_notes: str = ""
-
-
-class ResearchOutput(BaseModel):
-    """Structured research collected for a video topic."""
-    topic: str
-    key_facts: list[str]
-    sources: list[str]
-    data_points: list[dict] = []
-    narrative_angles: list[str] = []
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class ScriptSection(BaseModel):
-    """One named section of a video script."""
-    section_type: Literal["hook", "intro", "body", "climax", "conclusion", "cta"]
-    text: str
-    duration_seconds: int
-    visual_cue: str = ""
-    notes: str = ""
-
-
-class Script(BaseModel):
-    """A complete video script made of ordered sections."""
-    title: str
-    sections: list[ScriptSection]
-    total_duration: int
-    target_audience: str = ""
-    tone: str = ""
-
-
-class VisualDecision(BaseModel):
-    """One visual choice for a time range in the video."""
-    timestamp_start: int
-    timestamp_end: int
-    visual_type: Literal[
-        "talking_head", "animation", "broll",
-        "screen_recording", "data_viz", "shader_bg"
-    ]
-    description: str
-    asset_requirements: list[str] = []
-    tool: Literal["remotion", "radiant", "blender", "stock", "camera"] = "remotion"
-
-
-class VisualPlan(BaseModel):
-    """Complete visual direction for an entire script."""
-    script_title: str
-    decisions: list[VisualDecision]
-    asset_list: list[str] = []
-    notion_color_map: dict = {}
-
-
-class SEOPackage(BaseModel):
-    """YouTube SEO metadata for a video."""
-    titles: list[str]
-    description: str
-    tags: list[str]
-    thumbnail_concepts: list[str] = []
-
-
 class PipelineState(BaseModel):
     """
     Full state of one pipeline run. Passed between all stages.
@@ -95,11 +24,6 @@ class PipelineState(BaseModel):
     """
     run_id: str
     stage: str
-    video_idea: VideoIdea | None = None
-    research: ResearchOutput | None = None
-    script: Script | None = None
-    visual_plan: VisualPlan | None = None
-    seo: SEOPackage | None = None
     status: Literal["running", "waiting_human", "complete", "error"] = "running"
     error_message: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
