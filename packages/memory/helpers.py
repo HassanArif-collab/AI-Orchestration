@@ -1,10 +1,10 @@
 """
 Zep Memory Helper Functions — High-level convenience wrappers.
 
-These functions wrap ZepMemoryClient for common pipeline operations.
-Use these instead of calling ZepMemoryClient directly from pipeline code.
+These functions wrap AsyncZepMemoryClient for common pipeline operations.
+Use these instead of calling AsyncZepMemoryClient directly from pipeline code.
 
-WHEN TO USE THESE vs ZepMemoryClient directly:
+WHEN TO USE THESE vs AsyncZepMemoryClient directly:
   Use helpers when:    storing/retrieving within a single video production run
   Use client directly: when writing audience intelligence or learning facts
                        (use ZepAudienceModelStore from content_factory/memory/)
@@ -32,7 +32,7 @@ SESSION ID CONVENTIONS:
   Analytics history:            f"{channel_owner_user_id}_analytics"
 """
 
-from packages.memory.client import ZepMemoryClient
+from packages.memory.client import AsyncZepMemoryClient
 from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -58,7 +58,7 @@ async def store_research(
     Note:
         Silently handles errors - never crashes the pipeline.
     """
-    client = ZepMemoryClient()
+    client = AsyncZepMemoryClient()
 
     # Format research as a structured message
     content_parts = [f"Research Topic: {topic}"]
@@ -100,7 +100,7 @@ async def store_script_feedback(
     Note:
         Silently handles errors - never crashes the pipeline.
     """
-    client = ZepMemoryClient()
+    client = AsyncZepMemoryClient()
 
     content = f"Script Revision #{revision}\n\nFeedback:\n{feedback}"
 
@@ -128,16 +128,11 @@ async def recall_style(user_id: str) -> dict:
     Note:
         Returns empty dict on any error - never crashes the pipeline.
     """
-    client = ZepMemoryClient()
+    client = AsyncZepMemoryClient()
 
     # Try to get memory for the user's default session
     # Session naming convention: user_id + "_style"
     style_session = f"{user_id}_style"
-
-    memory = await client.get_memory(style_session)
-
-    if memory and "context" in memory:
-        return memory
 
     # Try searching for style-related facts
     results = await client.search_memory(style_session, "content style preferences audience", limit=5)
@@ -163,7 +158,7 @@ async def recall_video_performance(user_id: str, query: str) -> list[dict]:
     Note:
         Returns empty list on any error - never crashes the pipeline.
     """
-    client = ZepMemoryClient()
+    client = AsyncZepMemoryClient()
 
     # Analytics session naming convention: user_id + "_analytics"
     analytics_session = f"{user_id}_analytics"

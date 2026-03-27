@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 
 
 class ZepAudienceModelStore:
-    """Wraps ZepMemoryClient for content factory specific read/write patterns."""
+    """Wraps AsyncZepMemoryClient for content factory specific read/write patterns."""
 
     def __init__(self):
         self.settings = get_settings()
@@ -38,8 +38,8 @@ class ZepAudienceModelStore:
         )
         if self._enabled:
             try:
-                from packages.memory.client import ZepMemoryClient
-                self._client = ZepMemoryClient()
+                from packages.memory.client import AsyncZepMemoryClient
+                self._client = AsyncZepMemoryClient()
             except Exception as e:
                 logger.warning(f"zep_store_init_failed: {e}")
                 self._enabled = False
@@ -55,7 +55,7 @@ class ZepAudienceModelStore:
                 f"Sections: {len(script.entries)}. "
                 f"Passing questions: {int(score * 0.56)}/56."
             )
-            self._client.add_facts(
+            await self._client.add_facts(
                 session_id=f"{self.settings.ZEP_LEARNING_USER_ID}_session",
                 facts=[{"fact": fact_text, "type": "experiment_result", "genre": genre_id}]
             )
@@ -73,7 +73,7 @@ class ZepAudienceModelStore:
                 f"{engagement_7d:.1f}% 7-day engagement. "
                 f"Retention pattern: {retention_shape}."
             )
-            self._client.add_facts(
+            await self._client.add_facts(
                 session_id=f"{self.settings.ZEP_AUDIENCE_USER_ID}_session",
                 facts=[{"fact": fact_text, "type": "video_performance", "genre": genre_id}]
             )
@@ -85,7 +85,7 @@ class ZepAudienceModelStore:
         if not self._enabled or not self._client:
             return "No audience data available yet."
         try:
-            results = self._client.search_memory(
+            results = await self._client.search_memory(
                 session_id=f"{self.settings.ZEP_AUDIENCE_USER_ID}_session",
                 query=f"Pakistani audience engagement patterns for {genre_id} videos",
                 limit=5
@@ -103,7 +103,7 @@ class ZepAudienceModelStore:
         if not self._enabled or not self._client:
             return []
         try:
-            results = self._client.search_memory(
+            results = await self._client.search_memory(
                 session_id=f"{self.settings.ZEP_LEARNING_USER_ID}_session",
                 query=f"script improvement patterns for {genre_id}",
                 limit=10

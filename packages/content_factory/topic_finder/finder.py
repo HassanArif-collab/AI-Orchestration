@@ -28,7 +28,7 @@ from packages.router.client import RouterClient
 from packages.core.logger import get_logger
 from packages.content_factory.topic_finder.models import TopicBrief
 from packages.content_factory.topic_finder.db import TopicReservoirDB
-from packages.memory.client import ZepMemoryClient
+from packages.memory.client import AsyncZepMemoryClient
 from packages.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -63,6 +63,7 @@ VIABILITY_QUESTIONS = {
     "timing_3": "Is the subject matter emotionally resonant without violating platform safety/monetization constraints?"
 }
 
+
 class TopicFinderAgent:
     def __init__(self, kanban_task_id: Optional[str] = None) -> None:
         """Initialize the TopicFinderAgent.
@@ -73,7 +74,7 @@ class TopicFinderAgent:
                            create child tasks in the Kanban dashboard.
         """
         self.db = TopicReservoirDB()
-        self.zep_client = ZepMemoryClient()
+        self.zep_client = AsyncZepMemoryClient()
         self.zep_session_id = f"{get_settings().ZEP_AUDIENCE_USER_ID}_session"
         self.kanban_task_id = kanban_task_id
         self._kanban_callback = None
@@ -275,7 +276,7 @@ class TopicFinderAgent:
             "What topic characteristics predicted subscriber conversion in recent production cycles?"
         ]
         for q in queries:
-            results = self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
+            results = await self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
             for r in results:
                 zep_context.append(r.get("fact", ""))
                 
@@ -356,7 +357,7 @@ class TopicFinderAgent:
 
             async with RouterClient() as router:
                 for record in analyzed[:5]:  # check up to 5 at a time
-                    prompt = f"""Does the structural gap in this Johnny Harris video map to
+                    prompt = f"""Does the structural gap in this Johnny harris video map to
 a current Pakistani trend or social reality?
 
 Video: "{record.title}"

@@ -43,8 +43,8 @@ def get_pipeline_runner():
 
 def get_memory_client():
     try:
-        from packages.memory.client import ZepMemoryClient
-        return ZepMemoryClient()
+        from packages.memory.client import AsyncZepMemoryClient
+        return AsyncZepMemoryClient()
     except ImportError:
         return None
 

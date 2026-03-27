@@ -43,13 +43,15 @@ ZEP DEPENDENCY:
 from typing import Literal, Optional, Any
 from pydantic import BaseModel, Field
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from packages.core.logger import get_logger
-from packages.memory.client import ZepMemoryClient
+from packages.memory.client import AsyncZepMemoryClient
 from packages.core.config import get_settings
 
 logger = get_logger("LearningSynthesis")
+
 
 class Insight(BaseModel):
     """A structured conclusion drawn from cross-phase analysis.
@@ -89,7 +91,8 @@ class Insight(BaseModel):
     proposed_instruction_change: str
     expected_impact: str
     confidence: Literal["high", "medium", "low"]
-    
+
+
 class SynthesisReport(BaseModel):
     """The weekly summary report passed to Human Review.
     
@@ -108,6 +111,7 @@ class SynthesisReport(BaseModel):
     genre_performance_trends: dict[str, str] = Field(default_factory=dict)
     audience_response_patterns: list[str] = Field(default_factory=list)
     genre_drift_alerts: list[str] = Field(default_factory=list)
+
 
 class SynthesisEngine:
     """Learning Synthesis Engine — Finds patterns across all production cycles.
@@ -135,10 +139,10 @@ class SynthesisEngine:
         self.reports_dir = Path("packages/data/synthesis_reports")
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.learning_log_path = Path("packages/data/learning_log.jsonl")
-        self.zep_client = ZepMemoryClient()
+        self.zep_client = AsyncZepMemoryClient()
         self.zep_session_id = f"{get_settings().ZEP_LEARNING_USER_ID}_session"
         
-    def execute_synthesis_cycle(self) -> Optional[SynthesisReport]:
+    async def execute_synthesis_cycle(self) -> Optional[SynthesisReport]:
         """Runs the 4-pass synthesis engine over the factory.
         
         This is the MAIN ENTRY POINT for weekly learning synthesis.
@@ -151,7 +155,7 @@ class SynthesisEngine:
         logger.info("synthesis_cycle_started")
         
         # Pass 1 & 2: Semantic Pattern Detection via Zep
-        patterns = self._detect_patterns_semantic()
+        patterns = await self._detect_patterns_semantic()
         
         # Pass 3: Insight Generation
         insights = self._generate_insights(patterns)
@@ -165,7 +169,7 @@ class SynthesisEngine:
             
         return report
 
-    def _detect_patterns_semantic(self) -> list[dict]:
+    async def _detect_patterns_semantic(self) -> list[dict]:
         """Queries Zep for semantic patterns rather than scanning local JSONL.
         
         Uses 10 pre-written semantic queries designed to surface
@@ -199,7 +203,7 @@ class SynthesisEngine:
         ]
         
         for q in queries:
-            results = self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
+            results = await self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
             if results:
                 patterns.append({
                     "type": "persistent_failure",
@@ -212,7 +216,7 @@ class SynthesisEngine:
                 
         return patterns
 
-    def execute_monthly_cross_cycle_analysis(self) -> None:
+    async def execute_monthly_cross_cycle_analysis(self) -> None:
         """Runs the monthly analysis querying Zep for emergent Cross-Cycle Patterns.
         
         These queries look for LONG-TERM patterns that only emerge
@@ -231,11 +235,11 @@ class SynthesisEngine:
         ]
         
         for q in queries:
-            results = self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=3)
+            results = await self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=3)
             if results:
                 evidence = "\n".join(r.get("fact", "") for r in results)
                 logger.info(f"Cross-cycle pattern found: {evidence[:50]}...")
-                self.zep_client.add_facts(session_id=self.zep_session_id, facts=[{
+                await self.zep_client.add_facts(session_id=self.zep_session_id, facts=[{
                     "fact": f"Monthly Cross-Cycle Finding for '{q}': {evidence}",
                     "log_type": "Cross-Cycle Pattern",
                     "source": "monthly_analysis"
@@ -256,7 +260,6 @@ class SynthesisEngine:
           List of Insight objects ready for UpdatePipeline
         """
         logger.info("synthesis_pass_3_insight_generation")
-        import uuid
         insights = []
         for p in patterns:
             if p["type"] == "persistent_failure":
@@ -290,7 +293,6 @@ class SynthesisEngine:
           SynthesisReport ready for storage and processing
         """
         logger.info("synthesis_pass_4_report_generation")
-        import uuid
         return SynthesisReport(
             report_id=f"SYN-{uuid.uuid4().hex[:8].upper()}",
             executive_summary=f"Synthesized {len(insights)} material insights this cycle.",
