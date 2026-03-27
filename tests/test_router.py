@@ -63,7 +63,7 @@ def test_tracker_all_usage_today(tmp_path):
 @pytest.mark.asyncio
 async def test_client_raises_on_connection_refused():
     """When FreeRouter isn't running, should raise LLMClientError."""
-    client = RouterClient(base_url="http://localhost:19999")  # nothing on this port
+    client = RouterClient(base_url="http://localhost:19999", startup_check=False)  # nothing on this port
     with pytest.raises(LLMClientError, match="Cannot connect"):
         await client.complete([{"role": "user", "content": "hi"}])
     await client.close()
@@ -84,7 +84,7 @@ async def test_client_complete_mocked():
     }
     mock_response.raise_for_status = MagicMock()
 
-    client = RouterClient(base_url="http://localhost:4000")
+    client = RouterClient(base_url="http://localhost:4000", startup_check=False)
     with patch.object(client._http, "post", new=AsyncMock(return_value=mock_response)):
         result = await client.complete([{"role": "user", "content": "hi"}])
 
@@ -110,7 +110,7 @@ async def test_client_retries_503_with_auto():
     fail_response = MagicMock()
     fail_response.status_code = 503
 
-    client = RouterClient(base_url="http://localhost:4000")
+    client = RouterClient(base_url="http://localhost:4000", startup_check=False)
     call_count = 0
 
     async def mock_post(path, json=None, **kwargs):

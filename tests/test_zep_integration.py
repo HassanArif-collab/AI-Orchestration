@@ -24,8 +24,8 @@ class TestZepIntegration(unittest.TestCase):
 
     @patch('packages.memory.client.get_settings')
     @patch('packages.memory.client.AsyncZep')
-    @patch('packages.core.logger.Logger.warning')
-    def test_client_resilience(self, mock_warning, mock_async_zep, mock_settings):
+    @patch('packages.core.logger.structlog')
+    def test_client_resilience(self, mock_structlog, mock_async_zep, mock_settings):
         # Test 1: Client Wrapper Resilience
         mock_settings.return_value.ZEP_API_KEY = "test_key"
         

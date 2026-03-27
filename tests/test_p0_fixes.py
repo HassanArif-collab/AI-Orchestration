@@ -195,7 +195,10 @@ class TestP03_APIKeyValidation:
         """Verify Notion validation for valid key."""
         from packages.core.config import Settings, ServiceStatus
         
-        settings = Settings(NOTION_API_KEY="secret_validkey123456789")
+        settings = Settings(
+            NOTION_API_KEY="secret_validkey123456789",
+            NOTION_DATABASE_ID="abc123def456"
+        )
         status = settings.validate_service("notion")
         assert status == ServiceStatus.AVAILABLE
 
@@ -579,10 +582,11 @@ class TestIntegration:
         """Verify health routes are registered."""
         from apps.api.routers import health_routes
         
-        assert hasattr(health_routes, 'router')
+        from fastapi.routing import APIRouter
+        assert isinstance(health_routes, APIRouter)
         
         # Check routes
-        routes = [r.path for r in health_routes.router.routes]
+        routes = [r.path for r in health_routes.routes]
         assert "/health" in routes
         assert "/api/health" in routes
 

@@ -153,8 +153,13 @@ class LearningLogger:
             "promotion_decision": "Promoted" if entry.beat_baseline else "Discarded"
         }
         
-        # Run async Zep write in background
-        asyncio.create_task(self._write_to_zep(content, metadata))
+        # Try async Zep write if event loop is available
+        try:
+            loop = asyncio.get_running_loop()
+            asyncio.create_task(self._write_to_zep(content, metadata))
+        except RuntimeError:
+            # No running event loop — skip Zep write (acceptable degradation)
+            logger.debug("zep_write_skipped_no_event_loop")
 
         if entry.beat_baseline:
             logger.info(f"experiment_success: Zone {entry.mutation_zone} improved score from {entry.baseline_score:.1f}% to {entry.challenger_score:.1f}%")

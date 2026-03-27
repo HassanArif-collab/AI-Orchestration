@@ -209,10 +209,15 @@ class FeedbackLoop:
         self.model.last_updated = datetime.now(timezone.utc)
         self.save_audience_model()
         
-        # Write facts to Zep (async, non-blocking)
+        # Try async Zep write if event loop is available
         if facts:
-            asyncio.create_task(self._write_facts_to_zep(facts))
-            logger.info(f"wrote_{len(facts)}_facts_to_zep_for_genre: {genre}")
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.create_task(self._write_facts_to_zep(facts))
+                logger.info(f"wrote_{len(facts)}_facts_to_zep_for_genre: {genre}")
+            except RuntimeError:
+                # No running event loop — skip Zep write (acceptable degradation)
+                logger.debug("zep_write_skipped_no_event_loop")
             
         logger.info(f"recalibrated_feedback_loop_for_genre: {genre}")
 

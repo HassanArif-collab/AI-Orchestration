@@ -4,6 +4,7 @@ Handles Topic Finding, Experiment Looping,
 Analytics Ingestions, and Learning Synthesis triggers.
 """
 
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Callable
 from packages.core.logger import get_logger
@@ -38,31 +39,29 @@ class Scheduler:
         """Interval: Weekly (Every 168 hours)."""
         logger.info("Executing Learning Synthesis Engine (All phases log aggregation)")
         
-    def run_health_check(self):
-        """Interval: Every 1 hour."""
-        logger.info("Executing System Health Check (Stalled cycles, empty reservoir alerts)")
+    async def run_health_check(self):
+        """Now async."""
+        logger.info("Executing System Health Check")
         active = self.master.db.get_active_cycles()
         if not active:
-            logger.info(f"system_health | status=no_active_cycles")
-            
-        # Check Reservoir levels
+            logger.info("system_health | status=no_active_cycles")
+
         try:
             topics = self.topic_db.get_top_topics(limit=1)
             if not topics:
                 logger.warning("system_health | reservoir_empty")
-                self.master.handle_escalation("SYS", "reservoir_low", "medium", {"available": 0})
+                await self.master.handle_escalation("SYS", "reservoir_low", "medium", {"available": 0})
         except Exception as e:
             logger.error(f"system_health | reservoir_check_failed: {e}")
 
-    def trigger_production_cycle(self):
-        """Event-based loosely coupled polling. Interval: 6 hours normally."""
+    async def trigger_production_cycle(self):
+        """Event-based polling. Now async."""
         logger.info("Executing Production Cycle Polling")
-        # Query real topics from the reservoir database
         try:
             topics = self.topic_db.get_top_topics(limit=5)
             if topics:
-                logger.info(f"production_cycle | found {len(topics)} topics in reservoir")
-                self.master.check_and_start_new_cycle(topics)
+                logger.info(f"production_cycle | found {len(topics)} topics")
+                await self.master.check_and_start_new_cycle(topics)
             else:
                 logger.info("production_cycle | no_topics_in_reservoir")
         except Exception as e:
@@ -81,14 +80,18 @@ class Scheduler:
         self.register_cron_job("Analytics_Sweep_Daily", 24, self.trigger_analytics_ingestion, "retry")
         self.register_cron_job("Maintenance_Weekly", 168, lambda: logger.info("Weekly Archive & Maintenance"), "escalate")
 
-    def simulate_tick(self):
-        """Mocks the passage of time to trigger Jobs for validation."""
+    async def simulate_tick(self):
+        """Now async."""
         logger.info("Scheduler _simulate_tick ticked")
         for job in self.jobs:
             logger.info(f"Triggering {job['name']}")
             try:
-                job['action']()
+                action = job['action']
+                if asyncio.iscoroutinefunction(action):
+                    await action()
+                else:
+                    action()
             except Exception as e:
                 logger.error(f"cron_failure | job={job['name']} error={str(e)}")
                 if job['failure_behavior'] == "escalate":
-                    self.master.handle_escalation("SYS", "cron_failure", "high", {"job": job['name']})
+                    await self.master.handle_escalation("SYS", "cron_failure", "high", {"job": job['name']})

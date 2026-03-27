@@ -37,6 +37,17 @@ from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Module-level shared client (lazy initialization)
+_shared_client: AsyncZepMemoryClient | None = None
+
+
+def _get_client() -> AsyncZepMemoryClient:
+    """Get or create the shared AsyncZepMemoryClient instance."""
+    global _shared_client
+    if _shared_client is None:
+        _shared_client = AsyncZepMemoryClient()
+    return _shared_client
+
 
 async def store_research(
     session_id: str,
@@ -58,7 +69,7 @@ async def store_research(
     Note:
         Silently handles errors - never crashes the pipeline.
     """
-    client = AsyncZepMemoryClient()
+    client = _get_client()
 
     # Format research as a structured message
     content_parts = [f"Research Topic: {topic}"]
@@ -100,7 +111,7 @@ async def store_script_feedback(
     Note:
         Silently handles errors - never crashes the pipeline.
     """
-    client = AsyncZepMemoryClient()
+    client = _get_client()
 
     content = f"Script Revision #{revision}\n\nFeedback:\n{feedback}"
 
@@ -128,7 +139,7 @@ async def recall_style(user_id: str) -> dict:
     Note:
         Returns empty dict on any error - never crashes the pipeline.
     """
-    client = AsyncZepMemoryClient()
+    client = _get_client()
 
     # Try to get memory for the user's default session
     # Session naming convention: user_id + "_style"
@@ -158,7 +169,7 @@ async def recall_video_performance(user_id: str, query: str) -> list[dict]:
     Note:
         Returns empty list on any error - never crashes the pipeline.
     """
-    client = AsyncZepMemoryClient()
+    client = _get_client()
 
     # Analytics session naming convention: user_id + "_analytics"
     analytics_session = f"{user_id}_analytics"

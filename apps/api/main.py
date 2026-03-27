@@ -32,14 +32,6 @@ PORT:
 """
 
 from __future__ import annotations
-import sys
-import os
-from pathlib import Path
-
-# Make freerouter importable without installing it separately
-_fr_src = Path(__file__).parent.parent.parent / "freerouter" / "src"
-if str(_fr_src) not in sys.path:
-    sys.path.insert(0, str(_fr_src))
 
 from contextlib import asynccontextmanager
 
@@ -72,12 +64,6 @@ async def lifespan(app: FastAPI):
     
     Initializes databases on startup and cleans up on shutdown.
     """
-    try:
-        from freerouter.storage import init_db
-        init_db()
-    except Exception:
-        pass
-    
     # Initialize Kanban database
     try:
         from apps.api.routers.kanban_routes import init_kanban_db
