@@ -62,6 +62,12 @@ const Kanban = {
         // Render initial HTML structure
         container.innerHTML = this._getBoardHTML();
         
+        // Make sure drawer is hidden
+        const drawer = document.getElementById('kanban-drawer');
+        if (drawer) {
+            drawer.classList.add('hidden');
+        }
+        
         // Fetch and render tasks
         await this.refresh();
         
@@ -105,7 +111,7 @@ const Kanban = {
             </div>
             
             <!-- Task Detail Drawer -->
-            <div id="kanban-drawer" class="kanban-drawer hidden">
+            <div id="kanban-drawer" class="kanban-drawer hidden" style="display: none;">
                 <div class="drawer-overlay" onclick="Kanban.closeDrawer()"></div>
                 <div class="drawer-content" id="drawer-content">
                     <div class="drawer-header">
@@ -407,7 +413,9 @@ const Kanban = {
         // Set stage class for color theming
         content.className = `drawer-content stage-${task.stage}`;
         
+        // Remove hidden class and inline style
         drawer.classList.remove('hidden');
+        drawer.style.display = '';
     },
     
     /**
@@ -506,6 +514,7 @@ const Kanban = {
         const drawer = document.getElementById('kanban-drawer');
         if (drawer) {
             drawer.classList.add('hidden');
+            drawer.style.display = 'none';
         }
         
         const thoughtLog = document.getElementById('drawer-thoughts');

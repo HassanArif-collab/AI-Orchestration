@@ -455,13 +455,18 @@ a:hover { text-decoration: underline; }
 }
 
 .kanban-board {
-  display: flex;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap;
   gap: 12px;
   min-height: calc(100vh - 200px);
+  width: max-content;
 }
 
 .kanban-column {
-  flex: 0 0 260px;
+  flex: 0 0 260px !important;
+  min-width: 260px;
+  max-width: 260px;
   background: linear-gradient(180deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -641,6 +646,8 @@ a:hover { text-decoration: underline; }
 
 .kanban-drawer.hidden {
   display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 .drawer-section.hidden {
@@ -874,9 +881,4 @@ a:hover { text-decoration: underline; }
   margin-top: 20px;
 }
 
-/* ─── Kanban Container ────────────────────────────────────────────────────────── */
 
-.kanban-container {
-  overflow-x: auto;
-  padding-bottom: 16px;
-}
