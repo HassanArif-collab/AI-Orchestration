@@ -26,6 +26,9 @@ from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Global scheduler instance (initialized by start_scheduler)
+_scheduler = None
+
 
 def _get_reservoir_paths() -> tuple[Path, Path]:
     """Get paths to reservoir files."""
@@ -419,3 +422,61 @@ def run_daily_scan(genres: Optional[list[str]] = None) -> Optional[int]:
     except Exception as e:
         logger.error(f"daily_scan_task_error: {e}")
         return None
+
+
+def start_scheduler() -> bool:
+    """Start the orchestration scheduler.
+    
+    This initializes the Scheduler with a MasterOrchestrator and
+    registers all cron jobs. The scheduler will periodically call
+    MasterOrchestrator.check_and_start_new_cycle() to process topics.
+    
+    This function is defensive:
+    - Handles all errors gracefully
+    - Returns True if scheduler started, False otherwise
+    - Logs all actions for debugging
+    
+    Returns:
+        True if scheduler started successfully, False otherwise
+    """
+    global _scheduler
+    
+    if _scheduler is not None:
+        logger.info("scheduler_already_running")
+        return True
+    
+    logger.info("scheduler_startup_initiated")
+    
+    try:
+        from packages.content_factory.orchestration.scheduler import Scheduler
+        from packages.content_factory.orchestration.master import MasterOrchestrator
+        
+        # Create the master orchestrator
+        orchestrator = MasterOrchestrator()
+        
+        # Create the scheduler with the orchestrator
+        _scheduler = Scheduler(master=orchestrator)
+        
+        # Register all cron jobs
+        _scheduler.boot_schedule()
+        
+        logger.info("scheduler_started_successfully")
+        return True
+        
+    except ImportError as e:
+        logger.warning(f"scheduler_import_failed: {e}")
+        return False
+        
+    except Exception as e:
+        logger.error(f"scheduler_startup_failed: {e}")
+        _scheduler = None
+        return False
+
+
+def get_scheduler():
+    """Get the current scheduler instance.
+    
+    Returns:
+        The Scheduler instance, or None if not started.
+    """
+    return _scheduler
