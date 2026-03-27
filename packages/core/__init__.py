@@ -8,8 +8,7 @@ Import from here — never from individual submodules directly.
 """
 
 from packages.core.types import (
-    VideoIdea, ResearchOutput, Script, ScriptSection,
-    VisualDecision, VisualPlan, SEOPackage, PipelineState,
+    PipelineState,
     SessionType, AgentRole, MessageRole,
     VideoMetadata, ChannelMetadata, AnalyticsMetadata,
     ChannelStats, MemoryFact,
@@ -23,8 +22,7 @@ from packages.core.logger import get_logger
 from packages.core.cache import FileCache
 
 __all__ = [
-    "VideoIdea", "ResearchOutput", "Script", "ScriptSection",
-    "VisualDecision", "VisualPlan", "SEOPackage", "PipelineState",
+    "PipelineState",
     "SessionType", "AgentRole", "MessageRole",
     "VideoMetadata", "ChannelMetadata", "AnalyticsMetadata",
     "ChannelStats", "MemoryFact",
