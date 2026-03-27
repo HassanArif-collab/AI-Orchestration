@@ -4,21 +4,21 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg-primary:      #0d0d0d;
-  --bg-secondary:    #141414;
-  --bg-tertiary:     #1e1e1e;
-  --bg-hover:        #252525;
+  --bg-primary:      #0a0a0a;
+  --bg-secondary:    #161616;
+  --bg-tertiary:     #222222;
+  --bg-hover:        #2a2a2a;
   --text-primary:    #e4e4e7;
   --text-secondary:  #9ca3af;
-  --text-muted:      #555550;
+  --text-muted:      #6b6b6b;
   --accent-primary:  #1D9E75;
   --accent-success:  #1D9E75;
   --accent-warning:  #BA7517;
   --accent-error:    #A32D2D;
   --accent-info:     #185FA5;
   --accent-blue:     #378ADD;
-  --border:          #2a2a2a;
-  --border-hover:    #3a3a3a;
+  --border:          #333333;
+  --border-hover:    #444444;
   --sidebar-width:   220px;
   --font-mono:       'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-sans:       'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -462,12 +462,13 @@ a:hover { text-decoration: underline; }
 
 .kanban-column {
   flex: 0 0 260px;
-  background: var(--bg-secondary);
+  background: linear-gradient(180deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .kanban-column.drag-over {
@@ -479,9 +480,10 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 14px;
-  background: var(--bg-tertiary);
+  padding: 14px 16px;
+  background: rgba(0, 0, 0, 0.2);
   border-bottom: 1px solid var(--border);
+  min-height: 48px;
 }
 
 .column-icon {
@@ -527,11 +529,12 @@ a:hover { text-decoration: underline; }
 
 .task-list {
   flex: 1;
-  padding: 8px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 100px;
+  min-height: 120px;
+  background: rgba(0, 0, 0, 0.15);
 }
 
 /* ─── Kanban Task Card ─────────────────────────────────────────────────────── */
