@@ -61,6 +61,7 @@ from apps.api.routers import (
     settings_routes,
     topic_routes,
     health_routes,
+    kanban_routes,
 )
 from packages.core.config import get_settings
 
@@ -76,6 +77,14 @@ async def lifespan(app: FastAPI):
         init_db()
     except Exception:
         pass
+    
+    # Initialize Kanban database
+    try:
+        from apps.api.routers.kanban_routes import init_kanban_db
+        init_kanban_db()
+    except Exception as e:
+        print(f"Warning: Could not init Kanban DB: {e}")
+    
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
@@ -114,6 +123,7 @@ app.include_router(analytics_routes,prefix="/api/analytics", tags=["analytics"])
 app.include_router(visual_routes,   prefix="/api/visual",    tags=["visual"])
 app.include_router(settings_routes, prefix="/api/settings",  tags=["settings"])
 app.include_router(topic_routes,    prefix="/api/topics",    tags=["topics"])
+app.include_router(kanban_routes.router, prefix="/api/kanban",   tags=["kanban"])
 
 # SSE endpoint
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])

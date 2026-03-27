@@ -58,3 +58,4 @@ config/local_config.yaml
 
 # Runtime data directories
 packages/data/
+test_venv/

@@ -14,6 +14,7 @@ from apps.api.routers.visual_routes import router as visual_routes
 from apps.api.routers.settings_routes import router as settings_routes
 from apps.api.routers.topic_routes import router as topic_routes
 from apps.api.routers.health_routes import router as health_routes
+from apps.api.routers.kanban_routes import router as kanban_routes
 
 __all__ = [
     "pipeline_router",
@@ -26,4 +27,5 @@ __all__ = [
     "settings_routes",
     "topic_routes",
     "health_routes",
+    "kanban_routes",
 ]

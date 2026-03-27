@@ -2,12 +2,27 @@
 
 Finds topics, scores them against the 17 Viability criteria,
 and saves Tier 1 candidates to the Topic Reservoir.
+
+KANBAN INTEGRATION:
+    TopicFinderAgent can optionally accept a kanban_task_id to report
+    progress to the Kanban dashboard. When a Tier 1 topic is found,
+    it creates a child task in the "Suggested Topics" column.
+
+Usage:
+    # Without Kanban integration
+    agent = TopicFinderAgent()
+    brief = await agent.generate_candidate("AI trends", "tech")
+
+    # With Kanban integration
+    agent = TopicFinderAgent(kanban_task_id="abc-123")
+    brief = await agent.generate_candidate("AI trends", "tech")
+    # Progress and child tasks will be reported to Kanban
 """
 
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from packages.router.client import RouterClient
 from packages.core.logger import get_logger
@@ -49,86 +64,167 @@ VIABILITY_QUESTIONS = {
 }
 
 class TopicFinderAgent:
-    def __init__(self) -> None:
+    def __init__(self, kanban_task_id: Optional[str] = None) -> None:
+        """Initialize the TopicFinderAgent.
+        
+        Args:
+            kanban_task_id: Optional Kanban task ID for progress reporting.
+                           When provided, the agent will report thoughts and
+                           create child tasks in the Kanban dashboard.
+        """
         self.db = TopicReservoirDB()
         self.zep_client = ZepMemoryClient()
         self.zep_session_id = f"{get_settings().ZEP_AUDIENCE_USER_ID}_session"
+        self.kanban_task_id = kanban_task_id
+        self._kanban_callback = None
+
+    async def _init_kanban_callback(self) -> None:
+        """Initialize the Kanban callback handler if needed."""
+        if self.kanban_task_id and self._kanban_callback is None:
+            try:
+                from packages.agents.kanban_callback import KanbanCallbackHandler
+                self._kanban_callback = KanbanCallbackHandler(self.kanban_task_id)
+                await self._kanban_callback.__aenter__()
+            except Exception as e:
+                logger.warning(f"kanban_callback_init_failed: {e}")
+                self._kanban_callback = None
+
+    async def _close_kanban_callback(self) -> None:
+        """Clean up the Kanban callback handler."""
+        if self._kanban_callback:
+            try:
+                await self._kanban_callback.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._kanban_callback = None
+
+    async def _report_thought(self, thought: str) -> None:
+        """Report a thought to Kanban if callback is available."""
+        if self._kanban_callback:
+            try:
+                await self._kanban_callback.on_thought(thought)
+            except Exception as e:
+                logger.debug(f"kanban_thought_report_failed: {e}")
+
+    async def _create_child_task(self, title: str, color: Optional[str] = None) -> Optional[str]:
+        """Create a child task in Kanban if callback is available."""
+        if self._kanban_callback:
+            try:
+                return await self._kanban_callback.create_child_task(
+                    title=title,
+                    stage=2,  # Suggested Topics
+                    color=color
+                )
+            except Exception as e:
+                logger.debug(f"kanban_child_task_creation_failed: {e}")
+        return None
 
     async def generate_candidate(self, seed_query: str, genre_id: str) -> TopicBrief | None:
-        """Find and score a topic, injecting Tier 1s into the reservoir."""
+        """Find and score a topic, injecting Tier 1s into the reservoir.
+        
+        When kanban_task_id is set, reports progress and creates child tasks
+        in the Kanban dashboard.
+        """
         logger.info(f"generating_topic_candidate: seed='{seed_query}' genre={genre_id}")
         
-        # Try Zep first, fall back to static file
-        context_str = await self._get_audience_context(genre_id)
+        # Initialize Kanban callback if we have a task ID
+        await self._init_kanban_callback()
         
-        # Add MiroFish signals to the prompt if available (non-blocking)
-        mirofish_signals = await self._get_mirofish_signals()
-        mirofish_context = ""
-        if mirofish_signals:
-            mirofish_context = f"\nTrending signals from MiroFish:\n" + \
-                               "\n".join(f"- {s}" for s in mirofish_signals)
-        
-        # 1. Generate the initial topic idea
-        prompt = f"""
-        You are a YouTube Investigative Journalist producing Johnny harris style documentary videos.
-        Your task is to find a compelling investigative topic related to: "{seed_query}".
-        Focus on the Hidden Mechanism, Oversimplified Narrative, or Hidden Connection.
-        
-        Historical Audience Insights (Use these to calibrate your topic focus):
-        {context_str}
-        {mirofish_context}
-        
-        Provide your response as a JSON object:
-        {{
-            "topic_statement": "The one sentence summary of the video",
-            "big_question": "The central question the video answers",
-            "gap_type": "Hidden Mechanism" | "Oversimplified Narrative" | "Hidden Connection" | "Universal in Local",
-            "mainstream_assumption": "What people incorrectly believe",
-            "anchor_candidates": ["Visual anchor 1", "Visual anchor 2"],
-            "timing_rationale": "Why this matters now",
-            "urgency_flag": true/false
-        }}
-        """
-        
-        async with RouterClient() as router:
-            response = await router.complete_text(prompt, system="Output only valid JSON.")
+        try:
+            await self._report_thought(f"Starting topic search for: {seed_query}")
             
-            try:
-                data = json.loads(response.strip("` \n").removeprefix("json\n"))
-            except json.JSONDecodeError:
-                logger.error("failed_to_parse_topic_candidate")
+            # Try Zep first, fall back to static file
+            context_str = await self._get_audience_context(genre_id)
+            
+            # Add MiroFish signals to the prompt if available (non-blocking)
+            mirofish_signals = await self._get_mirofish_signals()
+            mirofish_context = ""
+            if mirofish_signals:
+                mirofish_context = f"\nTrending signals from MiroFish:\n" + \
+                                   "\n".join(f"- {s}" for s in mirofish_signals)
+                await self._report_thought(f"Found {len(mirofish_signals)} trending signals from MiroFish")
+            
+            # 1. Generate the initial topic idea
+            await self._report_thought("Generating topic idea from research context...")
+            
+            prompt = f"""
+            You are a YouTube Investigative Journalist producing Johnny harris style documentary videos.
+            Your task is to find a compelling investigative topic related to: "{seed_query}".
+            Focus on the Hidden Mechanism, Oversimplified Narrative, or Hidden Connection.
+            
+            Historical Audience Insights (Use these to calibrate your topic focus):
+            {context_str}
+            {mirofish_context}
+            
+            Provide your response as a JSON object:
+            {{
+                "topic_statement": "The one sentence summary of the video",
+                "big_question": "The central question the video answers",
+                "gap_type": "Hidden Mechanism" | "Oversimplified Narrative" | "Hidden Connection" | "Universal in Local",
+                "mainstream_assumption": "What people incorrectly believe",
+                "anchor_candidates": ["Visual anchor 1", "Visual anchor 2"],
+                "timing_rationale": "Why this matters now",
+                "urgency_flag": true/false
+            }}
+            """
+            
+            async with RouterClient() as router:
+                response = await router.complete_text(prompt, system="Output only valid JSON.")
+                
+                try:
+                    data = json.loads(response.strip("` \n").removeprefix("json\n"))
+                except json.JSONDecodeError:
+                    logger.error("failed_to_parse_topic_candidate")
+                    await self._report_thought("Failed to parse topic candidate from LLM response")
+                    return None
+                    
+                # 2. Score Viability
+                await self._report_thought(f"Evaluating viability for: {data.get('topic_statement', 'Unknown topic')[:50]}...")
+                
+                score_breakdown = await self._evaluate_viability(
+                    data["topic_statement"], data["anchor_candidates"], router
+                )
+                
+                # 3. Assess Tier 1 Status
+                gap_pass = all(score_breakdown[q] for q in ["gap_1", "gap_2", "gap_3"])
+                anchor_pass_count = sum(1 for q in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if score_breakdown[q])
+                audience_pass_count = sum(1 for q in ["audience_1", "audience_2", "audience_3", "audience_4"] if score_breakdown[q])
+                
+                if gap_pass and anchor_pass_count >= 2 and audience_pass_count >= 2:
+                    logger.info("tier_1_topic_identified")
+                    await self._report_thought(f"✅ Tier 1 topic identified: {data['topic_statement'][:60]}")
+                    
+                    brief = TopicBrief(
+                        topic_statement=data["topic_statement"],
+                        big_question=data["big_question"],
+                        genre_id=genre_id,
+                        gap_type=data["gap_type"],
+                        viability_score_breakdown=score_breakdown,
+                        anchor_candidates=data["anchor_candidates"],
+                        mainstream_assumption=data["mainstream_assumption"],
+                        urgency_flag=data.get("urgency_flag", False),
+                        timing_rationale=data["timing_rationale"],
+                        created_at=datetime.now(timezone.utc),
+                        status="reservoir"
+                    )
+                    self.db.save_topic(brief)
+                    
+                    # Create child task in Kanban
+                    child_id = await self._create_child_task(brief.topic_statement)
+                    if child_id:
+                        await self._report_thought(f"Created Kanban task for suggested topic")
+                    
+                    return brief
+                
+                await self._report_thought(
+                    f"Topic failed viability: gap={gap_pass}, anchors={anchor_pass_count}/2, audience={audience_pass_count}/2"
+                )
+                logger.debug(f"candidate_failed_viability: gap={gap_pass}, anchors={anchor_pass_count}, audience={audience_pass_count}")
                 return None
                 
-            # 2. Score Viability
-            score_breakdown = await self._evaluate_viability(
-                data["topic_statement"], data["anchor_candidates"], router
-            )
-            
-            # 3. Assess Tier 1 Status
-            gap_pass = all(score_breakdown[q] for q in ["gap_1", "gap_2", "gap_3"])
-            anchor_pass_count = sum(1 for q in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if score_breakdown[q])
-            audience_pass_count = sum(1 for q in ["audience_1", "audience_2", "audience_3", "audience_4"] if score_breakdown[q])
-            
-            if gap_pass and anchor_pass_count >= 2 and audience_pass_count >= 2:
-                logger.info("tier_1_topic_identified")
-                brief = TopicBrief(
-                    topic_statement=data["topic_statement"],
-                    big_question=data["big_question"],
-                    genre_id=genre_id,
-                    gap_type=data["gap_type"],
-                    viability_score_breakdown=score_breakdown,
-                    anchor_candidates=data["anchor_candidates"],
-                    mainstream_assumption=data["mainstream_assumption"],
-                    urgency_flag=data.get("urgency_flag", False),
-                    timing_rationale=data["timing_rationale"],
-                    created_at=datetime.now(timezone.utc),
-                    status="reservoir"
-                )
-                self.db.save_topic(brief)
-                return brief
-            
-            logger.debug(f"candidate_failed_viability: gap={gap_pass}, anchors={anchor_pass_count}, audience={audience_pass_count}")
-            return None
+        finally:
+            # Clean up Kanban callback
+            await self._close_kanban_callback()
 
     async def _evaluate_viability(
         self, topic: str, anchors: list[str], router: RouterClient
