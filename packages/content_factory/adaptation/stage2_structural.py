@@ -42,7 +42,7 @@ def load_json(path: Path) -> dict:
 
 async def stage2_analyze(
     extraction: RawExtraction,
-    router_client: RouterClient | None = None,
+    router_client: RouterClient,
     source_library: SourceVideoLibrary | None = None,
     error_logger: ErrorLogger | None = None,
     cycle_id: str | None = None,
@@ -51,7 +51,7 @@ async def stage2_analyze(
 
     Args:
         extraction: RawExtraction from Stage 1.
-        router_client: FreeRouter client.
+        router_client: FreeRouter client (required).
         source_library: Source Video Library.
         error_logger: Error logger.
         cycle_id: Production cycle ID.
@@ -73,7 +73,7 @@ async def stage2_analyze(
     genre_names = [g["id"] for g in genre_schema.get("genres", [])]
 
     # Build prompt for LLM
-    system_prompt = \"\"\"
+    system_prompt = """
 You are an expert documentary script analyst. Your task is to analyze a YouTube transcript
 and classify it into structural sections following the Johnny Harris style.
 
@@ -87,7 +87,7 @@ The section types are:
 
 You must output valid JSON ONLY, exactly matching this schema:
 {
-  "genre": "one of: " + \", \".join(genre_names) + "\",
+  "genre": "one of: " + ", ".join(genre_names) + "",
   "big_question": "The core mystery or question from the hook",
   "structural_integrity_score": 0-7,
   "sections": [
@@ -108,32 +108,31 @@ You must output valid JSON ONLY, exactly matching this schema:
     }
   ]
 }
-\"\"\"
+"""
 
-    user_prompt = f\"\"\"
+    user_prompt = f"""
 Title: {extraction.title}
 Duration: {extraction.duration_seconds}s
 
 Transcript:
 {extraction.full_transcript[:15000]} # truncate for context limits if needed
-\"\"\"
+"""
 
     try:
-        async with RouterClient() if not router_client else router_client as client:
-            response_text = await client.complete_text(
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-                model="auto",
-                temperature=0.1
-            )
-            
-            # extract JSON from response
-            import re
-            json_match = re.search(r'\\{.*\\}', response_text, re.DOTALL)
-            if not json_match:
-                raise ValueError("Could not extract JSON from LLM response")
-            
-            data = json.loads(json_match.group(0))
+        response_text = await router_client.complete_text(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            model="auto",
+            temperature=0.1
+        )
+        
+        # extract JSON from response
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if not json_match:
+            raise ValueError("Could not extract JSON from LLM response")
+        
+        data = json.loads(json_match.group(0))
 
     except Exception as e:
         errors.log_error(

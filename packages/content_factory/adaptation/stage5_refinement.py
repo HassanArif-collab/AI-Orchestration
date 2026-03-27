@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 async def stage5_refine(
     script: AdaptedScript,
-    router_client: RouterClient | None = None,
+    router_client: RouterClient,
     error_logger=None,
     cycle_id: str | None = None,
 ) -> AdaptedScript | None:
@@ -61,47 +61,45 @@ Return a JSON array with the same structure, prose rewritten:
 [{{"section_label": "...", "prose": "REWRITTEN prose", "visual_direction": "UNCHANGED"}}]"""
 
     try:
-        client_to_use = router_client
-        async with (RouterClient() if not client_to_use else client_to_use) as client:
-            response = await client.complete_text(
-                prompt=prompt,
-                system="Return only a valid JSON array.",
-                model="auto"
-            )
+        response = await router_client.complete_text(
+            prompt=prompt,
+            system="Return only a valid JSON array.",
+            model="auto"
+        )
 
-            json_match = re.search(r'\[.*\]', response, re.DOTALL)
-            if not json_match:
-                logger.warning(f"stage5_no_json_found: {cycle_id}")
-                return script  # Return original if refinement fails
+        json_match = re.search(r'\[.*\]', response, re.DOTALL)
+        if not json_match:
+            logger.warning(f"stage5_no_json_found: {cycle_id}")
+            return script  # Return original if refinement fails
 
-            data = json.loads(json_match.group(0))
-            refined_entries = []
-            for i, item in enumerate(data):
-                try:
-                    # Merge: use refined prose but keep original visual data
-                    original = script.entries[i] if i < len(script.entries) else None
-                    refined_entries.append(DualColumnEntry(
-                        section_label=item.get("section_label",
-                                               original.section_label if original else "ANCHOR"),
-                        prose=item.get("prose", original.prose if original else ""),
-                        visual_direction=item.get("visual_direction",
-                                                  original.visual_direction if original else ""),
-                        visual_type=original.visual_type if original else None,
-                        duration_estimate_seconds=original.duration_estimate_seconds
-                                                  if original else None,
-                    ))
-                except Exception as e:
-                    logger.warning(f"stage5_entry_parse_failed: {e}")
-                    if original:
-                        refined_entries.append(original)
+        data = json.loads(json_match.group(0))
+        refined_entries = []
+        for i, item in enumerate(data):
+            try:
+                # Merge: use refined prose but keep original visual data
+                original = script.entries[i] if i < len(script.entries) else None
+                refined_entries.append(DualColumnEntry(
+                    section_label=item.get("section_label",
+                                           original.section_label if original else "ANCHOR"),
+                    prose=item.get("prose", original.prose if original else ""),
+                    visual_direction=item.get("visual_direction",
+                                              original.visual_direction if original else ""),
+                    visual_type=original.visual_type if original else None,
+                    duration_estimate_seconds=original.duration_estimate_seconds
+                                              if original else None,
+                ))
+            except Exception as e:
+                logger.warning(f"stage5_entry_parse_failed: {e}")
+                if original:
+                    refined_entries.append(original)
 
-            if len(refined_entries) < len(script.entries) * 0.7:
-                logger.warning(f"stage5_truncated_output: keeping original")
-                return script
+        if len(refined_entries) < len(script.entries) * 0.7:
+            logger.warning(f"stage5_truncated_output: keeping original")
+            return script
 
-            refined = script.model_copy(deep=True)
-            refined.entries = refined_entries
-            return refined
+        refined = script.model_copy(deep=True)
+        refined.entries = refined_entries
+        return refined
 
     except Exception as e:
         logger.error(f"stage5_refinement_failed: {e} cycle={cycle_id}")
