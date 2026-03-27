@@ -1,12 +1,52 @@
 /**
- * app.js — Usage tab.
- *
- * Context: Shows rate limit usage per provider. Data comes from response
- * headers that providers send back (x-ratelimit-remaining-requests etc.)
- * after each chat request. The tab also explains this to the user.
- *
- * Depends on: ui.js (apiFetch, escapeHtml)
+ * app.js — Main application logic and tab management.
  */
+
+const App = {
+  async init() {
+    console.log("FreeRouter App: initializing...");
+    this.setupTabs();
+    
+    // Initial data load for the default active tab (Providers)
+    Providers.init();
+  },
+
+  setupTabs() {
+    const tabs = document.querySelectorAll('.tab-btn');
+    tabs.forEach(tab => {
+      tab.onclick = async () => {
+        const tabName = tab.dataset.tab;
+        
+        // UI updates
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+        document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+        
+        // Lazy load tab data
+        if (tabName === 'chat') {
+          Chat.init();
+        } else if (tabName === 'usage') {
+          loadUsage();
+        } else if (tabName === 'pipeline') {
+          if (typeof Pipeline !== 'undefined') {
+            Pipeline.init();
+          } else {
+            console.error("Pipeline script not loaded");
+          }
+        } else if (tabName === 'providers') {
+          Providers.init();
+        }
+      };
+    });
+  }
+};
+
+// Start the app when DOM is ready
+document.addEventListener('DOMContentLoaded', () => App.init());
+
+// ─── Usage Tab ───────────────────────────────────────────────────────────────
 
 async function loadUsage() {
   const panel = document.getElementById('tab-usage');

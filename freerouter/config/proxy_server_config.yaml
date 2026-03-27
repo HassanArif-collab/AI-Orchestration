@@ -25,12 +25,12 @@ model_list:
 
   - model_name: free-router/fast
     litellm_params:
-      model: "ollama/qwen2.5:7b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 30
     model_info:
-      description: "Fast free model - Qwen 2.5 7B via Ollama (local)"
-      max_tokens: 32000
+      description: "Fast free model - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
       supports_vision: false
 
   - model_name: free-router/fast-groq
@@ -60,12 +60,12 @@ model_list:
 
   - model_name: free-router/coder
     litellm_params:
-      model: "ollama/qwen2.5-coder:32b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 120
     model_info:
-      description: "Best free coder - Qwen 2.5 Coder 32B via Ollama (local)"
-      max_tokens: 32000
+      description: "Coder - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
       supports_vision: false
 
   - model_name: free-router/coder-deepseek
@@ -115,12 +115,12 @@ model_list:
 
   - model_name: free-router/reasoning-ollama
     litellm_params:
-      model: "ollama/deepseek-r1:8b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 180
     model_info:
-      description: "Reasoning model - DeepSeek R1 8B via Ollama (local)"
-      max_tokens: 32000
+      description: "Reasoning model - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
       supports_vision: false
 
   # ============================================================================
@@ -130,12 +130,12 @@ model_list:
 
   - model_name: free-router/smart
     litellm_params:
-      model: "ollama/qwen2.5:14b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 60
     model_info:
-      description: "Smart model - Qwen 2.5 14B via Ollama (local)"
-      max_tokens: 32000
+      description: "Smart model - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
       supports_vision: false
 
   - model_name: free-router/smart-groq
@@ -165,13 +165,13 @@ model_list:
 
   - model_name: free-router/vision
     litellm_params:
-      model: "ollama/llama3.2-vision:11b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 120
     model_info:
-      description: "Vision model - Llama 3.2 Vision 11B via Ollama (local)"
-      max_tokens: 8192
-      supports_vision: true
+      description: "Vision model - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
+      supports_vision: false
 
   - model_name: free-router/vision-openrouter
     litellm_params:
@@ -185,13 +185,13 @@ model_list:
 
   - model_name: free-router/vision-qwen
     litellm_params:
-      model: "ollama/qwen2.5-vl:7b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 120
     model_info:
-      description: "Vision model - Qwen 2.5 VL 7B via Ollama (local)"
-      max_tokens: 32000
-      supports_vision: true
+      description: "Vision model - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
+      supports_vision: false
 
   # ============================================================================
   # LONG CONTEXT MODELS - For processing large documents
@@ -200,12 +200,12 @@ model_list:
 
   - model_name: free-router/long-context
     litellm_params:
-      model: "ollama/qwen2.5:32b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 300
     model_info:
-      description: "Long context - Qwen 2.5 32B via Ollama (local, 32k context)"
-      max_tokens: 32000
+      description: "Long context - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
       supports_vision: false
 
   - model_name: free-router/long-context-128k
@@ -224,12 +224,12 @@ model_list:
 
   - model_name: free-router/balanced
     litellm_params:
-      model: "ollama/qwen2.5:7b"
+      model: "ollama/nemotron-3-nano:4b"
       api_base: "http://localhost:11434"
       timeout: 60
     model_info:
-      description: "Balanced default - Qwen 2.5 7B via Ollama (local)"
-      max_tokens: 32000
+      description: "Balanced default - Nemotron 3 Nano 4B via Ollama (local)"
+      max_tokens: 4096
       supports_vision: false
 
   # ============================================================================

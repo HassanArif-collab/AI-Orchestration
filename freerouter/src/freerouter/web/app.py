@@ -4,27 +4,18 @@ web/app.py — FreeRouter Web Dashboard (FastAPI).
 Context: Provides the browser-based management UI and chat interface.
 Unlike the old version, this app calls providers DIRECTLY via the Router —
 no LiteLLM proxy, no separate process, no port 4000 dependency.
-
-Routes:
-  GET  /                      → Dashboard HTML
-  GET  /api/providers          → List providers + config status
-  POST /api/providers/{name}/key → Save API key
-  POST /api/providers/{name}/test → Health check a provider
-  GET  /api/models             → List available models
-  POST /api/chat/stream        → ⭐ Streaming chat (uses Router directly)
-  POST /api/chat/complete      → Non-streaming chat
-  GET  /api/usage              → Rate limit usage stats
 """
 
+import asyncio
 import json
 import logging
 import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -40,6 +31,8 @@ from freerouter.storage import (
     init_db, create_conversation, list_conversations,
     get_conversation, delete_conversation, add_message,
     get_db_stats, get_db_path,
+    create_pipeline_task, list_pipeline_tasks, get_pipeline_task,
+    update_pipeline_task, delete_pipeline_task, add_task_thought,
 )
 
 logger = logging.getLogger("freerouter.web")
@@ -57,6 +50,49 @@ class ChatRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 4096
     provider: Optional[str] = None
+
+
+class PipelineTaskCreate(BaseModel):
+    title: str
+    stage: int = 1
+    parent_id: Optional[str] = None
+    color: Optional[str] = None
+
+
+class PipelineTaskUpdate(BaseModel):
+    title: Optional[str] = None
+    stage: Optional[int] = None
+    status: Optional[str] = None
+    content: Optional[str] = None
+    research: Optional[str] = None
+    script: Optional[str] = None
+    visual_cues: Optional[str] = None
+    notion_url: Optional[str] = None
+
+
+class PipelineEvent(BaseModel):
+    task_id: str
+    event_type: str  # 'thought', 'stage_change', 'status_change', 'artifact'
+    data: Dict[str, Any]
+
+
+# ─── Real-time Events ────────────────────────────────────────────────────────
+
+# Global set of active SSE queues
+pipeline_subscribers: List[asyncio.Queue] = []
+
+async def broadcast_pipeline_event(event: dict):
+    """Broadcast a pipeline event to all connected SSE clients."""
+    disconnected = []
+    for queue in pipeline_subscribers:
+        try:
+            await queue.put(event)
+        except Exception:
+            disconnected.append(queue)
+    
+    for queue in disconnected:
+        if queue in pipeline_subscribers:
+            pipeline_subscribers.remove(queue)
 
 
 # ─── App Factory ──────────────────────────────────────────────────────────────
@@ -85,8 +121,6 @@ def create_web_app() -> FastAPI:
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # Conversations are stored in SQLite via storage.py
-
     # ─── Dashboard ────────────────────────────────────────────────────────────
 
     @app.get("/", response_class=HTMLResponse)
@@ -95,6 +129,91 @@ def create_web_app() -> FastAPI:
         if html_path.exists():
             return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
         return HTMLResponse(content="<h1>FreeRouter - index.html not found</h1>")
+
+    # ─── Pipeline API ─────────────────────────────────────────────────────────
+
+    @app.get("/api/pipeline/tasks")
+    async def get_tasks():
+        return {"tasks": list_pipeline_tasks()}
+
+    @app.post("/api/pipeline/tasks")
+    async def create_task(data: PipelineTaskCreate):
+        task = create_pipeline_task(
+            title=data.title,
+            stage=data.stage,
+            parent_id=data.parent_id,
+            color=data.color
+        )
+        await broadcast_pipeline_event({"type": "task_created", "task": task})
+        return task
+
+    @app.patch("/api/pipeline/tasks/{tid}")
+    async def update_task(tid: str, data: PipelineTaskUpdate):
+        updates = data.dict(exclude_unset=True)
+        if update_pipeline_task(tid, updates):
+            task = get_pipeline_task(tid)
+            await broadcast_pipeline_event({"type": "task_updated", "task": task})
+            return task
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    @app.delete("/api/pipeline/tasks/{tid}")
+    async def delete_task(tid: str):
+        if delete_pipeline_task(tid):
+            await broadcast_pipeline_event({"type": "task_deleted", "task_id": tid})
+            return {"success": True}
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    @app.post("/api/pipeline/events")
+    async def report_event(event: PipelineEvent):
+        """Endpoint for agents to report their progress."""
+        if event.event_type == "thought":
+            add_task_thought(event.task_id, event.data)
+        elif event.event_type == "stage_change":
+            update_pipeline_task(event.task_id, {"stage": event.data.get("stage")})
+        elif event.event_type == "status_change":
+            update_pipeline_task(event.task_id, {"status": event.data.get("status")})
+        elif event.event_type == "artifact":
+            update_pipeline_task(event.task_id, {event.data.get("key"): event.data.get("value")})
+        
+        # Broadcast the raw event to the UI
+        await broadcast_pipeline_event({
+            "type": "agent_event",
+            "task_id": event.task_id,
+            "event_type": event.event_type,
+            "data": event.data
+        })
+        return {"success": True}
+
+    @app.get("/api/pipeline/stream")
+    async def pipeline_stream(request: Request):
+        """SSE stream for real-time pipeline updates."""
+        queue = asyncio.Queue()
+        pipeline_subscribers.append(queue)
+
+        async def event_generator():
+            try:
+                while True:
+                    # Check if client closed connection
+                    if await request.is_disconnected():
+                        break
+                    
+                    event = await queue.get()
+                    yield f"data: {json.dumps(event)}\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if queue in pipeline_subscribers:
+                    pipeline_subscribers.remove(queue)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
 
     # ─── Providers API ────────────────────────────────────────────────────────
 
@@ -129,14 +248,12 @@ def create_web_app() -> FastAPI:
 
     @app.post("/api/providers/{name}/reset")
     async def reset_provider_limits(name: str):
-        """Reset rate limit state for a provider (useful when stuck)."""
         from freerouter.providers import reset_provider
         reset_provider(name)
         return {"success": True, "message": f"Rate limits cleared for {name}"}
 
     @app.get("/api/providers/status")
     async def providers_status():
-        """Health check all configured providers."""
         results = []
         for defn, is_configured in get_configured_providers():
             if is_configured:
@@ -164,10 +281,6 @@ def create_web_app() -> FastAPI:
 
     @app.post("/api/chat/stream")
     async def chat_stream(data: ChatRequest):
-        """
-        Streaming chat endpoint. Calls providers directly via Router.
-        Returns SSE stream of OpenAI-compatible chunks.
-        """
         router = get_router()
 
         async def generate():
@@ -200,7 +313,6 @@ def create_web_app() -> FastAPI:
 
     @app.post("/api/chat/complete")
     async def chat_complete(data: ChatRequest):
-        """Non-streaming chat completion."""
         router = get_router()
         try:
             result = await router.complete(
@@ -223,7 +335,6 @@ def create_web_app() -> FastAPI:
         all_u = get_all_usage()
         result = {}
 
-        # Include ALL configured providers, even ones with no traffic yet
         for defn in sorted(KNOWN_PROVIDERS, key=lambda x: x.priority):
             name = defn.name
             has_key = (not defn.requires_auth) or bool(get_provider_key(name))
@@ -259,12 +370,6 @@ def create_web_app() -> FastAPI:
             }
 
         return {"usage": result, "source": "response_headers"}
-
-    @app.post("/api/providers/{name}/reset")
-    async def reset_provider_limits_web(name: str):
-        """Reset rate limit state for a provider."""
-        reset_provider(name)
-        return {"success": True, "message": f"Rate limits cleared for {name}"}
 
     # ─── Conversations API ────────────────────────────────────────────────────
 
@@ -310,7 +415,6 @@ def create_web_app() -> FastAPI:
 
     @app.get("/api/storage")
     async def storage_info():
-        """Get info about the local chat database."""
         return get_db_stats()
 
     @app.get("/api/health")

@@ -169,7 +169,7 @@ class PipelineRun:
         return {
             "run_id": self.run_id,
             "current_stage": self.current_stage.value,
-            "stage_outputs": self.stage_outputs,
+            "stage_outputs": _serialize_datetimes(self.stage_outputs),
             "stage_status": self.stage_status,
             "status": self.status,
             "created_at": self.created_at.isoformat(),
@@ -197,6 +197,25 @@ class PipelineRun:
             updated_at=datetime.fromisoformat(data["updated_at"]),
             error_message=data.get("error_message", ""),
         )
+
+
+def _serialize_datetimes(obj: Any) -> Any:
+    """Recursively serialize datetime objects to ISO strings.
+
+    Args:
+        obj: Object to serialize (dict, list, datetime, or primitive)
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: _serialize_datetimes(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_serialize_datetimes(item) for item in obj]
+    else:
+        return obj
 
 
 class RunStore:

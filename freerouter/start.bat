@@ -75,4 +75,4 @@ echo   Health: http://localhost:%PORT%/health
 echo.
 
 REM Start the server
-python -m litellm --config %CONFIG% --host %HOST% --port %PORT%
+python -m freerouter proxy --host %HOST% --port %PORT%

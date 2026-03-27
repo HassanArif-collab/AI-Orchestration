@@ -105,7 +105,7 @@ def check_api_keys():
 def install_dependencies():
     """Install dependencies if needed."""
     try:
-        import litellm
+        import freerouter
         print("✓ Dependencies installed")
         return True
     except ImportError:
