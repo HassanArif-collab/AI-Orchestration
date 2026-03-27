@@ -81,11 +81,11 @@ function renderBoard(container, runs) {
     else cols.error.runs.push(r);
   }
 
-  container.innerHTML = `<div class="kanban-board">` +
+  container.innerHTML = `<div class="pipeline-board">` +
     Object.entries(cols).map(([key, col]) => `
-      <div class="kanban-col">
-        <div class="kanban-col-header ${key}">${col.label} <span style="opacity:.5">${col.runs.length}</span></div>
-        <div class="kanban-body">
+      <div class="pipeline-col">
+        <div class="pipeline-col-header ${key}">${col.label} <span style="opacity:.5">${col.runs.length}</span></div>
+        <div class="pipeline-body">
           ${col.runs.length ? col.runs.map(r => `
             <div class="run-card" onclick="loadRunDetail('${r.run_id}')">
               <div class="run-card-title">${escHtml(r.video_title || 'New Run')}</div>

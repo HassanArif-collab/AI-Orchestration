@@ -61,6 +61,7 @@ from apps.api.routers import (
     settings_routes,
     topic_routes,
     health_routes,
+    kanban_routes,
 )
 from packages.core.config import get_settings
 
@@ -76,7 +77,15 @@ async def lifespan(app: FastAPI):
         init_db()
     except Exception:
         pass
-    print("\n⚡ FreeRouter Dashboard — http://localhost:3000")
+    
+    # Initialize Kanban database
+    try:
+        from apps.api.routers.kanban_routes import init_kanban_db
+        init_kanban_db()
+    except Exception as e:
+        print(f"Warning: Could not init Kanban DB: {e}")
+    
+    print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
     await close_all()
@@ -103,17 +112,18 @@ app.add_middleware(
 )
 
 # Health check endpoint (no auth required)
-app.include_router(health_routes.router, tags=["health"])
+app.include_router(health_routes, tags=["health"])
 
 # API routes
-app.include_router(pipeline_routes.router, prefix="/api/pipeline",  tags=["pipeline"])
-app.include_router(provider_routes.router, prefix="/api/providers", tags=["providers"])
-app.include_router(chat_routes.router,     prefix="/api/chat",      tags=["chat"])
-app.include_router(memory_routes.router,   prefix="/api/memory",    tags=["memory"])
-app.include_router(analytics_routes.router,prefix="/api/analytics", tags=["analytics"])
-app.include_router(visual_routes.router,   prefix="/api/visual",    tags=["visual"])
-app.include_router(settings_routes.router, prefix="/api/settings",  tags=["settings"])
-app.include_router(topic_routes.router,    prefix="/api/topics",    tags=["topics"])
+app.include_router(pipeline_routes, prefix="/api/pipeline",  tags=["pipeline"])
+app.include_router(provider_routes, prefix="/api/providers", tags=["providers"])
+app.include_router(chat_routes,     prefix="/api/chat",      tags=["chat"])
+app.include_router(memory_routes,   prefix="/api/memory",    tags=["memory"])
+app.include_router(analytics_routes,prefix="/api/analytics", tags=["analytics"])
+app.include_router(visual_routes,   prefix="/api/visual",    tags=["visual"])
+app.include_router(settings_routes, prefix="/api/settings",  tags=["settings"])
+app.include_router(topic_routes,    prefix="/api/topics",    tags=["topics"])
+app.include_router(kanban_routes, prefix="/api/kanban", tags=["kanban"])
 
 # SSE endpoint
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])

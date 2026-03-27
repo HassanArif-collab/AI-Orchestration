@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FreeRouter</title>
   <link rel="stylesheet" href="/static/css/styles.css">
 </head>
+
 <body>
   <div class="app">
     <header>
@@ -16,6 +18,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-tab="providers">Providers</button>
       <button class="tab-btn" data-tab="chat">Chat</button>
+      <button class="tab-btn" data-tab="pipeline">Pipeline</button>
       <button class="tab-btn" data-tab="usage">Usage</button>
     </nav>
 
@@ -30,14 +33,107 @@
     <div id="tab-usage" class="tab-panel hidden">
       <div class="loading">Loading…</div>
     </div>
+
+    <div id="tab-pipeline" class="tab-panel hidden">
+      <div class="pipeline-container">
+        <div class="kanban-board" id="kanban-board">
+          <!-- Column 1: Topic Finder -->
+          <div class="kanban-column" data-stage="1">
+            <div class="column-header">
+              <h3>Topic Finding</h3>
+              <button class="add-task-btn" data-stage="1">+ Add</button>
+            </div>
+            <div class="task-list" id="stage-1"></div>
+          </div>
+
+          <!-- Column 2: Suggested Topics -->
+          <div class="kanban-column" data-stage="2">
+            <div class="column-header">
+              <h3>Suggested Topics</h3>
+            </div>
+            <div class="task-list" id="stage-2"></div>
+          </div>
+
+          <!-- Column 3: Researching -->
+          <div class="kanban-column" data-stage="3">
+            <div class="column-header">
+              <h3>Researching</h3>
+            </div>
+            <div class="task-list" id="stage-3"></div>
+          </div>
+
+          <!-- Column 4: Scripting -->
+          <div class="kanban-column" data-stage="4">
+            <div class="column-header">
+              <h3>Script</h3>
+            </div>
+            <div class="task-list" id="stage-4"></div>
+          </div>
+
+          <!-- Column 5: Visuals -->
+          <div class="kanban-column" data-stage="5">
+            <div class="column-header">
+              <h3>Visual</h3>
+            </div>
+            <div class="task-list" id="stage-5"></div>
+          </div>
+
+          <!-- Column 6: Notion -->
+          <div class="kanban-column" data-stage="6">
+            <div class="column-header">
+              <h3>Notion</h3>
+            </div>
+            <div class="task-list" id="stage-6"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast-container"></div>
+
+  <!-- Task Detail Drawer -->
+  <div id="task-drawer" class="drawer hidden">
+    <div class="drawer-overlay"></div>
+    <div class="drawer-content">
+      <div class="drawer-header">
+        <button class="close-btn" id="close-drawer-btn">×</button>
+        <h2 id="drawer-title">Task Title</h2>
+        <div class="drawer-meta">
+          <span id="drawer-status">Status: idle</span>
+          <span id="drawer-id">ID: ...</span>
+        </div>
+        <div class="stage-badge" id="drawer-stage-badge">Stage 1</div>
+      </div>
+
+      <div class="drawer-body">
+        <!-- Artifact Display -->
+        <div class="drawer-section">
+          <h3>Current Output</h3>
+          <div id="drawer-artifact" class="artifact-box">Loading...</div>
+        </div>
+
+        <!-- Notion Link -->
+        <div id="notion-link-container" class="drawer-section hidden">
+          <h3>Published to Notion</h3>
+          <a id="notion-link" href="#" target="_blank" class="notion-link">Open in Notion</a>
+        </div>
+
+        <!-- Agent Thoughts Stream -->
+        <div class="drawer-section">
+          <h3>Agent Monologue</h3>
+          <div id="drawer-thoughts" class="thought-log" data-task-id=""></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Load order matters: ui.js first (defines helpers), then feature modules -->
   <script src="/static/js/ui.js"></script>
   <script src="/static/js/providers.js"></script>
   <script src="/static/js/chat.js"></script>
+  <script src="/static/js/pipeline.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
+
 </html>

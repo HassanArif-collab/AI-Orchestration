@@ -60,9 +60,108 @@ def init_db() -> None:
                 timestamp       TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS pipeline_tasks (
+                id              TEXT PRIMARY KEY,
+                parent_id       TEXT,
+                title           TEXT NOT NULL,
+                stage           INTEGER NOT NULL DEFAULT 1,
+                status          TEXT NOT NULL DEFAULT 'idle',
+                color           TEXT NOT NULL,
+                content         TEXT DEFAULT '',
+                research        TEXT DEFAULT '',
+                script          TEXT DEFAULT '',
+                visual_cues     TEXT DEFAULT '',
+                notion_url      TEXT DEFAULT '',
+                thoughts        TEXT DEFAULT '[]',
+                updated_at      TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_conv
                 ON messages(conversation_id, timestamp);
+            
+            CREATE INDEX IF NOT EXISTS idx_pipeline_stage
+                ON pipeline_tasks(stage);
         """)
+
+
+# ─── Pipeline Tasks ───────────────────────────────────────────────────────────
+
+def create_pipeline_task(
+    title: str,
+    stage: int = 1,
+    parent_id: Optional[str] = None,
+    color: Optional[str] = None,
+) -> dict:
+    tid = str(uuid.uuid4())
+    now = datetime.now().isoformat()
+    if not color:
+        import random
+        colors = ["#0066cc", "#2da44e", "#8a63d2", "#d4a017", "#d1242f", "#0969da"]
+        color = random.choice(colors)
+    
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO pipeline_tasks (id, parent_id, title, stage, color, updated_at) VALUES (?,?,?,?,?,?)",
+            (tid, parent_id, title, stage, color, now)
+        )
+    return {"id": tid, "parent_id": parent_id, "title": title, "stage": stage, "color": color, "updated_at": now}
+
+
+def list_pipeline_tasks() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM pipeline_tasks ORDER BY updated_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_pipeline_task(tid: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM pipeline_tasks WHERE id = ?", (tid,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_pipeline_task(tid: str, updates: dict) -> bool:
+    if not updates:
+        return False
+    
+    updates["updated_at"] = datetime.now().isoformat()
+    keys = []
+    values = []
+    for k, v in updates.items():
+        keys.append(f"{k} = ?")
+        if isinstance(v, (dict, list)):
+            values.append(json.dumps(v))
+        else:
+            values.append(v)
+    
+    query = f"UPDATE pipeline_tasks SET {', '.join(keys)} WHERE id = ?"
+    values.append(tid)
+    
+    with _connect() as conn:
+        cur = conn.execute(query, tuple(values))
+    return cur.rowcount > 0
+
+
+def delete_pipeline_task(tid: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM pipeline_tasks WHERE id = ?", (tid,))
+    return cur.rowcount > 0
+
+
+def add_task_thought(tid: str, thought: dict) -> bool:
+    task = get_pipeline_task(tid)
+    if not task:
+        return False
+    
+    thoughts = json.loads(task.get("thoughts") or "[]")
+    thoughts.append({
+        "timestamp": datetime.now().isoformat(),
+        **thought
+    })
+    # Keep only last 50 thoughts to prevent DB bloat
+    if len(thoughts) > 50:
+        thoughts = thoughts[-50:]
+    
+    return update_pipeline_task(tid, {"thoughts": thoughts})
 
 
 # ─── Conversations ────────────────────────────────────────────────────────────

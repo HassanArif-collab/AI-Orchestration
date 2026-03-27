@@ -66,6 +66,7 @@ function statusDot(status) {
 
 const TAB_INITS = {
   pipeline:  () => initPipeline(),
+  kanban:    () => Kanban.init(),
   chat:      () => initChat(),
   providers: () => initProviders(),
   memory:    () => initMemory(),
@@ -76,6 +77,7 @@ const TAB_INITS = {
 
 const TAB_REFRESH = {
   pipeline:  () => refreshPipeline(),
+  kanban:    () => Kanban.refresh(),
   chat:      () => {},
   providers: () => refreshProviders(),
   memory:    () => refreshMemory(),
@@ -141,6 +143,35 @@ function connectSSE() {
     const d = JSON.parse(e.data).data;
     showToast(`Pipeline complete!`, 'success', 5000);
     if (_activeTab === 'pipeline') refreshPipeline();
+  });
+
+  // Kanban events
+  _es.addEventListener('task_created', e => {
+    const d = JSON.parse(e.data);
+    if (typeof Kanban !== 'undefined') {
+      Kanban.handleSSEEvent({ type: 'task_created', data: d.data });
+    }
+  });
+
+  _es.addEventListener('task_updated', e => {
+    const d = JSON.parse(e.data);
+    if (typeof Kanban !== 'undefined') {
+      Kanban.handleSSEEvent({ type: 'task_updated', data: d.data });
+    }
+  });
+
+  _es.addEventListener('task_deleted', e => {
+    const d = JSON.parse(e.data);
+    if (typeof Kanban !== 'undefined') {
+      Kanban.handleSSEEvent({ type: 'task_deleted', data: d.data });
+    }
+  });
+
+  _es.addEventListener('agent_event', e => {
+    const d = JSON.parse(e.data);
+    if (typeof Kanban !== 'undefined') {
+      Kanban.handleSSEEvent({ type: 'agent_event', data: d.data });
+    }
   });
 
   _es.onerror = () => setTimeout(connectSSE, 5000);

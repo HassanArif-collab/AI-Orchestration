@@ -101,4 +101,4 @@ echo -e "  Health: ${GREEN}http://localhost:${PORT}/health${NC}"
 echo ""
 
 # Start the server
-exec python -m litellm --config "$CONFIG" --host "$HOST" --port "$PORT"
+exec python3 -m freerouter proxy --host "$HOST" --port "$PORT"
