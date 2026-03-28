@@ -254,11 +254,22 @@ class RunStore:
                 CREATE TABLE IF NOT EXISTS pipeline_runs (
                     run_id TEXT PRIMARY KEY,
                     state_json TEXT NOT NULL,
+                    current_stage TEXT,
+                    status TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
+            # Migration: Add columns if they don't exist
+            try:
+                conn.execute("ALTER TABLE pipeline_runs ADD COLUMN current_stage TEXT")
+            except sqlite3.OperationalError:
+                pass  # Already exists
+            try:
+                conn.execute("ALTER TABLE pipeline_runs ADD COLUMN status TEXT")
+            except sqlite3.OperationalError:
+                pass  # Already exists
             conn.commit()
 
     def save(self, run: PipelineRun) -> None:
@@ -273,12 +284,14 @@ class RunStore:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO pipeline_runs
-                (run_id, state_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
+                (run_id, state_json, current_stage, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.run_id,
                     json.dumps(run.to_dict()),
+                    run.current_stage.value if hasattr(run.current_stage, "value") else str(run.current_stage),
+                    run.status,
                     run.created_at.isoformat(),
                     run.updated_at.isoformat(),
                 ),

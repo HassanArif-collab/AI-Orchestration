@@ -1,675 +1,212 @@
 """
-Kanban task management routes.
+Kanban task management routes — Refactored to use PipelineRunner.
 
 These endpoints handle the Kanban board operations for the YouTube Pipeline
-dashboard. The Kanban board shows tasks in 6 columns representing different
-stages of content production.
-
-Columns:
-    1. Topic Finding - Topic finder agents discovering trends
-    2. Suggested Topics - Topics discovered, awaiting approval
-    3. Researching - Deep research on approved topics
-    4. Script - Script writing in progress
-    5. Visual - Visual planning and asset creation
-    6. Notion - Published to Notion, complete
-
-SSE Events:
-    All task changes are broadcast via the EventBus to connected clients.
+dashboard. The Kanban board is a view-only (mostly) representation of the
+Pipeline runs stored in pipeline.db.
 """
 
 from __future__ import annotations
 
 import json
-import random
-import sqlite3
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
+
+from apps.api.dependencies import get_pipeline_runner, get_run_store
 
 router = APIRouter()
 
-# Database path for Kanban tasks
-_KANBAN_DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "kanban.db"
+# Map pipeline stage names to Kanban column numbers (1-6)
+PIPELINE_TO_KANBAN_STAGE = {
+    "trend_analysis": 1,        # Topic Finding
+    "human_topic_approval": 2,  # Suggested Topics (human gate)
+    "research": 3,              # Researching
+    "script_writing": 4,        # Script
+    "visual_planning": 5,       # Visual
+    "seo": 4,                   # Script (parallel stage)
+    "human_review": 5,          # Visual (human gate)
+    "asset_creation": 6,        # Notion
+    "publish": 6,               # Notion (final)
+}
 
-# Default colors for tasks
-DEFAULT_COLORS = ["#0066cc", "#2da44e", "#8a63d2", "#d4a017", "#d1242f", "#0969da"]
+def get_kanban_stage(pipeline_stage: str) -> int:
+    """Convert pipeline stage name to Kanban column number."""
+    return PIPELINE_TO_KANBAN_STAGE.get(pipeline_stage, 1)
 
-
-# ─── Database Helpers ───────────────────────────────────────────────────────────
-
-def _get_db_connection() -> sqlite3.Connection:
-    """Get a database connection with proper configuration."""
-    _KANBAN_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_KANBAN_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
-
-
-def init_kanban_db() -> None:
-    """Initialize the Kanban database schema."""
-    with _get_db_connection() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS kanban_tasks (
-                id TEXT PRIMARY KEY,
-                parent_id TEXT,
-                title TEXT NOT NULL,
-                stage INTEGER NOT NULL DEFAULT 1,
-                status TEXT NOT NULL DEFAULT 'idle',
-                color TEXT NOT NULL,
-                content TEXT DEFAULT '',
-                research TEXT DEFAULT '',
-                script TEXT DEFAULT '',
-                visual_cues TEXT DEFAULT '',
-                notion_url TEXT DEFAULT '',
-                thoughts TEXT DEFAULT '[]',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (parent_id) REFERENCES kanban_tasks(id) ON DELETE SET NULL
-            );
-            
-            CREATE INDEX IF NOT EXISTS idx_kanban_stage ON kanban_tasks(stage);
-            CREATE INDEX IF NOT EXISTS idx_kanban_parent ON kanban_tasks(parent_id);
-            CREATE INDEX IF NOT EXISTS idx_kanban_status ON kanban_tasks(status);
-        """)
-
-
-# ─── Internal Functions for Direct DB Access ─────────────────────────────────────
-
-async def create_task_internal(title: str, stage: int = 1, task_id: str | None = None) -> str:
-    """Create a Kanban task directly in SQLite without HTTP.
+def _run_to_kanban_dict(run) -> dict:
+    """Convert a PipelineRun to a Kanban-friendly dictionary."""
+    d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
+    stage_name = d.get("current_stage", "trend_analysis")
     
-    Used by pipeline_routes.py to avoid fragile HTTP self-calls.
+    # Extract title
+    video_title = "Untitled"
+    outputs = d.get("stage_outputs", {})
+    approval = outputs.get("human_topic_approval")
+    if isinstance(approval, dict):
+        video_title = approval.get("topic_statement") or approval.get("title") or "Untitled"
+    else:
+        trend = outputs.get("trend_analysis")
+        if isinstance(trend, list) and trend:
+            video_title = trend[0].get("topic_statement") or trend[0].get("title") or "Untitled"
     
-    Args:
-        title: Task title
-        stage: Kanban column (1-6)
-        task_id: Optional specific ID (defaults to UUID)
-        
-    Returns:
-        The task ID
-    """
-    import uuid as _uuid
-    tid = task_id or str(_uuid.uuid4())
-    conn = _get_db_connection()
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO kanban_tasks (id, title, stage, status, color, created_at, updated_at) VALUES (?,?,?,'idle','#1D9E75',?,?)",
-            (tid, title, stage, datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat())
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return tid
+    # Status mapping to Kanban visual states
+    status = d.get("status", "idle")
+    if status == "running":
+        kanban_status = "thinking"
+    elif status == "waiting_human":
+        kanban_status = "waiting"
+    elif status == "complete":
+        kanban_status = "complete"
+    elif status == "error":
+        kanban_status = "error"
+    else:
+        kanban_status = "idle"
 
+    # Color mapping (simple palette based on stage)
+    colors = ["#1D9E75", "#378ADD", "#BA7517", "#D4A017", "#D1242F", "#0969DA"]
+    stage_num = get_kanban_stage(stage_name)
+    color = colors[stage_num - 1] if 1 <= stage_num <= 6 else colors[0]
 
-async def update_task_internal(task_id: str, stage: int, status: str = "idle") -> None:
-    """Update a Kanban task's stage and status directly in SQLite.
+    # Thoughts mapping
+    thoughts = "[]"
     
-    Used by pipeline_routes.py to avoid fragile HTTP self-calls.
-    
-    Args:
-        task_id: The task UUID
-        stage: Kanban column (1-6)
-        status: Task status (idle, thinking, error, complete, waiting)
-    """
-    conn = _get_db_connection()
-    try:
-        conn.execute(
-            "UPDATE kanban_tasks SET stage=?, status=?, updated_at=? WHERE id=?",
-            (stage, status, datetime.now(timezone.utc).isoformat(), task_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _task_to_dict(row: sqlite3.Row) -> dict:
-    """Convert a database row to a dictionary."""
-    return dict(row)
-
+    return {
+        "id": d.get("run_id"),
+        "title": video_title,
+        "stage": stage_num,
+        "status": kanban_status,
+        "color": color,
+        "updated_at": d.get("updated_at"),
+        "created_at": d.get("created_at"),
+        "notion_url": outputs.get("publish", {}).get("notion_url") if isinstance(outputs.get("publish"), dict) else None,
+        "research": str(outputs.get("research", ""))[:1000],
+        "script": str(outputs.get("script_writing", ""))[:1000],
+        "visual_cues": str(outputs.get("visual_planning", ""))[:1000],
+        "thoughts": thoughts
+    }
 
 # ─── Pydantic Models ────────────────────────────────────────────────────────────
 
-class KanbanTaskCreate(BaseModel):
-    """Request model for creating a Kanban task."""
-    title: str = Field(..., min_length=1, max_length=500)
-    stage: int = Field(default=1, ge=1, le=6)
-    parent_id: Optional[str] = None
-    color: Optional[str] = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
-
-
 class KanbanTaskUpdate(BaseModel):
     """Request model for updating a Kanban task."""
-    title: Optional[str] = Field(default=None, min_length=1, max_length=500)
     stage: Optional[int] = Field(default=None, ge=1, le=6)
-    status: Optional[str] = Field(default=None, pattern=r'^(idle|thinking|error|complete|waiting)$')
-    content: Optional[str] = None
-    research: Optional[str] = None
-    script: Optional[str] = None
-    visual_cues: Optional[str] = None
-    notion_url: Optional[str] = None
-
-
-class KanbanEvent(BaseModel):
-    """Request model for posting an event from an agent."""
-    task_id: str
-    event_type: str = Field(..., pattern=r'^(thought|stage_change|status_change|artifact)$')
-    data: Dict[str, Any]
-
-
-# ─── API Endpoints ──────────────────────────────────────────────────────────────
-
-@router.get("/tasks")
-async def list_tasks(
-    stage: Optional[int] = None,
-    status: Optional[str] = None,
-    parent_id: Optional[str] = None,
-    limit: int = 100
-) -> dict:
-    """List all Kanban tasks with optional filtering.
-    
-    Args:
-        stage: Filter by stage number (1-6)
-        status: Filter by status (idle, thinking, error, complete, waiting)
-        parent_id: Filter by parent task ID
-        limit: Maximum number of tasks to return (default: 100)
-        
-    Returns:
-        Dictionary with 'tasks' key containing list of task objects
-    """
-    try:
-        with _get_db_connection() as conn:
-            query = "SELECT * FROM kanban_tasks WHERE 1=1"
-            params = []
-            
-            if stage is not None:
-                query += " AND stage = ?"
-                params.append(stage)
-            if status is not None:
-                query += " AND status = ?"
-                params.append(status)
-            if parent_id is not None:
-                query += " AND parent_id = ?"
-                params.append(parent_id)
-            
-            query += " ORDER BY updated_at DESC LIMIT ?"
-            params.append(limit)
-            
-            rows = conn.execute(query, params).fetchall()
-            return {"tasks": [_task_to_dict(r) for r in rows]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-
-@router.post("/tasks")
-async def create_task(data: KanbanTaskCreate) -> dict:
-    """Create a new Kanban task.
-    
-    Creates a task in the specified stage with automatic color assignment.
-    If parent_id is provided and color is not, inherits parent's color.
-    
-    Args:
-        data: Task creation parameters
-        
-    Returns:
-        The created task object
-    """
-    task_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    
-    # Determine color
-    color = data.color
-    if not color and data.parent_id:
-        # Try to inherit color from parent
-        try:
-            with _get_db_connection() as conn:
-                parent = conn.execute(
-                    "SELECT color FROM kanban_tasks WHERE id = ?",
-                    (data.parent_id,)
-                ).fetchone()
-                if parent:
-                    color = parent["color"]
-        except Exception:
-            pass
-    if not color:
-        color = random.choice(DEFAULT_COLORS)
-    
-    try:
-        with _get_db_connection() as conn:
-            conn.execute(
-                """INSERT INTO kanban_tasks 
-                   (id, parent_id, title, stage, status, color, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, 'idle', ?, ?, ?)""",
-                (task_id, data.parent_id, data.title, data.stage, color, now, now)
-            )
-        
-        # Broadcast event
-        await _broadcast_event("task_created", {
-            "id": task_id,
-            "parent_id": data.parent_id,
-            "title": data.title,
-            "stage": data.stage,
-            "color": color,
-            "updated_at": now
-        })
-        
-        return {
-            "id": task_id,
-            "parent_id": data.parent_id,
-            "title": data.title,
-            "stage": data.stage,
-            "status": "idle",
-            "color": color,
-            "updated_at": now
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create task: {e}")
-
-
-@router.get("/tasks/{task_id}")
-async def get_task(task_id: str) -> dict:
-    """Get a single Kanban task by ID.
-    
-    Args:
-        task_id: The UUID of the task
-        
-    Returns:
-        The task object with all fields including thoughts array
-    """
-    try:
-        with _get_db_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM kanban_tasks WHERE id = ?",
-                (task_id,)
-            ).fetchone()
-            
-            if not row:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-            
-            return _task_to_dict(row)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-
-@router.patch("/tasks/{task_id}")
-async def update_task(task_id: str, data: KanbanTaskUpdate) -> dict:
-    """Update a Kanban task.
-    
-    Only provided fields are updated. Automatically updates updated_at.
-    
-    Args:
-        task_id: The UUID of the task
-        data: Fields to update
-        
-    Returns:
-        The updated task object
-    """
-    updates = data.dict(exclude_unset=True)
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
-    try:
-        with _get_db_connection() as conn:
-            # Check task exists
-            existing = conn.execute(
-                "SELECT id FROM kanban_tasks WHERE id = ?",
-                (task_id,)
-            ).fetchone()
-            if not existing:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-            
-            # Build update query
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-            values = list(updates.values()) + [task_id]
-            
-            conn.execute(
-                f"UPDATE kanban_tasks SET {set_clause} WHERE id = ?",
-                values
-            )
-            
-            # Get updated task
-            row = conn.execute(
-                "SELECT * FROM kanban_tasks WHERE id = ?",
-                (task_id,)
-            ).fetchone()
-            
-            updated_task = _task_to_dict(row)
-        
-        # Broadcast event
-        await _broadcast_event("task_updated", updated_task)
-        
-        return updated_task
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update task: {e}")
-
-
-@router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str) -> dict:
-    """Delete a Kanban task.
-    
-    Also broadcasts a deletion event so connected clients can update.
-    
-    Args:
-        task_id: The UUID of the task
-        
-    Returns:
-        Success confirmation
-    """
-    try:
-        with _get_db_connection() as conn:
-            # Check task exists
-            existing = conn.execute(
-                "SELECT id FROM kanban_tasks WHERE id = ?",
-                (task_id,)
-            ).fetchone()
-            if not existing:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-            
-            conn.execute("DELETE FROM kanban_tasks WHERE id = ?", (task_id,))
-        
-        # Broadcast event
-        await _broadcast_event("task_deleted", {"id": task_id})
-        
-        return {"success": True, "deleted_id": task_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete task: {e}")
-
-
-@router.post("/events")
-async def report_event(event: KanbanEvent) -> dict:
-    """Report an agent event to update a Kanban task.
-    
-    This is the main endpoint agents use to report progress. It handles:
-    - thought: Appends to the thoughts array (agent monologue)
-    - stage_change: Moves task to a different column
-    - status_change: Updates task status (idle/thinking/error/complete)
-    - artifact: Updates an output field (research/script/visual_cues/notion_url)
-    
-    Args:
-        event: The event object with task_id, event_type, and data
-        
-    Returns:
-        Success confirmation
-    """
-    try:
-        with _get_db_connection() as conn:
-            # Check task exists
-            existing = conn.execute(
-                "SELECT id, thoughts FROM kanban_tasks WHERE id = ?",
-                (event.task_id,)
-            ).fetchone()
-            if not existing:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"Task {event.task_id} not found"
-                )
-            
-            now = datetime.now(timezone.utc).isoformat()
-            
-            if event.event_type == "thought":
-                # Append to thoughts array
-                thoughts = json.loads(existing["thoughts"] or "[]")
-                thoughts.append({
-                    "timestamp": now,
-                    "content": event.data.get("content", "")
-                })
-                # Keep last 50 thoughts
-                thoughts = thoughts[-50:]
-                conn.execute(
-                    "UPDATE kanban_tasks SET thoughts = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(thoughts), now, event.task_id)
-                )
-            
-            elif event.event_type == "stage_change":
-                stage = event.data.get("stage")
-                if not isinstance(stage, int) or not 1 <= stage <= 6:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="stage must be an integer between 1 and 6"
-                    )
-                conn.execute(
-                    "UPDATE kanban_tasks SET stage = ?, updated_at = ? WHERE id = ?",
-                    (stage, now, event.task_id)
-                )
-            
-            elif event.event_type == "status_change":
-                status = event.data.get("status")
-                valid_statuses = {"idle", "thinking", "error", "complete", "waiting"}
-                if status not in valid_statuses:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"status must be one of: {valid_statuses}"
-                    )
-                conn.execute(
-                    "UPDATE kanban_tasks SET status = ?, updated_at = ? WHERE id = ?",
-                    (status, now, event.task_id)
-                )
-            
-            elif event.event_type == "artifact":
-                key = event.data.get("key")
-                value = event.data.get("value")
-                valid_keys = {"research", "script", "visual_cues", "notion_url", "content"}
-                if key not in valid_keys:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"artifact key must be one of: {valid_keys}"
-                    )
-                conn.execute(
-                    f"UPDATE kanban_tasks SET {key} = ?, updated_at = ? WHERE id = ?",
-                    (value, now, event.task_id)
-                )
-        
-        # Broadcast event to connected clients
-        await _broadcast_event("agent_event", {
-            "task_id": event.task_id,
-            "event_type": event.event_type,
-            "data": event.data,
-            "timestamp": now
-        })
-        
-        return {"success": True}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process event: {e}")
-
-
-@router.get("/stats")
-async def get_stats() -> dict:
-    """Get statistics about the Kanban board.
-    
-    Returns counts by stage and status for dashboard overview.
-    """
-    try:
-        with _get_db_connection() as conn:
-            # Count by stage
-            stage_counts = {}
-            for i in range(1, 7):
-                count = conn.execute(
-                    "SELECT COUNT(*) FROM kanban_tasks WHERE stage = ?",
-                    (i,)
-                ).fetchone()[0]
-                stage_counts[i] = count
-            
-            # Count by status
-            status_counts = {}
-            for status in ["idle", "thinking", "error", "complete", "waiting"]:
-                count = conn.execute(
-                    "SELECT COUNT(*) FROM kanban_tasks WHERE status = ?",
-                    (status,)
-                ).fetchone()[0]
-                status_counts[status] = count
-            
-            # Total count
-            total = conn.execute("SELECT COUNT(*) FROM kanban_tasks").fetchone()[0]
-            
-            return {
-                "total_tasks": total,
-                "by_stage": stage_counts,
-                "by_status": status_counts
-            }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-
-# ─── Event Broadcasting ────────────────────────────────────────────────────────
-
-async def _broadcast_event(event_type: str, data: dict) -> None:
-    """Broadcast an event to all SSE subscribers.
-    
-    Uses the main app's EventBus for real-time updates.
-    """
-    try:
-        from apps.api.events import event_bus
-        await event_bus.publish(event_type, data)
-    except ImportError:
-        # EventBus not available (e.g., during testing)
-        pass
-
-
-# ─── Topic Finder Integration ────────────────────────────────────────────────────
 
 class TopicFinderRequest(BaseModel):
     """Request model for triggering Topic Finder."""
     seed_query: str = Field(..., min_length=3, max_length=500)
     genre_id: str = Field(default="default", max_length=50)
 
+# ─── API Endpoints ──────────────────────────────────────────────────────────────
+
+@router.get("/tasks")
+async def list_tasks(limit: int = 100) -> dict:
+    """List all pipeline runs as Kanban tasks."""
+    store = get_run_store()
+    if not store:
+        return {"tasks": []}
+    
+    runs = store.list_runs(limit=limit)
+    tasks = []
+    for summary in runs:
+        try:
+            run = store.load(summary["run_id"])
+            if run:
+                tasks.append(_run_to_kanban_dict(run))
+        except Exception as e:
+            print(f"Error loading task {summary.get('run_id')}: {e}")
+            continue
+    
+    return {"tasks": tasks}
+
+@router.get("/tasks/{task_id}")
+async def get_task(task_id: str) -> dict:
+    """Get a single PipelineRun as a Kanban task."""
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Store not available")
+    
+    run = store.load(task_id)
+    if not run:
+        raise HTTPException(404, f"Task {task_id} not found")
+    
+    return _run_to_kanban_dict(run)
+
+@router.patch("/tasks/{task_id}")
+async def update_task(task_id: str, data: KanbanTaskUpdate, bg: BackgroundTasks) -> dict:
+    """Update a Kanban task by potentially triggering a pipeline action."""
+    runner = get_pipeline_runner()
+    store = get_run_store()
+    if not runner or not store:
+        raise HTTPException(503, "Pipeline runner not available")
+    
+    run = store.load(task_id)
+    if not run:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    if data.stage is not None:
+        current_kanban_stage = get_kanban_stage(run.current_stage)
+        if data.stage > current_kanban_stage:
+            if run.status in ("error", "waiting_human"):
+                from apps.api.routers.pipeline_routes import _run_pipeline_bg
+                bg.add_task(_run_pipeline_bg, task_id)
+                return {"message": "Resuming pipeline run...", "id": task_id}
+
+    return _run_to_kanban_dict(run)
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str) -> dict:
+    """Delete the underlying pipeline run."""
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Store not available")
+    
+    store.delete(task_id)
+    return {"success": True, "deleted_id": task_id}
 
 @router.post("/topic-finder")
-async def trigger_topic_finder(data: TopicFinderRequest) -> dict:
-    """Trigger the Topic Finder agent to discover new topics.
+async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) -> dict:
+    """Start a new PipelineRun."""
+    runner = get_pipeline_runner()
+    if not runner:
+        raise HTTPException(503, "Pipeline runner not available")
     
-    This endpoint:
-    1. Creates a Kanban task in Stage 1 (Topic Finding)
-    2. Launches the TopicFinderAgent in the background
-    3. Returns the task ID immediately for SSE tracking
-    
-    The agent will report progress via the Kanban callback system,
-    and any Tier 1 topics found will appear in Stage 2 (Suggested Topics).
-    
-    Args:
-        data: Topic finder parameters (seed_query, genre_id)
-        
-    Returns:
-        The created task ID and status
-    """
-    from fastapi import BackgroundTasks
-    import asyncio
-    
-    # Create the Kanban task first
-    task_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    color = random.choice(DEFAULT_COLORS)
-    
-    try:
-        with _get_db_connection() as conn:
-            conn.execute(
-                """INSERT INTO kanban_tasks 
-                   (id, title, stage, status, color, created_at, updated_at)
-                   VALUES (?, ?, 1, 'thinking', ?, ?, ?)""",
-                (task_id, f"Finding: {data.seed_query[:50]}...", color, now, now)
-            )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create task: {e}")
-    
-    # Broadcast task creation
-    await _broadcast_event("task_created", {
-        "id": task_id,
-        "title": f"Finding: {data.seed_query[:50]}...",
-        "stage": 1,
-        "status": "thinking",
-        "color": color,
-        "updated_at": now
-    })
-    
-    # Launch the topic finder in background
-    async def run_topic_finder():
-        """Background task to run the TopicFinderAgent."""
-        try:
-            from packages.content_factory.topic_finder.finder import TopicFinderAgent
-            
-            agent = TopicFinderAgent(kanban_task_id=task_id)
-            brief = await agent.generate_candidate(data.seed_query, data.genre_id)
-            
-            if brief:
-                # Update task with the found topic
-                with _get_db_connection() as conn:
-                    conn.execute(
-                        """UPDATE kanban_tasks 
-                           SET title = ?, status = 'complete', updated_at = ?
-                           WHERE id = ?""",
-                        (brief.topic_statement[:100], datetime.now(timezone.utc).isoformat(), task_id)
-                    )
-                
-                await _broadcast_event("task_updated", {
-                    "id": task_id,
-                    "title": brief.topic_statement[:100],
-                    "status": "complete"
-                })
-            else:
-                # No topic found
-                with _get_db_connection() as conn:
-                    conn.execute(
-                        """UPDATE kanban_tasks 
-                           SET status = 'complete', content = 'No viable topic found'
-                           WHERE id = ?""",
-                        (task_id,)
-                    )
-                
-                await _broadcast_event("task_updated", {
-                    "id": task_id,
-                    "status": "complete",
-                    "content": "No viable topic found"
-                })
-                
-        except Exception as e:
-            # Update task to error state
-            try:
-                with _get_db_connection() as conn:
-                    conn.execute(
-                        """UPDATE kanban_tasks 
-                           SET status = 'error', content = ?
-                           WHERE id = ?""",
-                        (str(e)[:500], task_id)
-                    )
-                
-                await _broadcast_event("task_updated", {
-                    "id": task_id,
-                    "status": "error"
-                })
-            except Exception:
-                pass
-    
-    # Schedule the background task
-    try:
-        asyncio.create_task(run_topic_finder())
-    except Exception as e:
-        # If we can't schedule the background task, still return the task ID
-        pass
+    run = await runner.create_run()
+    from apps.api.routers.pipeline_routes import _run_pipeline_bg
+    bg.add_task(_run_pipeline_bg, run.run_id)
     
     return {
-        "id": task_id,
+        "id": run.run_id,
         "status": "thinking",
-        "message": f"Topic finder started for: {data.seed_query}"
+        "message": f"Pipeline started for: {data.seed_query}"
     }
 
+@router.get("/stats")
+async def get_stats() -> dict:
+    """Get statistics from the RunStore."""
+    store = get_run_store()
+    if not store:
+        return {"total_tasks": 0, "by_stage": {}, "by_status": {}}
+    
+    summaries = store.list_runs(limit=1000)
+    total = len(summaries)
+    by_stage = {}
+    by_status = {}
+    
+    for s in summaries:
+        stage_num = get_kanban_stage(s.get("current_stage", "trend_analysis"))
+        by_stage[stage_num] = by_stage.get(stage_num, 0) + 1
+        status = s.get("status", "idle")
+        by_status[status] = by_status.get(status, 0) + 1
+        
+    return {
+        "total_tasks": total,
+        "by_stage": by_stage,
+        "by_status": by_status
+    }
 
-# ─── Initialization ─────────────────────────────────────────────────────────────
-
-# Initialize database on module load
-init_kanban_db()
+def init_kanban_db() -> None:
+    """No-op for backward compatibility."""
+    pass

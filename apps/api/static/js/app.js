@@ -120,6 +120,7 @@ function connectSSE() {
   _es.addEventListener('pipeline_update', e => {
     const d = JSON.parse(e.data).data;
     if (_activeTab === 'pipeline') refreshPipeline();
+    if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'pipeline_update', data: d });
     showToast(`${d.stage} → ${d.status}`, 'info', 2500);
   });
 
@@ -127,6 +128,7 @@ function connectSSE() {
     const d = JSON.parse(e.data).data;
     showToast(`✓ ${d.stage} complete`, 'success', 3000);
     if (_activeTab === 'pipeline') refreshPipeline();
+    if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'stage_complete', data: d });
   });
 
   _es.addEventListener('human_gate', e => {
@@ -137,12 +139,14 @@ function connectSSE() {
     badge.textContent = n;
     badge.classList.remove('hidden');
     if (_activeTab === 'pipeline') refreshPipeline();
+    if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'human_gate', data: d });
   });
 
   _es.addEventListener('pipeline_complete', e => {
     const d = JSON.parse(e.data).data;
     showToast(`Pipeline complete!`, 'success', 5000);
     if (_activeTab === 'pipeline') refreshPipeline();
+    if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'pipeline_complete', data: d });
   });
 
   // Iteration complete events for script improvement graph

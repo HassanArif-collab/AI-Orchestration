@@ -31,74 +31,8 @@ from apps.api.events import event_bus
 
 router = APIRouter()
 
-# ─── Kanban Stage Mapping ──────────────────────────────────────────────────────
-
-# Map pipeline stage names to Kanban column numbers (1-6)
-# 1: Topic Finding | 2: Suggested Topics | 3: Researching
-# 4: Script | 5: Visual | 6: Notion
-PIPELINE_TO_KANBAN_STAGE = {
-    "trend_analysis": 1,        # Topic Finding
-    "human_topic_approval": 2,  # Suggested Topics (human gate)
-    "research": 3,              # Researching
-    "script_writing": 4,        # Script
-    "visual_planning": 5,       # Visual
-    "seo": 4,                   # Script (parallel stage)
-    "human_review": 5,          # Visual (human gate)
-    "asset_creation": 6,        # Notion
-    "publish": 6,               # Notion (final)
-}
-
-
-def get_kanban_stage(pipeline_stage: str) -> int:
-    """Convert pipeline stage name to Kanban column number."""
-    return PIPELINE_TO_KANBAN_STAGE.get(pipeline_stage, 1)
-
-
-async def create_kanban_task_for_run(run, run_id: str) -> str:
-    """Create a Kanban task for a pipeline run.
-    
-    Returns the Kanban task ID.
-    """
-    title = _extract_title(run.to_dict() if hasattr(run, 'to_dict') else vars(run))
-    try:
-        from apps.api.routers.kanban_routes import create_task_internal
-        return await create_task_internal(title=title, stage=1, task_id=run_id)
-    except Exception as e:
-        print(f"Warning: Kanban task creation failed: {e}")
-        return run_id
-
-
-async def update_kanban_task_stage(task_id: str, stage: int, status: str = "idle"):
-    """Update Kanban task stage and status."""
-    try:
-        from apps.api.routers.kanban_routes import update_task_internal
-        await update_task_internal(task_id, stage, status)
-    except Exception as e:
-        print(f"Warning: Kanban update failed: {e}")
-
-
-async def report_kanban_thought(task_id: str, thought: str):
-    """Report an agent thought to Kanban via event_bus."""
-    try:
-        await event_bus.publish("agent_event", {
-            "task_id": task_id,
-            "event_type": "thought",
-            "data": {"content": thought}
-        })
-    except Exception:
-        pass
-
-
-async def report_kanban_artifact(task_id: str, key: str, value: str):
-    """Report an artifact (research, script, etc.) to Kanban via event_bus."""
-    try:
-        await event_bus.publish("agent_event", {
-            "task_id": task_id,
-            "event_type": "artifact",
-            "data": {"key": key, "value": value}
-        })
-    except Exception:
-        pass
+# Kanban integration is now handled directly by kanban_routes.py
+# querying the same PipelineRun objects. No explicit sync required.
 
 # ─── Request models ───────────────────────────────────────────────────────────
 
@@ -224,12 +158,7 @@ async def _run_pipeline_bg(run_id: str) -> None:
     if not run:
         return
 
-    # Create Kanban task for this pipeline run
-    kanban_task_id = None
-    try:
-        kanban_task_id = await create_kanban_task_for_run(run, run_id)
-    except Exception as e:
-        print(f"Warning: Could not create Kanban task: {e}")
+    # Kanban sync removed — uses unified store
 
     try:
         from packages.pipeline.stages import Stage, is_human_gate
@@ -243,11 +172,6 @@ async def _run_pipeline_bg(run_id: str) -> None:
                             and is_human_gate(stage)
                             and run.can_start(stage)):
                         
-                        # Update Kanban - at human gate
-                        kanban_stage = get_kanban_stage(stage.value)
-                        if kanban_task_id:
-                            await update_kanban_task_stage(kanban_task_id, kanban_stage, "waiting")
-                            await report_kanban_thought(kanban_task_id, f"Waiting for human approval at {stage.value}")
                         
                         await emit_pipeline_update(run_id, stage.value, "waiting_human")
                         await runner.execute_stage(run, stage)
@@ -258,10 +182,6 @@ async def _run_pipeline_bg(run_id: str) -> None:
                 run.status = "complete"
                 store.save(run)
                 
-                # Update Kanban - completed
-                if kanban_task_id:
-                    await update_kanban_task_stage(kanban_task_id, 6, "complete")
-                    await report_kanban_thought(kanban_task_id, "Pipeline completed successfully!")
                 
                 await emit_pipeline_complete(run_id)
                 return
@@ -270,57 +190,19 @@ async def _run_pipeline_bg(run_id: str) -> None:
                 # Parallel stages running
                 await emit_pipeline_update(run_id, str([s.value for s in runnable]), "running")
                 
-                # Update Kanban for first parallel stage
-                if kanban_task_id:
-                    first_stage = runnable[0].value
-                    kanban_stage = get_kanban_stage(first_stage)
-                    await update_kanban_task_stage(kanban_task_id, kanban_stage, "thinking")
-                    await report_kanban_thought(kanban_task_id, f"Running parallel stages: {', '.join(s.value for s in runnable)}")
                 
                 await asyncio.gather(*[runner.execute_stage(run, s) for s in runnable])
                 
                 for s in runnable:
                     await emit_stage_complete(run_id, s.value)
                     
-                    # Report artifacts to Kanban
-                    if kanban_task_id:
-                        output = run.get_output(s)
-                        if output:
-                            if s.value == "research":
-                                await report_kanban_artifact(kanban_task_id, "research", str(output)[:2000])
-                            elif s.value == "script_writing":
-                                await report_kanban_artifact(kanban_task_id, "script", str(output)[:2000])
-                            elif s.value == "visual_planning":
-                                await report_kanban_artifact(kanban_task_id, "visual_cues", str(output)[:2000])
             else:
                 stage = runnable[0]
                 
-                # Update Kanban - stage change
-                kanban_stage = get_kanban_stage(stage.value)
-                if kanban_task_id:
-                    await update_kanban_task_stage(kanban_task_id, kanban_stage, "thinking")
-                    await report_kanban_thought(kanban_task_id, f"Starting stage: {stage.value}")
                 
                 await emit_pipeline_update(run_id, stage.value, "running")
                 await runner.execute_stage(run, stage)
                 
-                # Report completion and artifacts
-                if kanban_task_id:
-                    await update_kanban_task_stage(kanban_task_id, kanban_stage, "idle")
-                    await report_kanban_thought(kanban_task_id, f"Completed stage: {stage.value}")
-                    
-                    output = run.get_output(stage)
-                    if output:
-                        if stage.value == "research":
-                            await report_kanban_artifact(kanban_task_id, "research", str(output)[:2000])
-                        elif stage.value == "script_writing":
-                            await report_kanban_artifact(kanban_task_id, "script", str(output)[:2000])
-                        elif stage.value == "visual_planning":
-                            await report_kanban_artifact(kanban_task_id, "visual_cues", str(output)[:2000])
-                        elif stage.value == "publish":
-                            # Notion URL
-                            if isinstance(output, dict) and output.get("notion_url"):
-                                await report_kanban_artifact(kanban_task_id, "notion_url", output["notion_url"])
                 
                 await emit_stage_complete(run_id, stage.value)
 
@@ -329,10 +211,6 @@ async def _run_pipeline_bg(run_id: str) -> None:
         run.error_message = str(e)
         store.save(run)
         
-        # Update Kanban - error
-        if kanban_task_id:
-            await update_kanban_task_stage(kanban_task_id, get_kanban_stage(run.current_stage or ""), "error")
-            await report_kanban_thought(kanban_task_id, f"Error: {str(e)}")
         
         await emit_pipeline_update(run_id, run.current_stage or "", "error")
 
