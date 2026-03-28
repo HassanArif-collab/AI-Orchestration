@@ -177,6 +177,22 @@ function connectSSE() {
   _es.onerror = () => setTimeout(connectSSE, 5000);
 }
 
+// ─── FreeRouter Health Check ─────────────────────────────────────────────────
+
+async function checkFreeRouter() {
+  const banner = document.getElementById('freerouter-banner');
+  try {
+    const r = await fetch('/api/health/freerouter');
+    const d = await r.json();
+    if (!d.healthy && banner) {
+      banner.classList.remove('hidden');
+      banner.textContent = '⚠ FreeRouter LLM proxy not running — pipeline runs will fail. Run: cd freerouter && python -m freerouter proxy';
+    } else if (banner) {
+      banner.classList.add('hidden');
+    }
+  } catch(e) {}
+}
+
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 async function checkHealth() {
@@ -216,5 +232,7 @@ window.addEventListener('load', () => {
   switchTab(_initTab);
   connectSSE();
   checkHealth();
+  checkFreeRouter();
   setInterval(checkHealth, 30000);
+  setInterval(checkFreeRouter, 30000);
 });

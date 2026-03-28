@@ -172,6 +172,13 @@ def _run_to_dict(run) -> dict:
             "status": d.get("stage_status", {}).get(stage_name, "pending"),
             "output": d.get("stage_outputs", {}).get(stage_name),
         }
+    
+    # Normalize trend_analysis output (TopicBrief → frontend-friendly)
+    if stages.get("trend_analysis", {}).get("output"):
+        out = stages["trend_analysis"]["output"]
+        if isinstance(out, list):
+            stages["trend_analysis"]["output"] = [_normalize_topic_candidate(t) for t in out]
+    
     return {
         "run_id": d.get("run_id", ""),
         "current_stage": d.get("current_stage", ""),
@@ -192,8 +199,39 @@ def _extract_title(run_dict: dict) -> str:
         return approval.get("title", "Untitled")
     trend = outputs.get("trend_analysis")
     if isinstance(trend, list) and trend:
-        return trend[0].get("title", "Untitled")
+        return trend[0].get("title") or trend[0].get("topic_statement", "Untitled")
     return "New Pipeline Run"
+
+
+def _normalize_topic_candidate(raw: dict) -> dict:
+    """Normalize TopicBrief dict to frontend-friendly format.
+    
+    Maps backend field names to what the frontend expects:
+    - topic_statement → title
+    - big_question → subtitle
+    - viability_score_breakdown → viability_total, gap_pass, anchor_pass, audience_pass
+    """
+    sb = raw.get("viability_score_breakdown", {})
+    total = sb.get("total", 0)
+    gap_pass = all(sb.get(k, False) for k in ["gap_1", "gap_2", "gap_3"])
+    anchor_pass = sum(1 for k in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if sb.get(k))
+    audience_pass = sum(1 for k in ["audience_1", "audience_2", "audience_3", "audience_4"] if sb.get(k))
+    
+    return {
+        **raw,
+        "title": raw.get("topic_statement", "Untitled"),
+        "subtitle": raw.get("big_question", ""),
+        "gap_type": raw.get("gap_type", ""),
+        "mainstream_assumption": raw.get("mainstream_assumption", ""),
+        "anchors": raw.get("anchor_candidates", []),
+        "timing": raw.get("timing_rationale", ""),
+        "urgency": raw.get("urgency_flag", False),
+        "viability_total": total,
+        "viability_max": 17,
+        "gap_pass": gap_pass,
+        "anchor_pass": anchor_pass,
+        "audience_pass": audience_pass,
+    }
 
 
 # ─── Background pipeline runner ───────────────────────────────────────────────
@@ -480,6 +518,21 @@ async def get_stage_output(run_id: str, stage: str):
     if output is None:
         raise HTTPException(404, f"No output for stage {stage}")
     return {"stage": stage, "output": output}
+
+
+@router.get("/runs/{run_id}/iterations")
+async def get_iterations(run_id: str):
+    """Get all iteration logs for a pipeline run.
+    
+    Returns the iteration history from the ExperimentLoop,
+    including scores, mutation zones, and baseline comparisons.
+    """
+    try:
+        from packages.pipeline.iteration_store import IterationLogStore
+        store = IterationLogStore()
+        return {"run_id": run_id, "iterations": store.get_all(run_id)}
+    except Exception as e:
+        return {"run_id": run_id, "iterations": [], "error": str(e)}
 
 
 # ─── Resume/Recovery endpoints ─────────────────────────────────────────────────

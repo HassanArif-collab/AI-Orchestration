@@ -77,8 +77,19 @@ class ContentCreationRouter:
         script: AdaptedScript,
         max_iterations: int = 20,
         threshold: float = 85.0,
+        run_id: str | None = None,
     ) -> AdaptedScript:
-        """Run the self-correction loop on any script (Mode A or Mode B)."""
+        """Run the self-correction Loop on any script (Mode A or Mode B).
+
+        Args:
+            script: The initial script to evolve.
+            max_iterations: Maximum iterations (default: 20).
+            threshold: Target score threshold (default: 85.0).
+            run_id: Optional pipeline run ID for iteration logging.
+
+        Returns:
+            The best script found after evolution.
+        """
         from packages.router.client import RouterClient
 
         if DEV_MODE:
@@ -91,6 +102,7 @@ class ContentCreationRouter:
                 script=script,
                 iterations=max_iterations,
                 router_client=router_client,
+                run_id=run_id,
             )
 
     def _find_structural_reference(self, genre_id: str):

@@ -142,18 +142,40 @@ function showRunDetail(run) {
       const ideas = stages.trend_analysis?.output || [];
       const ideasArr = Array.isArray(ideas) ? ideas : [];
       approvalHtml = `
-        <div class="card" style="border-color:var(--accent-warning);margin-bottom:12px">
-          <div class="card-header"><h3 style="color:var(--accent-warning)">🙋 Pick a topic to research</h3></div>
-          <div class="idea-cards">
-            ${ideasArr.map((idea, i) => `
-              <div class="idea-card" onclick="approveTopicSelection('${run.run_id}', ${i}, ${JSON.stringify(idea).replace(/"/g,'&quot;')})">
-                <div class="idea-title">${escHtml(idea.title||'Idea '+(i+1))}</div>
-                <div class="idea-angle">${escHtml(idea.angle||'')}</div>
-                <div class="idea-score">Viral score: ${idea.viral_score||'?'}/10</div>
-                <div class="idea-bar-track"><div class="idea-bar" style="width:${(idea.viral_score||5)*10}%"></div></div>
-              </div>`).join('') ||
-              `<p style="color:var(--text-muted)">No ideas available</p>`}
-          </div>
+        <div style="margin-bottom:16px">
+          <h3 style="margin:0 0 6px">🔍 Pick a topic to research</h3>
+          <p style="color:var(--text-secondary);font-size:13px;margin:0">${ideasArr.length} candidates found</p>
+        </div>
+        <div class="topic-cards-grid">
+          ${ideasArr.map((idea, i) => `
+            <div class="topic-card" onclick="approveTopicSelection('${run.run_id}', ${i}, ${JSON.stringify(idea).replace(/"/g,'&quot;')})">
+              <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                <span style="background:var(--accent-info);color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${escHtml(idea.gap_type||'')}</span>
+                ${idea.urgency ? '<span style="font-size:11px;color:var(--accent-warning)">🔥 Urgent</span>' : ''}
+              </div>
+              <div style="font-size:15px;font-weight:600;margin-bottom:6px">${escHtml(idea.title||'Untitled')}</div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">❓ ${escHtml(idea.subtitle||'')}</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+                <em>"${escHtml(idea.mainstream_assumption||'')}"</em>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+                  <div style="height:100%;background:var(--accent-primary);width:${((idea.viability_total||0)/17)*100}%"></div>
+                </div>
+                <span style="font-size:12px;font-weight:600">${idea.viability_total||0}/17</span>
+              </div>
+              <div style="display:flex;gap:10px;font-size:12px;margin-bottom:8px">
+                <span style="color:${idea.gap_pass?'var(--accent-success)':'var(--accent-error)'}">${idea.gap_pass?'✓':'✗'} Gap</span>
+                <span style="color:${(idea.anchor_pass||0)>=2?'var(--accent-success)':'var(--accent-error)'}">${idea.anchor_pass||0}/4 Anchors</span>
+                <span style="color:${(idea.audience_pass||0)>=2?'var(--accent-success)':'var(--accent-error)'}">${idea.audience_pass||0}/4 Audience</span>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+                ${(idea.anchors||[]).map(a=>`<span style="background:var(--bg-hover);border:1px solid var(--border);padding:2px 8px;border-radius:10px;font-size:11px">${escHtml(a)}</span>`).join('')}
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">⏱ ${escHtml(idea.timing||'')}</div>
+              <button class="btn btn-primary" style="width:100%">Pick This Topic →</button>
+            </div>`).join('') ||
+          `<p style="color:var(--text-muted)">No candidates found</p>`}
         </div>`;
     } else if (run.current_stage === 'human_review') {
       approvalHtml = `

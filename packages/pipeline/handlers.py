@@ -224,6 +224,7 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
         script,
         max_iterations=max_iterations,
         threshold=threshold,
+        run_id=run.run_id,
     )
 
     logger.info(f"script_writing_complete: final_score={refined.production_readiness_score:.1f}%")
