@@ -79,6 +79,56 @@ def init_kanban_db() -> None:
         """)
 
 
+# ─── Internal Functions for Direct DB Access ─────────────────────────────────────
+
+async def create_task_internal(title: str, stage: int = 1, task_id: str | None = None) -> str:
+    """Create a Kanban task directly in SQLite without HTTP.
+    
+    Used by pipeline_routes.py to avoid fragile HTTP self-calls.
+    
+    Args:
+        title: Task title
+        stage: Kanban column (1-6)
+        task_id: Optional specific ID (defaults to UUID)
+        
+    Returns:
+        The task ID
+    """
+    import uuid as _uuid
+    tid = task_id or str(_uuid.uuid4())
+    conn = _get_db_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO kanban_tasks (id, title, stage, status, color, created_at, updated_at) VALUES (?,?,?,'idle','#1D9E75',?,?)",
+            (tid, title, stage, datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return tid
+
+
+async def update_task_internal(task_id: str, stage: int, status: str = "idle") -> None:
+    """Update a Kanban task's stage and status directly in SQLite.
+    
+    Used by pipeline_routes.py to avoid fragile HTTP self-calls.
+    
+    Args:
+        task_id: The task UUID
+        stage: Kanban column (1-6)
+        status: Task status (idle, thinking, error, complete, waiting)
+    """
+    conn = _get_db_connection()
+    try:
+        conn.execute(
+            "UPDATE kanban_tasks SET stage=?, status=?, updated_at=? WHERE id=?",
+            (stage, status, datetime.now(timezone.utc).isoformat(), task_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _task_to_dict(row: sqlite3.Row) -> dict:
     """Convert a database row to a dictionary."""
     return dict(row)

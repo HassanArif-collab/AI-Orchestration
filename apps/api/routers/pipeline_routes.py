@@ -27,6 +27,7 @@ from apps.api.events import (
     emit_pipeline_update, emit_stage_complete,
     emit_human_gate, emit_pipeline_complete,
 )
+from apps.api.events import event_bus
 
 router = APIRouter()
 
@@ -59,72 +60,45 @@ async def create_kanban_task_for_run(run, run_id: str) -> str:
     Returns the Kanban task ID.
     """
     title = _extract_title(run.to_dict() if hasattr(run, 'to_dict') else vars(run))
-    task_id = str(uuid.uuid4())
-    
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                "http://localhost:3000/api/kanban/tasks",
-                json={
-                    "id": task_id,  # Use same ID for linking
-                    "title": title,
-                    "stage": 1,  # Start at Topic Finding
-                }
-            )
-            if response.status_code == 200:
-                return task_id
+        from apps.api.routers.kanban_routes import create_task_internal
+        return await create_task_internal(title=title, stage=1, task_id=run_id)
     except Exception as e:
-        print(f"Warning: Failed to create Kanban task: {e}")
-    
-    return task_id
+        print(f"Warning: Kanban task creation failed: {e}")
+        return run_id
 
 
 async def update_kanban_task_stage(task_id: str, stage: int, status: str = "idle"):
     """Update Kanban task stage and status."""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.patch(
-                f"http://localhost:3000/api/kanban/tasks/{task_id}",
-                json={"stage": stage, "status": status}
-            )
+        from apps.api.routers.kanban_routes import update_task_internal
+        await update_task_internal(task_id, stage, status)
     except Exception as e:
-        print(f"Warning: Failed to update Kanban task: {e}")
+        print(f"Warning: Kanban update failed: {e}")
 
 
 async def report_kanban_thought(task_id: str, thought: str):
-    """Report an agent thought to Kanban."""
+    """Report an agent thought to Kanban via event_bus."""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                "http://localhost:3000/api/kanban/events",
-                json={
-                    "task_id": task_id,
-                    "event_type": "thought",
-                    "data": {"content": thought}
-                }
-            )
-    except Exception as e:
-        print(f"Warning: Failed to report Kanban thought: {e}")
+        await event_bus.publish("agent_event", {
+            "task_id": task_id,
+            "event_type": "thought",
+            "data": {"content": thought}
+        })
+    except Exception:
+        pass
 
 
 async def report_kanban_artifact(task_id: str, key: str, value: str):
-    """Report an artifact (research, script, etc.) to Kanban."""
+    """Report an artifact (research, script, etc.) to Kanban via event_bus."""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                "http://localhost:3000/api/kanban/events",
-                json={
-                    "task_id": task_id,
-                    "event_type": "artifact",
-                    "data": {"key": key, "value": value}
-                }
-            )
-    except Exception as e:
-        print(f"Warning: Failed to report Kanban artifact: {e}")
+        await event_bus.publish("agent_event", {
+            "task_id": task_id,
+            "event_type": "artifact",
+            "data": {"key": key, "value": value}
+        })
+    except Exception:
+        pass
 
 # ─── Request models ───────────────────────────────────────────────────────────
 

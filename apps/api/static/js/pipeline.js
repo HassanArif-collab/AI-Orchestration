@@ -178,16 +178,63 @@ function showRunDetail(run) {
           `<p style="color:var(--text-muted)">No candidates found</p>`}
         </div>`;
     } else if (run.current_stage === 'human_review') {
+      const scriptData = stages.script_writing?.output || {};
+      const entries = scriptData.entries || [];
+      const finalScore = scriptData.production_readiness_score || 0;
+      const selfCheck = scriptData.self_check_results || [];
+      const failing = selfCheck.filter(q => !q.passed);
+      const passing = selfCheck.filter(q => q.passed);
+      
+      const scriptRows = entries.map(e => `
+        <tr>
+          <td style="vertical-align:top;padding:10px 12px;border-bottom:1px solid var(--border);width:50%">
+            <div style="font-size:10px;font-weight:700;color:var(--accent-primary);margin-bottom:4px">${escHtml(e.section_label||'')}</div>
+            <div style="font-size:13px;line-height:1.6">${escHtml(e.prose||'')}</div>
+            ${e.duration_estimate_seconds?`<div style="font-size:10px;color:var(--text-muted);margin-top:4px">~${e.duration_estimate_seconds}s</div>`:''}
+          </td>
+          <td style="vertical-align:top;padding:10px 12px;border-bottom:1px solid var(--border);width:50%;background:var(--bg-primary)">
+            <div style="font-size:10px;font-weight:700;color:var(--accent-blue);margin-bottom:4px">${escHtml(e.visual_type||'')}${e.anchor_hierarchy_level?' L'+e.anchor_hierarchy_level:''}</div>
+            <div style="font-size:13px;line-height:1.6;color:var(--text-secondary)">${escHtml(e.visual_direction||'')}</div>
+            ${e.low_confidence_flag?'<div style="font-size:10px;color:var(--accent-warning);margin-top:4px">⚠ Low confidence</div>':''}
+          </td>
+        </tr>`).join('');
+      
+      const failBadges = failing.slice(0,12).map(q =>
+        `<span title="${escHtml(q.question||'')}" style="background:rgba(163,45,45,.15);color:var(--accent-error);padding:2px 8px;border-radius:4px;font-size:11px">✗ ${escHtml(q.question_id||'')}</span>`
+      ).join('');
+      
       approvalHtml = `
-        <div class="card" style="border-color:var(--accent-warning);margin-bottom:12px">
-          <div class="card-header"><h3 style="color:var(--accent-warning)">👁️ Review script & visual plan</h3></div>
-          <div class="form-group">
-            <label class="form-label">Feedback (optional)</label>
-            <textarea id="review-feedback" class="form-input" placeholder="Any changes needed?"></textarea>
+        <div style="border:2px solid var(--accent-warning);border-radius:var(--radius);overflow:hidden;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid var(--border)">
+            <div>
+              <h3 style="margin:0 0 4px">👁 Review Final Script</h3>
+              <div style="font-size:13px;color:var(--text-secondary)">
+                Score: <strong style="color:${finalScore>=85?'var(--accent-success)':'var(--accent-warning)'}">${finalScore.toFixed(1)}%</strong>
+                &nbsp;|&nbsp; ${passing.length}/${selfCheck.length} questions passing
+              </div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-success" onclick="approveReview('${run.run_id}')">✓ Approve</button>
+              <button class="btn btn-danger" onclick="document.getElementById('rej-box').style.display='block'">✗ Reject</button>
+            </div>
           </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-success" onclick="approveReview('${run.run_id}')">✓ Approve</button>
-            <button class="btn btn-danger"  onclick="rejectReview('${run.run_id}')">✗ Reject & Revise</button>
+          ${failing.length>0?`<div style="padding:12px 16px;background:rgba(163,45,45,.08);border-bottom:1px solid var(--border)"><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">FAILING (${failing.length}):</div><div style="display:flex;flex-wrap:wrap;gap:4px">${failBadges}</div></div>`:''}
+          <div style="overflow-y:auto;max-height:450px">
+            <table style="width:100%;border-collapse:collapse">
+              <thead><tr style="background:var(--bg-tertiary)">
+                <th style="padding:10px 12px;text-align:left;font-size:11px;color:var(--text-muted);border-bottom:2px solid var(--border)">📝 NARRATION</th>
+                <th style="padding:10px 12px;text-align:left;font-size:11px;color:var(--text-muted);border-bottom:2px solid var(--border);background:var(--bg-primary)">🎥 VISUAL DIRECTION</th>
+              </tr></thead>
+              <tbody>${scriptRows||'<tr><td colspan="2" style="padding:20px;text-align:center;color:var(--text-muted)">No script data</td></tr>'}</tbody>
+            </table>
+          </div>
+          <div id="rej-box" style="display:none;padding:12px;border-top:1px solid var(--border)">
+            <label class="form-label">Feedback for revision:</label>
+            <textarea id="review-feedback" class="form-input" rows="3" placeholder="What needs changing?"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-danger" onclick="rejectReview('${run.run_id}')">Send Back</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('rej-box').style.display='none'">Cancel</button>
+            </div>
           </div>
         </div>`;
     }
