@@ -107,9 +107,9 @@ class IterationLogStore:
                 previous_score,
                 1 if beat_baseline else 0,
                 mutation_zone,
-                json.dumps(script_json) if script_json else None,
-                json.dumps(failed_questions) if failed_questions else None,
-                json.dumps(fixed_questions) if fixed_questions else None,
+                json.dumps(script_json, default=str) if script_json else None,
+                json.dumps(failed_questions, default=str) if failed_questions else None,
+                json.dumps(fixed_questions, default=str) if fixed_questions else None,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )

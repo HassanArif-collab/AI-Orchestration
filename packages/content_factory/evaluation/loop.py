@@ -316,6 +316,8 @@ class ExperimentLoop:
             try:
                 import asyncio
                 from apps.api.events import emit_iteration_complete
+                # Serialize script with datetime handling for SSE payload
+                _script_payload = json.loads(json.dumps(challenger.model_dump(), default=str))
                 asyncio.create_task(emit_iteration_complete(
                     run_id=run_id or cycle_id,
                     iteration=i,
@@ -323,6 +325,7 @@ class ExperimentLoop:
                     previous_score=baseline_score,
                     mutation_zone=mutation_zone,
                     beat_baseline=is_new_best,
+                    script_json=_script_payload,
                 ))
             except RuntimeError:
                 pass  # No event loop in this context
