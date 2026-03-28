@@ -145,6 +145,16 @@ function connectSSE() {
     if (_activeTab === 'pipeline') refreshPipeline();
   });
 
+  // Iteration complete events for script improvement graph
+  _es.addEventListener('iteration_complete', e => {
+    const d = JSON.parse(e.data).data;
+    if (_graphRunId === d.run_id) {
+      _graphData.push(d);
+      renderIterationGraph(_graphData);
+    }
+    showToast(`Iter ${d.iteration}: ${d.score}% ${d.beat_baseline?'↑':'·'} (${(d.mutation_zone||'').replace(/_/g,' ')})`, d.beat_baseline?'success':'info', 2000);
+  });
+
   // Kanban events
   _es.addEventListener('task_created', e => {
     const d = JSON.parse(e.data);

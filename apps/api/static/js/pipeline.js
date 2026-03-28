@@ -255,6 +255,17 @@ function showRunDetail(run) {
         </div>
       </div>`).join('');
 
+  // Iteration score graph
+  const isScriptActive = ['running','complete'].includes(stages.script_writing?.status);
+  const graphHtml = isScriptActive ? `
+    <div class="card" style="margin-top:12px">
+      <div class="card-header">
+        <h3 class="card-title">📈 Script Improvement</h3>
+        <span style="font-size:12px;color:var(--text-muted)">Click any point to view that iteration's script</span>
+      </div>
+      <div id="iteration-graph-container" style="min-height:60px;padding:8px"></div>
+    </div>` : '';
+
   // Feedback loop
   const feedbackHtml = stages.script_writing?.status === 'complete' ? `
     <div class="card" style="margin-top:12px">
@@ -277,8 +288,12 @@ function showRunDetail(run) {
     <div class="pipeline-graph" style="margin-bottom:16px">${renderMiniGraph(run.stages)}</div>
     ${approvalHtml}
     ${outputsHtml}
+    ${graphHtml}
     ${feedbackHtml}
   `);
+  
+  // Load iteration graph if script stage is active
+  if (isScriptActive) loadIterationGraph(run.run_id);
 }
 
 async function startNewPipeline() {
@@ -360,4 +375,100 @@ async function deleteRun(runId) {
     showToast('Run deleted', 'info');
     await refreshPipeline();
   } catch (e) { showToast(`Delete failed: ${e.message}`, 'error'); }
+}
+
+// ─── Iteration Score Graph ─────────────────────────────────────────────────────
+
+let _graphData = [];
+let _graphRunId = null;
+
+async function loadIterationGraph(runId) {
+  _graphRunId = runId;
+  try {
+    const data = await api(`/api/pipeline/runs/${runId}/iterations`);
+    _graphData = data.iterations || [];
+    renderIterationGraph(_graphData);
+  } catch(e) { console.warn('Graph load failed:', e); }
+}
+
+function renderIterationGraph(data) {
+  const el = document.getElementById('iteration-graph-container');
+  if (!el) return;
+  if (!data || data.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:40px;font-size:13px">Waiting for first iteration...</div>';
+    return;
+  }
+  const W=560,H=200,PL=45,PR=20,PT=20,PB=40;
+  const pw=W-PL-PR, ph=H-PT-PB;
+  const scores = data.map(d=>d.score);
+  const mn=Math.max(0,Math.min(...scores)-10), mx=Math.min(100,Math.max(...scores)+5);
+  const mi=Math.max(...data.map(d=>d.iteration),1);
+  const x=i=>PL+(i/mi)*pw, y=s=>PT+ph-((s-mn)/(mx-mn))*ph;
+  const ZC={'script_prose':'#1D9E75','visual_direction':'#378ADD','structural_architecture':'#BA7517'};
+  const pts=data.map(d=>`${x(d.iteration)},${y(d.score)}`).join(' ');
+  const grid=[0,25,50,75,100].filter(v=>v>=mn&&v<=mx).map(v=>
+    `<line x1="${PL}" y1="${y(v)}" x2="${PL+pw}" y2="${y(v)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"/>
+     <text x="${PL-6}" y="${y(v)+4}" text-anchor="end" fill="var(--text-muted)" font-size="10">${v}%</text>`).join('');
+  const circles=data.map((d,i)=>
+    `<circle cx="${x(d.iteration)}" cy="${y(d.score)}" r="5"
+      fill="${d.beat_baseline?ZC[d.mutation_zone]||'#1D9E75':'var(--bg-tertiary)'}"
+      stroke="${ZC[d.mutation_zone]||'#1D9E75'}" stroke-width="2" style="cursor:pointer"
+      onclick="showIterationDetail(${i})"/>`).join('');
+  const thr=mx>=85&&mn<=85?`<line x1="${PL}" y1="${y(85)}" x2="${PL+pw}" y2="${y(85)}" stroke="var(--accent-success)" stroke-width="1" stroke-dasharray="4,2" opacity=".6"/>
+    <text x="${PL+pw+2}" y="${y(85)+4}" fill="var(--accent-success)" font-size="9">85%</text>`:'';
+  el.innerHTML=`
+    <svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible">
+      ${grid}${thr}
+      <polyline points="${pts}" fill="none" stroke="var(--border-hover)" stroke-width="1.5"/>
+      ${circles}
+      <text x="${W/2}" y="${H-2}" text-anchor="middle" fill="var(--text-muted)" font-size="10">Iteration →</text>
+    </svg>
+    <div style="display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--text-muted);flex-wrap:wrap">
+      ${Object.entries(ZC).map(([z,c])=>`<span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c};margin-right:4px"></span>${z.replace(/_/g,' ')}</span>`).join('')}
+      <span>● improved &nbsp; ○ discarded</span>
+    </div>`;
+}
+
+function showIterationDetail(idx) {
+  const d=_graphData[idx]; if(!d) return;
+  const rows=(d.script_json?.entries||[]).map(e=>`
+    <tr>
+      <td style="vertical-align:top;padding:8px;border-bottom:1px solid var(--border);width:50%;font-size:12px;line-height:1.5">
+        <strong style="color:var(--accent-primary);font-size:10px">${escHtml(e.section_label||'')}</strong><br>${escHtml(e.prose||'')}
+      </td>
+      <td style="vertical-align:top;padding:8px;border-bottom:1px solid var(--border);width:50%;font-size:12px;color:var(--text-secondary);line-height:1.5">
+        ${escHtml(e.visual_direction||'')}
+      </td>
+    </tr>`).join('');
+  showModal(`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="font-size:15px;margin:0">Iteration ${d.iteration} — ${d.score}%
+        <span style="font-size:12px;color:${d.beat_baseline?'var(--accent-success)':'var(--accent-error)'};margin-left:8px">
+          ${d.beat_baseline?'↑ Kept':'↓ Discarded'}${d.delta!==undefined?' ('+( d.delta>0?'+':'')+d.delta+'%)':''}
+        </span>
+      </h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:12px;color:var(--text-muted)">${(d.mutation_zone||'').replace(/_/g,' ')}</span>
+        <button class="btn btn-outline btn-sm" onclick="hideModal()">✕</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:16px;margin-bottom:12px">
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">FIXED THIS ITERATION</div>
+        ${(d.fixed_questions||[]).map(q=>`<div style="color:var(--accent-success);font-size:12px">▲ ${escHtml(q)}</div>`).join('')||'<div style="color:var(--text-muted);font-size:12px">None</div>'}
+      </div>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">STILL FAILING</div>
+        ${(d.failed_questions||[]).slice(0,10).map(q=>`<div style="color:var(--accent-error);font-size:12px">✗ ${escHtml(q)}</div>`).join('')||'<div style="color:var(--text-muted);font-size:12px">None</div>'}
+      </div>
+    </div>
+    <div style="overflow-y:auto;max-height:360px;border:1px solid var(--border);border-radius:var(--radius)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg-tertiary)">
+          <th style="padding:8px;text-align:left;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border)">NARRATION</th>
+          <th style="padding:8px;text-align:left;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border)">VISUAL DIRECTION</th>
+        </tr></thead>
+        <tbody>${rows||'<tr><td colspan="2" style="padding:16px;text-align:center;color:var(--text-muted)">No entries</td></tr>'}</tbody>
+      </table>
+    </div>`);
 }
