@@ -244,9 +244,14 @@ document.querySelectorAll('.nav-link').forEach(l => {
 window.addEventListener('load', () => {
   const _initTab = location.hash.replace('#','') || 'pipeline';
   switchTab(_initTab);
-  connectSSE();
-  checkHealth();
-  checkFreeRouter();
+  
+  // Bug C Fix: Delay SSE slightly to ensure all modules are registered
+  setTimeout(() => {
+    connectSSE();
+    checkHealth();
+    checkFreeRouter();
+  }, 100);
+  
   setInterval(checkHealth, 30000);
   setInterval(checkFreeRouter, 30000);
 });

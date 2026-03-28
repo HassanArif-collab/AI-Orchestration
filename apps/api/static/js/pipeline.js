@@ -125,13 +125,14 @@ function renderMiniGraph(stages = {}) {
 async function loadRunDetail(runId) {
   try {
     const run = await api(`/api/pipeline/runs/${runId}`);
-    showRunDetail(run);
+    const iterationData = await api(`/api/pipeline/runs/${runId}/iterations`).catch(() => ({ iterations: [] }));
+    showRunDetail(run, iterationData.iterations || []);
   } catch (e) {
     showToast(`Failed to load run: ${e.message}`, 'error');
   }
 }
 
-function showRunDetail(run) {
+function showRunDetail(run, iterations = []) {
   const stages = run.stages || {};
   const isWaiting = run.status === 'waiting_human';
 
@@ -206,6 +207,37 @@ function showRunDetail(run) {
           <pre style="margin:0;border:none;border-radius:0;max-height:300px;overflow-y:auto">${escHtml(JSON.stringify(stages[s].output, null, 2))}</pre>
         </div>
       </div>`).join('');
+
+  // Iteration graph
+  let graphHtml = '';
+  if (iterations && iterations.length > 0) {
+    const maxScore = Math.max(...iterations.map(it => it.score), 100);
+    const bars = iterations.map(it => {
+      const height = Math.max(5, (it.score / maxScore) * 100);
+      const color = it.beat_baseline ? 'var(--accent-success)' : 'var(--accent-secondary)';
+      return `<div title="Iteration ${it.iteration}: ${it.score.toFixed(1)}% (${it.mutation_zone})"
+                   style="flex:1;height:${height}%;background:${color};border-radius:2px 2px 0 0"></div>`;
+    }).join('');
+
+    graphHtml = `
+      <div class="card" style="margin-bottom:16px;background:var(--bg-secondary)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span style="font-size:13px;font-weight:600">📈 Script Evolution (${iterations.length} iters)</span>
+          <span style="font-size:12px;font-weight:700;color:var(--accent-success)">${iterations[iterations.length - 1].score.toFixed(1)}%</span>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:2px;height:60px;background:rgba(0,0,0,0.2);padding:4px;border-radius:4px;margin-bottom:8px">
+          ${bars}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);display:flex;justify-content:space-between">
+          <span>Baseline: ${iterations[0].previous_score.toFixed(1)}%</span>
+          <span>Target: 85%</span>
+        </div>
+      </div>`;
+  } else {
+    graphHtml = `<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:12px;border:1px dashed var(--border);border-radius:var(--radius);margin-bottom:16px">
+      Waiting for script evolution to start...
+    </div>`;
+  }
 
   // Feedback loop
   const isScriptActive = ['running', 'complete'].includes(stages.script_writing?.status);

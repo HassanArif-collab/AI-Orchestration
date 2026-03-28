@@ -6,7 +6,7 @@ with visual type color coding and formatting.
 
 from packages.core.config import get_settings
 from packages.core.logger import get_logger
-from packages.core.retry import retry_with_backoff_sync
+from packages.core.retry import retry_with_backoff
 from packages.core.dead_letter import queue_for_retry
 from packages.integrations.notion.colors import get_color, get_emoji
 
@@ -69,30 +69,21 @@ class NotionScriptClient:
             return False
         return True
 
-    @retry_with_backoff_sync(max_attempts=3, base_delay=2.0, max_delay=30.0)
-    def create_script_page(self, title: str, sections: list[dict], run_id: str | None = None) -> str | None:
+    @retry_with_backoff(max_attempts=3, base_delay=2.0, max_delay=30.0)
+    async def create_script_page(
+        self, 
+        title: str, 
+        script_data: dict, 
+        seo_data: dict = None,
+        run_id: str | None = None
+    ) -> str | None:
         """Create a Notion page for a video script.
-
-        Creates a page with formatted sections, each containing:
-        - Heading 2: section_type
-        - Paragraph: narration text
-        - Callout: visual_cue with color from get_color()
-
-        This method includes automatic retry with exponential backoff for transient
-        failures. After all retries are exhausted, failed operations are queued
-        in the dead letter queue for later manual retry.
-
+        
         Args:
-            title: Title of the script/video.
-            sections: List of section dictionaries with keys:
-                - section_type: Type of section (intro, main, outro, etc.)
-                - narration: The narration text
-                - visual_cue: Optional visual cue description
-                - visual_type: Optional visual type for coloring
-            run_id: Optional pipeline run ID for dead letter queue tracking.
-
-        Returns:
-            URL of the created page, or None on failure.
+            title: Title of the video
+            script_data: Full AdaptedScript dictionary (contains entries)
+            seo_data: Optional SEO metadata dictionary
+            run_id: Optional pipeline run ID
         """
         if not self._check_client():
             return None
@@ -102,6 +93,9 @@ class NotionScriptClient:
             return None
 
         try:
+            # Extract sections from script_data
+            sections = script_data.get("entries", [])
+            
             # Build the page content
             children = []
 
@@ -145,14 +139,17 @@ class NotionScriptClient:
                     })
 
             # Create the page
+            if not self._client:
+                 return None
+            
             response = self._client.pages.create(
                 parent={"database_id": self.database_id},
                 properties={
-                    "title": {
+                    "Name": { # Standard Notion DB title column name is often Name
                         "title": [{"type": "text", "text": {"content": title}}]
                     }
                 },
-                children=children,
+                children=children[:100], # Notion limit is 100 blocks
             )
 
             page_id = response.get("id", "")
@@ -179,8 +176,8 @@ class NotionScriptClient:
             )
             return None
 
-    @retry_with_backoff_sync(max_attempts=3, base_delay=2.0, max_delay=30.0)
-    def update_script_page(self, page_id: str, sections: list[dict], run_id: str | None = None) -> None:
+    @retry_with_backoff(max_attempts=3, base_delay=2.0, max_delay=30.0)
+    async def update_script_page(self, page_id: str, sections: list[dict], run_id: str | None = None) -> None:
         """Update an existing Notion script page.
 
         Appends new sections to an existing page.
@@ -266,7 +263,7 @@ class NotionScriptClient:
                 run_id=run_id,
             )
 
-    def get_script(self, page_id: str) -> dict:
+    async def get_script(self, page_id: str) -> dict:
         """Retrieve a script page from Notion.
 
         Args:

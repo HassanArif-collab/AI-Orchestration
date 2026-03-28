@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
+from apps.api.events import emit_task_created
 
 router = APIRouter()
 
@@ -176,6 +177,10 @@ async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) ->
     run = await runner.create_run()
     from apps.api.routers.pipeline_routes import _run_pipeline_bg
     bg.add_task(_run_pipeline_bg, run.run_id)
+    
+    # Bug B Fix: Emit task_created immediately for Kanban board
+    task_data = _run_to_kanban_dict(run)
+    bg.add_task(emit_task_created, task_data)
     
     return {
         "id": run.run_id,

@@ -26,16 +26,7 @@ from pydantic import field_validator, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ServiceStatus(str, Enum):
-    """Status of external service configuration."""
-    AVAILABLE = "available"
-    NOT_CONFIGURED = "not_configured"
-    MISCONFIGURED = "misconfigured"
 
-
-class ConfigurationError(Exception):
-    """Raised when configuration validation fails."""
-    pass
 
 
 class Settings(BaseSettings):
@@ -205,130 +196,8 @@ class Settings(BaseSettings):
     SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
     SCRIPT_MAX_ITERATIONS: int = 20
 
-    def validate_service(self, service: str) -> ServiceStatus:
-        """Validate if a service is properly configured.
-        
-        Args:
-            service: Service name (zep, youtube, notion, freerouter)
-            
-        Returns:
-            ServiceStatus indicating configuration state
-            
-        Raises:
-            ValueError: If service name is unknown
-        """
-        validators = {
-            "zep": self._validate_zep,
-            "youtube": self._validate_youtube,
-            "notion": self._validate_notion,
-            "freerouter": self._validate_freerouter,
-        }
-        validator = validators.get(service.lower())
-        if not validator:
-            raise ValueError(f"Unknown service: {service}")
-        return validator()
-
-    def _validate_zep(self) -> ServiceStatus:
-        """Validate Zep memory service configuration."""
-        if not self.ZEP_API_KEY:
-            return ServiceStatus.NOT_CONFIGURED
-        return ServiceStatus.AVAILABLE
-
-    def _validate_youtube(self) -> ServiceStatus:
-        """Validate YouTube API configuration."""
-        if not self.YOUTUBE_API_KEY:
-            return ServiceStatus.NOT_CONFIGURED
-        if len(self.YOUTUBE_API_KEY) < 20:
-            return ServiceStatus.MISCONFIGURED
-        return ServiceStatus.AVAILABLE
-
-    def _validate_notion(self) -> ServiceStatus:
-        """Validate Notion API configuration."""
-        if not self.NOTION_API_KEY:
-            return ServiceStatus.NOT_CONFIGURED
-        if not self.NOTION_API_KEY.startswith("secret_"):
-            return ServiceStatus.MISCONFIGURED
-        # Database ID is also required for full functionality
-        if not self.NOTION_DATABASE_ID:
-            return ServiceStatus.NOT_CONFIGURED
-        return ServiceStatus.AVAILABLE
-
-    def _validate_freerouter(self) -> ServiceStatus:
-        """Validate FreeRouter proxy configuration."""
-        if not self.FREEROUTER_URL:
-            return ServiceStatus.NOT_CONFIGURED
-        return ServiceStatus.AVAILABLE
-
-    def get_service_status(self) -> dict[str, str]:
-        """Get status of all services.
-        
-        Returns:
-            Dict mapping service names to their status values
-        """
-        services = ["zep", "youtube", "notion", "freerouter"]
-        return {s: self.validate_service(s).value for s in services}
-
-    def validate_all(self) -> list[str]:
-        """Validate all configuration and return list of errors.
-
-        P2-04: Provides comprehensive validation at startup.
-
-        Returns:
-            List of error messages (empty if all valid)
-        """
-        errors = []
-
-        # Validate URL formats
-        try:
-            self.validate_freerouter_url(self.FREEROUTER_URL)
-        except ValueError as e:
-            errors.append(str(e))
-
-        try:
-            self.validate_zep_base_url(self.ZEP_BASE_URL)
-        except ValueError as e:
-            errors.append(str(e))
-
-        # Validate log level
-        try:
-            self.validate_log_level(self.LOG_LEVEL)
-        except ValueError as e:
-            errors.append(str(e))
-
-        # Validate quality thresholds
-        if self.SCRIPT_QUALITY_FLOOR > self.SCRIPT_QUALITY_THRESHOLD:
-            errors.append(
-                f"SCRIPT_QUALITY_FLOOR ({self.SCRIPT_QUALITY_FLOOR}) cannot exceed "
-                f"SCRIPT_QUALITY_THRESHOLD ({self.SCRIPT_QUALITY_THRESHOLD})"
-            )
-
-        # Validate max iterations
-        try:
-            self.validate_max_iterations(self.SCRIPT_MAX_ITERATIONS)
-        except ValueError as e:
-            errors.append(str(e))
-
-        return errors
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return cached Settings singleton. Call this everywhere."""
     return Settings()
-
-
-def validate_startup_config() -> None:
-    """Validate configuration at application startup.
-
-    P2-04: Call this at application start to catch config errors early.
-
-    Raises:
-        ConfigurationError: If any configuration is invalid
-    """
-    settings = get_settings()
-    errors = settings.validate_all()
-
-    if errors:
-        raise ConfigurationError(
-            "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
-        )

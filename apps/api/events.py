@@ -133,3 +133,8 @@ async def emit_iteration_complete(
         "beat_baseline": beat_baseline,
         "script_json": script_json,
     })
+
+
+async def emit_task_created(task_data: dict) -> None:
+    """Emit a 'task_created' event for the Kanban board."""
+    await event_bus.publish("task_created", task_data)
