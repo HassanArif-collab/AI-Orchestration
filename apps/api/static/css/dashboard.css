@@ -354,6 +354,40 @@ select.form-input { cursor: pointer; }
 .idea-bar-track { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; }
 .idea-bar    { height: 4px; border-radius: 2px; background: var(--accent-primary); transition: width 0.4s; }
 
+/* ─── FreeRouter Banner ─────────────────────────────────────────────────────── */
+
+.freerouter-banner {
+  background: var(--accent-warning);
+  color: #fff;
+  padding: 10px 24px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+}
+.freerouter-banner.hidden { display: none; }
+
+/* ─── Topic Cards Grid ─────────────────────────────────────────────────────── */
+
+.topic-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.topic-card {
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  display: flex;
+  flex-direction: column;
+}
+.topic-card:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+}
+
 /* ─── Modal ──────────────────────────────────────────────────────────────── */
 
 #modal-overlay {

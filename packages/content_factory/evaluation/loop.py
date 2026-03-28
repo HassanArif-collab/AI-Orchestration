@@ -30,6 +30,7 @@ from packages.core.errors import QualityGateError
 from packages.core.logger import get_logger
 from packages.core.escalation import get_escalation_service
 from packages.router.client import RouterClient
+from packages.pipeline.iteration_store import IterationLogStore
 
 from ..models import AdaptedScript
 from .baseline import BaselineManager
@@ -143,6 +144,7 @@ class ExperimentLoop:
         self.logger = LearningLogger()
         self._enable_persistence = enable_persistence
         self._snapshot = ExperimentSnapshot(persist_dir) if enable_persistence else None
+        self._iter_store = IterationLogStore()
         
         # Load quality thresholds from config
         settings = get_settings()
@@ -157,7 +159,8 @@ class ExperimentLoop:
         router_client: RouterClient | None = None,
         cycle_id: Optional[str] = None,
         resume: bool = True,
-        target_threshold: Optional[float] = None, # Added param
+        target_threshold: Optional[float] = None,
+        run_id: Optional[str] = None,
     ) -> AdaptedScript:
         """Run the script through the evolutionary loop multiple times.
 
@@ -168,6 +171,7 @@ class ExperimentLoop:
             cycle_id: Optional cycle ID (auto-generated if None).
             resume: Whether to resume from previous snapshot (default: True).
             target_threshold: Optional score threshold to stop early.
+            run_id: Optional pipeline run ID for iteration logging.
 
         Returns:
             The highest scoring script found during the run (could be the initial).
@@ -295,7 +299,38 @@ class ExperimentLoop:
             )
             self.logger.log_experiment(log_entry)
 
-            # 6. Persist best after each iteration
+            # 6. Persist iteration to iteration store
+            self._iter_store.save(
+                run_id=run_id or cycle_id,
+                iteration=i,
+                score=challenger_score,
+                previous_score=baseline_score,
+                beat_baseline=is_new_best,
+                mutation_zone=mutation_zone,
+                script_json=challenger.model_dump(),
+                failed_questions=list(challenger_fails),
+                fixed_questions=fixed,
+            )
+
+            # 7. Emit SSE event for real-time updates
+            try:
+                import asyncio
+                from apps.api.events import emit_iteration_complete
+                # Serialize script with datetime handling for SSE payload
+                _script_payload = json.loads(json.dumps(challenger.model_dump(), default=str))
+                asyncio.create_task(emit_iteration_complete(
+                    run_id=run_id or cycle_id,
+                    iteration=i,
+                    score=challenger_score,
+                    previous_score=baseline_score,
+                    mutation_zone=mutation_zone,
+                    beat_baseline=is_new_best,
+                    script_json=_script_payload,
+                ))
+            except RuntimeError:
+                pass  # No event loop in this context
+
+            # 8. Persist best after each iteration
             if self._snapshot:
                 self._snapshot.save(cycle_id, current_best, i + 1)
                 

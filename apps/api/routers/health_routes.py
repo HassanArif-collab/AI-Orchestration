@@ -46,3 +46,27 @@ async def api_health_check():
             "dashboard": "operational"
         }
     }
+
+
+@router.get("/api/health/freerouter")
+async def freerouter_health():
+    """Check if FreeRouter LLM proxy is running.
+    
+    Returns health status of the FreeRouter proxy service.
+    This endpoint is public and requires no authentication.
+    """
+    import httpx
+    from packages.core.config import get_settings
+    
+    settings = get_settings()
+    url = settings.FREEROUTER_URL
+    
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{url}/health")
+            if response.status_code == 200:
+                return {"healthy": True, "url": url}
+    except Exception:
+        pass
+    
+    return {"healthy": False, "url": url}

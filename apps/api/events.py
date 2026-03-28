@@ -98,3 +98,38 @@ async def emit_pipeline_complete(run_id: str) -> None:
 async def emit_provider_status(provider: str, status: str) -> None:
     await event_bus.publish("provider_status",
                             {"provider": provider, "status": status})
+
+
+async def emit_iteration_complete(
+    run_id: str,
+    iteration: int,
+    score: float,
+    previous_score: float,
+    mutation_zone: str,
+    beat_baseline: bool,
+    script_json: dict | None = None,
+) -> None:
+    """Emit an SSE event when an ExperimentLoop iteration completes.
+    
+    This feeds the frontend score graph and provides real-time feedback
+    on script evolution progress.
+    
+    Args:
+        run_id: Pipeline run ID
+        iteration: Iteration number (0-indexed)
+        score: Current iteration score
+        previous_score: Score before this iteration
+        mutation_zone: Which mutation zone was applied
+        beat_baseline: Whether this iteration beat the baseline
+        script_json: Full script snapshot for live graph point clicks
+    """
+    await event_bus.publish("iteration_complete", {
+        "run_id": run_id,
+        "iteration": iteration,
+        "score": round(score, 1),
+        "previous_score": round(previous_score, 1),
+        "delta": round(score - previous_score, 1),
+        "mutation_zone": mutation_zone,
+        "beat_baseline": beat_baseline,
+        "script_json": script_json,
+    })

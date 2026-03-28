@@ -27,6 +27,7 @@ from apps.api.events import (
     emit_pipeline_update, emit_stage_complete,
     emit_human_gate, emit_pipeline_complete,
 )
+from apps.api.events import event_bus
 
 router = APIRouter()
 
@@ -59,72 +60,45 @@ async def create_kanban_task_for_run(run, run_id: str) -> str:
     Returns the Kanban task ID.
     """
     title = _extract_title(run.to_dict() if hasattr(run, 'to_dict') else vars(run))
-    task_id = str(uuid.uuid4())
-    
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                "http://localhost:3000/api/kanban/tasks",
-                json={
-                    "id": task_id,  # Use same ID for linking
-                    "title": title,
-                    "stage": 1,  # Start at Topic Finding
-                }
-            )
-            if response.status_code == 200:
-                return task_id
+        from apps.api.routers.kanban_routes import create_task_internal
+        return await create_task_internal(title=title, stage=1, task_id=run_id)
     except Exception as e:
-        print(f"Warning: Failed to create Kanban task: {e}")
-    
-    return task_id
+        print(f"Warning: Kanban task creation failed: {e}")
+        return run_id
 
 
 async def update_kanban_task_stage(task_id: str, stage: int, status: str = "idle"):
     """Update Kanban task stage and status."""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.patch(
-                f"http://localhost:3000/api/kanban/tasks/{task_id}",
-                json={"stage": stage, "status": status}
-            )
+        from apps.api.routers.kanban_routes import update_task_internal
+        await update_task_internal(task_id, stage, status)
     except Exception as e:
-        print(f"Warning: Failed to update Kanban task: {e}")
+        print(f"Warning: Kanban update failed: {e}")
 
 
 async def report_kanban_thought(task_id: str, thought: str):
-    """Report an agent thought to Kanban."""
+    """Report an agent thought to Kanban via event_bus."""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                "http://localhost:3000/api/kanban/events",
-                json={
-                    "task_id": task_id,
-                    "event_type": "thought",
-                    "data": {"content": thought}
-                }
-            )
-    except Exception as e:
-        print(f"Warning: Failed to report Kanban thought: {e}")
+        await event_bus.publish("agent_event", {
+            "task_id": task_id,
+            "event_type": "thought",
+            "data": {"content": thought}
+        })
+    except Exception:
+        pass
 
 
 async def report_kanban_artifact(task_id: str, key: str, value: str):
-    """Report an artifact (research, script, etc.) to Kanban."""
+    """Report an artifact (research, script, etc.) to Kanban via event_bus."""
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                "http://localhost:3000/api/kanban/events",
-                json={
-                    "task_id": task_id,
-                    "event_type": "artifact",
-                    "data": {"key": key, "value": value}
-                }
-            )
-    except Exception as e:
-        print(f"Warning: Failed to report Kanban artifact: {e}")
+        await event_bus.publish("agent_event", {
+            "task_id": task_id,
+            "event_type": "artifact",
+            "data": {"key": key, "value": value}
+        })
+    except Exception:
+        pass
 
 # ─── Request models ───────────────────────────────────────────────────────────
 
@@ -172,6 +146,13 @@ def _run_to_dict(run) -> dict:
             "status": d.get("stage_status", {}).get(stage_name, "pending"),
             "output": d.get("stage_outputs", {}).get(stage_name),
         }
+    
+    # Normalize trend_analysis output (TopicBrief → frontend-friendly)
+    if stages.get("trend_analysis", {}).get("output"):
+        out = stages["trend_analysis"]["output"]
+        if isinstance(out, list):
+            stages["trend_analysis"]["output"] = [_normalize_topic_candidate(t) for t in out]
+    
     return {
         "run_id": d.get("run_id", ""),
         "current_stage": d.get("current_stage", ""),
@@ -192,8 +173,39 @@ def _extract_title(run_dict: dict) -> str:
         return approval.get("title", "Untitled")
     trend = outputs.get("trend_analysis")
     if isinstance(trend, list) and trend:
-        return trend[0].get("title", "Untitled")
+        return trend[0].get("title") or trend[0].get("topic_statement", "Untitled")
     return "New Pipeline Run"
+
+
+def _normalize_topic_candidate(raw: dict) -> dict:
+    """Normalize TopicBrief dict to frontend-friendly format.
+    
+    Maps backend field names to what the frontend expects:
+    - topic_statement → title
+    - big_question → subtitle
+    - viability_score_breakdown → viability_total, gap_pass, anchor_pass, audience_pass
+    """
+    sb = raw.get("viability_score_breakdown", {})
+    total = sb.get("total", 0)
+    gap_pass = all(sb.get(k, False) for k in ["gap_1", "gap_2", "gap_3"])
+    anchor_pass = sum(1 for k in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if sb.get(k))
+    audience_pass = sum(1 for k in ["audience_1", "audience_2", "audience_3", "audience_4"] if sb.get(k))
+    
+    return {
+        **raw,
+        "title": raw.get("topic_statement", "Untitled"),
+        "subtitle": raw.get("big_question", ""),
+        "gap_type": raw.get("gap_type", ""),
+        "mainstream_assumption": raw.get("mainstream_assumption", ""),
+        "anchors": raw.get("anchor_candidates", []),
+        "timing": raw.get("timing_rationale", ""),
+        "urgency": raw.get("urgency_flag", False),
+        "viability_total": total,
+        "viability_max": 17,
+        "gap_pass": gap_pass,
+        "anchor_pass": anchor_pass,
+        "audience_pass": audience_pass,
+    }
 
 
 # ─── Background pipeline runner ───────────────────────────────────────────────
@@ -480,6 +492,21 @@ async def get_stage_output(run_id: str, stage: str):
     if output is None:
         raise HTTPException(404, f"No output for stage {stage}")
     return {"stage": stage, "output": output}
+
+
+@router.get("/runs/{run_id}/iterations")
+async def get_iterations(run_id: str):
+    """Get all iteration logs for a pipeline run.
+    
+    Returns the iteration history from the ExperimentLoop,
+    including scores, mutation zones, and baseline comparisons.
+    """
+    try:
+        from packages.pipeline.iteration_store import IterationLogStore
+        store = IterationLogStore()
+        return {"run_id": run_id, "iterations": store.get_all(run_id)}
+    except Exception as e:
+        return {"run_id": run_id, "iterations": [], "error": str(e)}
 
 
 # ─── Resume/Recovery endpoints ─────────────────────────────────────────────────

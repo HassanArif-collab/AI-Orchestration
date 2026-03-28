@@ -187,12 +187,8 @@ class RouterClient:
         settings = get_settings()
         self.base_url = (base_url or settings.FREEROUTER_URL).rstrip("/")
         self.timeout = timeout
-        self._healthy: bool | None = None
-
-        # Determine if startup check should run
-        should_check = startup_check and settings.FREEROUTER_STARTUP_CHECK
-        if should_check:
-            self._startup_health_check()
+        self._healthy: bool | None = None  # None = unchecked, True/False = checked
+        self._startup_check_enabled = startup_check and settings.FREEROUTER_STARTUP_CHECK
 
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
 
@@ -398,6 +394,18 @@ class RouterClient:
         **kwargs: Any,
     ) -> str:
         """Convenience wrapper: single prompt string in, text string out."""
+        # Lazy health check on first call
+        if self._healthy is None and self._startup_check_enabled:
+            try:
+                self._startup_health_check()
+                self._healthy = True
+            except LLMClientError:
+                self._healthy = False
+                raise LLMClientError(
+                    f"FreeRouter not running at {self.base_url}. "
+                    "Run: cd freerouter && python -m freerouter proxy"
+                )
+
         messages: list[dict] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -416,6 +424,18 @@ class RouterClient:
         Get a structured response parsed into a Pydantic model.
         Uses instructor library which talks to FreeRouter as an OpenAI client.
         """
+        # Lazy health check on first call
+        if self._healthy is None and self._startup_check_enabled:
+            try:
+                self._startup_health_check()
+                self._healthy = True
+            except LLMClientError:
+                self._healthy = False
+                raise LLMClientError(
+                    f"FreeRouter not running at {self.base_url}. "
+                    "Run: cd freerouter && python -m freerouter proxy"
+                )
+
         try:
             import instructor
             from openai import AsyncOpenAI

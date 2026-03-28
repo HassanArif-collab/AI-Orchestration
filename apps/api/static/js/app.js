@@ -145,6 +145,16 @@ function connectSSE() {
     if (_activeTab === 'pipeline') refreshPipeline();
   });
 
+  // Iteration complete events for script improvement graph
+  _es.addEventListener('iteration_complete', e => {
+    const d = JSON.parse(e.data).data;
+    if (_graphRunId === d.run_id) {
+      _graphData.push(d);
+      renderIterationGraph(_graphData);
+    }
+    showToast(`Iter ${d.iteration}: ${d.score}% ${d.beat_baseline?'↑':'·'} (${(d.mutation_zone||'').replace(/_/g,' ')})`, d.beat_baseline?'success':'info', 2000);
+  });
+
   // Kanban events
   _es.addEventListener('task_created', e => {
     const d = JSON.parse(e.data);
@@ -175,6 +185,22 @@ function connectSSE() {
   });
 
   _es.onerror = () => setTimeout(connectSSE, 5000);
+}
+
+// ─── FreeRouter Health Check ─────────────────────────────────────────────────
+
+async function checkFreeRouter() {
+  const banner = document.getElementById('freerouter-banner');
+  try {
+    const r = await fetch('/api/health/freerouter');
+    const d = await r.json();
+    if (!d.healthy && banner) {
+      banner.classList.remove('hidden');
+      banner.textContent = '⚠ FreeRouter LLM proxy not running — pipeline runs will fail. Run: cd freerouter && python -m freerouter proxy';
+    } else if (banner) {
+      banner.classList.add('hidden');
+    }
+  } catch(e) {}
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -216,5 +242,7 @@ window.addEventListener('load', () => {
   switchTab(_initTab);
   connectSSE();
   checkHealth();
+  checkFreeRouter();
   setInterval(checkHealth, 30000);
+  setInterval(checkFreeRouter, 30000);
 });
