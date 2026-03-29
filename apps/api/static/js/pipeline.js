@@ -16,6 +16,97 @@ const STAGE_ORDER = ['trend_analysis', 'human_topic_approval', 'research', 'scri
   'visual_planning', 'seo', 'human_review', 'asset_creation', 'publish'];
 const STATUS_CLASS = { complete: 'complete', running: 'running', waiting_human: 'waiting', error: 'error', pending: 'pending' };
 
+/**
+ * Render artifact data as readable HTML instead of raw JSON.
+ * Handles AdaptedScript, Research, Visual Planning, and Trend Analysis outputs.
+ */
+function renderArtifactHtml(data, stageName) {
+  if (!data) return '<div style="color:var(--text-muted);padding:8px">No output</div>';
+  
+  // Handle string output
+  if (typeof data === 'string') {
+    return `<div style="padding:8px;white-space:pre-wrap">${escHtml(data.slice(0, 500))}${data.length > 500 ? '...' : ''}</div>`;
+  }
+  
+  // Handle arrays (trend_analysis topic candidates)
+  if (Array.isArray(data)) {
+    if (data.length === 0) return '<div style="color:var(--text-muted);padding:8px">Empty list</div>';
+    return data.slice(0, 5).map((item, i) => `
+      <div style="padding:8px;border-bottom:1px solid var(--border)">
+        <div style="font-weight:600;margin-bottom:4px">${escHtml(item.title || item.topic_statement || `Item ${i+1}`)}</div>
+        <div style="font-size:12px;color:var(--text-secondary)">${escHtml(item.subtitle || item.big_question || '')}</div>
+        ${item.viability_total ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Viability: ${item.viability_total}/17</div>` : ''}
+      </div>`).join('') + (data.length > 5 ? `<div style="padding:8px;color:var(--text-muted);font-size:11px">... and ${data.length - 5} more</div>` : '');
+  }
+  
+  // Handle objects
+  if (typeof data !== 'object') {
+    return `<div style="padding:8px">${escHtml(String(data).slice(0, 500))}</div>`;
+  }
+  
+  // AdaptedScript (script_writing) - dual column table
+  if (data.entries && Array.isArray(data.entries)) {
+    let html = '';
+    if (data.adapted_title) {
+      html += `<div style="padding:8px;font-weight:600;border-bottom:1px solid var(--border)">${escHtml(data.adapted_title)}</div>`;
+    }
+    if (data.production_readiness_score !== undefined) {
+      html += `<div style="padding:4px 8px;font-size:11px;color:var(--text-muted)">Score: ${data.production_readiness_score.toFixed(1)}%</div>`;
+    }
+    html += `<table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:var(--bg-tertiary)">
+        <th style="padding:6px;text-align:left;border-bottom:1px solid var(--border)">Narration</th>
+        <th style="padding:6px;text-align:left;border-bottom:1px solid var(--border)">Visual</th>
+      </tr></thead><tbody>`;
+    data.entries.slice(0, 8).forEach((entry, i) => {
+      const bg = i % 2 === 0 ? '' : 'background:var(--bg-secondary)';
+      html += `<tr style="${bg}">
+        <td style="padding:6px;vertical-align:top;border-bottom:1px solid var(--border)">${escHtml(entry.prose || '')}</td>
+        <td style="padding:6px;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary)">${escHtml(entry.visual_direction || '')}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    if (data.entries.length > 8) {
+      html += `<div style="padding:4px 8px;color:var(--text-muted);font-size:11px">... and ${data.entries.length - 8} more entries</div>`;
+    }
+    return html;
+  }
+  
+  // Visual Planning - section briefs
+  if (data.section_briefs && Array.isArray(data.section_briefs)) {
+    return data.section_briefs.slice(0, 6).map((brief, i) => `
+      <div style="padding:6px 8px;border-bottom:1px solid var(--border)">
+        <span style="color:var(--accent-primary);font-weight:600">Section ${brief.section_index || i}:</span>
+        <span style="color:var(--text-secondary)">${escHtml((brief.sonic_palette || '').slice(0, 60))}</span>
+      </div>`).join('') + (data.section_briefs.length > 6 ? `<div style="padding:8px;color:var(--text-muted);font-size:11px">... and ${data.section_briefs.length - 6} more sections</div>` : '');
+  }
+  
+  // Research output - show key fields
+  const keyFields = ['topic', 'title', 'summary', 'main_findings', 'key_points', 'source_title'];
+  let html = '';
+  for (const key of keyFields) {
+    if (data[key]) {
+      let val = data[key];
+      if (Array.isArray(val)) {
+        val = val.slice(0, 3).map(v => escHtml(String(v).slice(0, 80))).join('<br>');
+      } else {
+        val = escHtml(String(val).slice(0, 200));
+      }
+      html += `<div style="padding:6px 8px;border-bottom:1px solid var(--border)">
+        <span style="font-weight:600;color:var(--text-secondary)">${key}:</span> ${val}
+      </div>`;
+    }
+  }
+  if (html) return html;
+  
+  // Fallback: formatted JSON (limited)
+  const jsonStr = JSON.stringify(data, null, 2);
+  if (jsonStr.length > 800) {
+    return `<pre style="margin:0;padding:8px;font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto">${escHtml(jsonStr.slice(0, 800))}...</pre>`;
+  }
+  return `<pre style="margin:0;padding:8px;font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto">${escHtml(jsonStr)}</pre>`;
+}
+
 let _viewMode = 'board'; // 'board' | 'list'
 
 async function initPipeline() {
@@ -232,7 +323,7 @@ function showRunDetail(run, iterations = []) {
     }
   }
 
-  // Stage outputs (expandable)
+  // Stage outputs (expandable) - render as readable HTML
   const outputsHtml = STAGE_ORDER
     .filter(s => stages[s]?.output)
     .map(s => `
@@ -242,8 +333,8 @@ function showRunDetail(run, iterations = []) {
           <span>${STAGE_ICONS[s]} ${STAGE_LABELS[s]}</span>
           <span style="color:var(--text-muted);font-size:12px">▾</span>
         </div>
-        <div class="expandable" style="padding:0">
-          <pre style="margin:0;border:none;border-radius:0;max-height:300px;overflow-y:auto">${escHtml(JSON.stringify(stages[s].output, null, 2))}</pre>
+        <div class="expandable" style="padding:0;max-height:400px;overflow-y:auto">
+          ${renderArtifactHtml(stages[s].output, s)}
         </div>
       </div>`).join('');
 

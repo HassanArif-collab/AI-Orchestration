@@ -446,6 +446,118 @@ class TestTopicFinderAPI:
         assert task["status"] == "thinking"
 
 
+# ─── Title Extraction Tests (Task 7.1) ─────────────────────────────────────────────
+
+class TestTitleExtraction:
+    """Tests for title extraction from pipeline runs in Kanban view."""
+    
+    def test_extract_title_from_normalized_approval(self):
+        """Test that _run_to_kanban_dict extracts title from normalized approval.
+        
+        When a user approves a topic, the selection contains the NORMALIZED topic
+        candidate which has 'title' (mapped from 'topic_statement'), not the raw
+        'topic_statement' field.
+        
+        This test verifies that the Kanban title extraction correctly reads the
+        'title' field from the normalized approval selection.
+        """
+        from apps.api.routers.kanban_routes import _run_to_kanban_dict
+        
+        # Create a mock run with normalized approval output
+        # This simulates what happens after user approves a topic
+        mock_run = MagicMock()
+        mock_run.to_dict.return_value = {
+            "run_id": "test-run-123",
+            "current_stage": "research",
+            "status": "running",
+            "stage_outputs": {
+                "human_topic_approval": {
+                    # This is the NORMALIZED topic candidate (from _normalize_topic_candidate)
+                    # It has 'title' field, NOT 'topic_statement'
+                    "title": "Why Pakistan's AI Policy Matters",
+                    "subtitle": "What if the real bottleneck isn't technology?",
+                    "gap_type": "Practical Gap",
+                    "viability_total": 15,
+                    "viability_max": 17,
+                    "gap_pass": True,
+                    "anchor_pass": 3,
+                    "audience_pass": 3,
+                }
+            },
+            "stage_status": {
+                "trend_analysis": "complete",
+                "human_topic_approval": "complete",
+                "research": "running"
+            },
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T01:00:00Z"
+        }
+        
+        result = _run_to_kanban_dict(mock_run)
+        
+        # The title should be extracted from the 'title' field, not 'topic_statement'
+        assert result["title"] == "Why Pakistan's AI Policy Matters", \
+            f"Expected 'Why Pakistan's AI Policy Matters', got '{result['title']}'"
+    
+    def test_extract_title_fallback_to_topic_statement(self):
+        """Test that _run_to_kanban_dict falls back to topic_statement if title missing."""
+        from apps.api.routers.kanban_routes import _run_to_kanban_dict
+        
+        # Create a mock run with raw (non-normalized) approval output
+        mock_run = MagicMock()
+        mock_run.to_dict.return_value = {
+            "run_id": "test-run-456",
+            "current_stage": "research",
+            "status": "running",
+            "stage_outputs": {
+                "human_topic_approval": {
+                    # Raw topic candidate has 'topic_statement', not 'title'
+                    "topic_statement": "Raw Topic Statement",
+                    "big_question": "What if...?",
+                }
+            },
+            "stage_status": {},
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T01:00:00Z"
+        }
+        
+        result = _run_to_kanban_dict(mock_run)
+        
+        # Should fall back to topic_statement
+        assert result["title"] == "Raw Topic Statement", \
+            f"Expected fallback to 'Raw Topic Statement', got '{result['title']}'"
+    
+    def test_extract_title_from_trend_analysis(self):
+        """Test that _run_to_kanban_dict extracts title from trend_analysis if no approval."""
+        from apps.api.routers.kanban_routes import _run_to_kanban_dict
+        
+        # Create a mock run with no approval, but with trend_analysis
+        mock_run = MagicMock()
+        mock_run.to_dict.return_value = {
+            "run_id": "test-run-789",
+            "current_stage": "human_topic_approval",
+            "status": "waiting_human",
+            "stage_outputs": {
+                "trend_analysis": [
+                    {
+                        "title": "First Trend Topic",
+                        "topic_statement": "First Trend Statement",
+                        "viability_total": 10
+                    }
+                ]
+            },
+            "stage_status": {},
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T01:00:00Z"
+        }
+        
+        result = _run_to_kanban_dict(mock_run)
+        
+        # Should use trend_analysis first item's title
+        assert result["title"] == "First Trend Topic", \
+            f"Expected 'First Trend Topic', got '{result['title']}'"
+
+
 # ─── Run Tests ───────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

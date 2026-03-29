@@ -193,16 +193,24 @@ function connectSSE() {
 
 async function checkFreeRouter() {
   const banner = document.getElementById('freerouter-banner');
+  if (!banner) return;
+  
   try {
     const r = await fetch('/api/health/freerouter');
     const d = await r.json();
-    if (!d.healthy && banner) {
+    if (!d.healthy) {
+      // Show banner when health check returns unhealthy
       banner.classList.remove('hidden');
       banner.textContent = '⚠ FreeRouter LLM proxy not running — pipeline runs will fail. Run: cd freerouter && python -m freerouter proxy';
-    } else if (banner) {
+    } else {
       banner.classList.add('hidden');
     }
-  } catch(e) {}
+  } catch(e) {
+    // Show banner on network errors, server errors, or JSON parse failures
+    // This ensures the banner appears when the health endpoint is unreachable
+    banner.classList.remove('hidden');
+    banner.textContent = '⚠ FreeRouter health check failed — pipeline runs may fail. Error: ' + e.message;
+  }
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────
