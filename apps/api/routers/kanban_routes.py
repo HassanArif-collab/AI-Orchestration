@@ -42,16 +42,17 @@ def _run_to_kanban_dict(run) -> dict:
     d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
     stage_name = d.get("current_stage", "trend_analysis")
     
-    # Extract title
+    # Extract title - check 'title' first (normalized field), then 'topic_statement' (raw field)
+    # This handles both normalized data (from frontend approval) and raw data (from pipeline storage)
     video_title = "Untitled"
     outputs = d.get("stage_outputs", {})
     approval = outputs.get("human_topic_approval")
     if isinstance(approval, dict):
-        video_title = approval.get("topic_statement") or approval.get("title") or "Untitled"
+        video_title = approval.get("title") or approval.get("topic_statement") or "Untitled"
     else:
         trend = outputs.get("trend_analysis")
         if isinstance(trend, list) and trend:
-            video_title = trend[0].get("topic_statement") or trend[0].get("title") or "Untitled"
+            video_title = trend[0].get("title") or trend[0].get("topic_statement") or "Untitled"
     
     # Status mapping to Kanban visual states
     status = d.get("status", "idle")
