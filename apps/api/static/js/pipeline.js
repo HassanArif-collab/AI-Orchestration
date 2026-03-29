@@ -254,8 +254,12 @@ function showRunDetail(run, iterations = []) {
     const bars = iterations.map(it => {
       const height = Math.max(5, (it.score / maxScore) * 100);
       const color = it.beat_baseline ? 'var(--accent-success)' : 'var(--accent-secondary)';
-      return `<div title="Iteration ${it.iteration}: ${it.score.toFixed(1)}% (${it.mutation_zone})"
-                   style="flex:1;height:${height}%;background:${color};border-radius:2px 2px 0 0"></div>`;
+      // Store iteration data as JSON attribute for click handler
+      const iterData = JSON.stringify(it).replace(/"/g, '&quot;');
+      return `<div title="Iteration ${it.iteration}: ${it.score.toFixed(1)}% (${it.mutation_zone}) - Click to view script"
+                   data-iteration='${iterData}'
+                   onclick="showIterationScript(this)"
+                   style="flex:1;height:${height}%;background:${color};border-radius:2px 2px 0 0;cursor:pointer"></div>`;
     }).join('');
 
     graphHtml = `
@@ -386,4 +390,86 @@ async function deleteRun(runId) {
     showToast('Run deleted', 'info');
     await refreshPipeline();
   } catch (e) { showToast(`Delete failed: ${e.message}`, 'error'); }
+}
+
+/**
+ * Show the script for a specific iteration when clicking on a graph bar.
+ * @param {HTMLElement} barEl - The clicked bar element with data-iteration attribute
+ */
+function showIterationScript(barEl) {
+  const iterData = barEl.dataset.iteration;
+  if (!iterData) return;
+  
+  try {
+    const iter = JSON.parse(iterData);
+    const scriptJson = iter.script_json;
+    
+    if (!scriptJson) {
+      showToast('No script data for this iteration', 'warning');
+      return;
+    }
+    
+    // Build readable script display
+    let content = '';
+    
+    // Show iteration header
+    content += `<div style="margin-bottom:12px;padding:10px;background:var(--bg-tertiary);border-radius:var(--radius)">`;
+    content += `<div style="display:flex;justify-content:space-between;align-items:center">`;
+    content += `<span style="font-weight:600">Iteration ${iter.iteration}</span>`;
+    content += `<span style="font-weight:700;color:var(--accent-success)">${iter.score.toFixed(1)}%</span>`;
+    content += `</div>`;
+    content += `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">`;
+    content += `Mutation: ${escHtml(iter.mutation_zone || 'N/A')} | `;
+    content += iter.beat_baseline ? '<span style="color:var(--accent-success)">✓ Beat baseline</span>' : '<span style="color:var(--text-muted)">Did not beat baseline</span>';
+    content += `</div>`;
+    content += `</div>`;
+    
+    // Show script content
+    if (scriptJson.entries && Array.isArray(scriptJson.entries)) {
+      // Dual-column script format (AdaptedScript)
+      content += `<div style="font-size:12px">`;
+      content += `<table style="width:100%;border-collapse:collapse">`;
+      content += `<thead><tr style="background:var(--bg-tertiary)">`;
+      content += `<th style="padding:8px;text-align:left;border-bottom:1px solid var(--border)">Narration</th>`;
+      content += `<th style="padding:8px;text-align:left;border-bottom:1px solid var(--border)">Visual</th>`;
+      content += `</tr></thead>`;
+      content += `<tbody>`;
+      scriptJson.entries.forEach((entry, i) => {
+        const bgStyle = i % 2 === 0 ? '' : 'background:var(--bg-secondary)';
+        content += `<tr style="${bgStyle}">`;
+        content += `<td style="padding:8px;vertical-align:top;border-bottom:1px solid var(--border)">${escHtml(entry.prose || '')}</td>`;
+        content += `<td style="padding:8px;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary)">${escHtml(entry.visual_direction || '')}</td>`;
+        content += `</tr>`;
+      });
+      content += `</tbody></table>`;
+      content += `</div>`;
+      
+      // Show title if available
+      if (scriptJson.adapted_title) {
+        content = `<div style="margin-bottom:12px;font-weight:600;font-size:14px">${escHtml(scriptJson.adapted_title)}</div>` + content;
+      }
+    } else {
+      // Fallback: show raw JSON
+      content += `<pre style="margin:0;max-height:400px;overflow:auto">${escHtml(JSON.stringify(scriptJson, null, 2))}</pre>`;
+    }
+    
+    // Show failed questions if any
+    if (iter.failed_questions && iter.failed_questions.length > 0) {
+      content += `<div style="margin-top:12px;padding:8px;background:rgba(161,42,42,0.2);border-radius:var(--radius)">`;
+      content += `<div style="font-size:11px;font-weight:600;color:var(--accent-error)">Failed questions: ${iter.failed_questions.join(', ')}</div>`;
+      content += `</div>`;
+    }
+    
+    showModal(`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h2 style="font-size:15px;color:var(--text-primary)">📄 Script at Iteration ${iter.iteration}</h2>
+        <button class="btn btn-outline btn-sm" onclick="hideModal()">✕</button>
+      </div>
+      ${content}
+    `);
+    
+  } catch (e) {
+    console.error('Failed to parse iteration data:', e);
+    showToast('Failed to display iteration script', 'error');
+  }
 }
