@@ -39,6 +39,14 @@ const Kanban = {
         if (!container) return;
         
         container.innerHTML = this._getBoardHTML();
+        
+        // Render cached data immediately (from SSE events while on other tabs)
+        // This ensures the board shows instantly without waiting for API
+        if (this.tasks && this.tasks.length > 0) {
+            this._renderBoard();
+        }
+        
+        // Then fetch fresh data in background
         await this.refresh();
         this._setupEventListeners();
         this._setupDragAndDrop();
