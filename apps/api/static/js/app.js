@@ -149,13 +149,11 @@ function connectSSE() {
     if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'pipeline_complete', data: d });
   });
 
-  // Iteration complete events for script improvement graph
+  // Iteration complete events for script improvement — show toast only.
+  // The graph is rendered inside the run detail modal (pipeline.js), not here.
   _es.addEventListener('iteration_complete', e => {
     const d = JSON.parse(e.data).data;
-    if (_graphRunId === d.run_id) {
-      _graphData.push(d);
-      renderIterationGraph(_graphData);
-    }
+    if (_activeTab === 'pipeline') refreshPipeline();
     showToast(`Iter ${d.iteration}: ${d.score}% ${d.beat_baseline?'↑':'·'} (${(d.mutation_zone||'').replace(/_/g,' ')})`, d.beat_baseline?'success':'info', 2000);
   });
 

@@ -26,6 +26,11 @@ from pydantic import field_validator, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class ServiceStatus(Enum):
+    """Status of an external service configuration."""
+    AVAILABLE = "available"
+    NOT_CONFIGURED = "not_configured"
+    MISCONFIGURED = "misconfigured"
 
 
 
@@ -195,6 +200,47 @@ class Settings(BaseSettings):
     SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
     SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
     SCRIPT_MAX_ITERATIONS: int = 20
+
+    # ─── Service Validation ──────────────────────────────────────────────────
+
+    def validate_service(self, service: str) -> ServiceStatus:
+        """Validate the configuration of a named service.
+
+        Returns a ServiceStatus indicating whether the service is
+        available, not configured, or misconfigured.
+        """
+        if service == "youtube":
+            if not self.YOUTUBE_API_KEY:
+                return ServiceStatus.NOT_CONFIGURED
+            if len(self.YOUTUBE_API_KEY) < 20:
+                return ServiceStatus.MISCONFIGURED
+            return ServiceStatus.AVAILABLE
+
+        if service == "notion":
+            if not self.NOTION_API_KEY:
+                return ServiceStatus.NOT_CONFIGURED
+            if not self.NOTION_API_KEY.startswith("secret_"):
+                return ServiceStatus.MISCONFIGURED
+            return ServiceStatus.AVAILABLE
+
+        if service == "zep":
+            if not self.ZEP_API_KEY:
+                return ServiceStatus.NOT_CONFIGURED
+            return ServiceStatus.AVAILABLE
+
+        if service == "freerouter":
+            if not self.FREEROUTER_URL:
+                return ServiceStatus.NOT_CONFIGURED
+            return ServiceStatus.AVAILABLE
+
+        raise ValueError(f"Unknown service: {service}")
+
+    def get_service_status(self) -> dict[str, str]:
+        """Return a dict mapping service names to their status value strings."""
+        return {
+            service: self.validate_service(service).value
+            for service in ("zep", "youtube", "notion", "freerouter")
+        }
 
 
 @lru_cache(maxsize=1)

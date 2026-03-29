@@ -178,9 +178,48 @@ function showRunDetail(run, iterations = []) {
           </div>
         </div>`;
     } else if (run.current_stage === 'human_review') {
+      // Extract script content from the script_writing stage output
+      const scriptOutput = stages.script_writing?.output || {};
+      const scriptTitle = scriptOutput.adapted_title || run.video_title || 'Untitled';
+      const scriptScore = scriptOutput.production_readiness_score;
+      const entries = Array.isArray(scriptOutput.entries) ? scriptOutput.entries : [];
+
+      // Build a readable script view from dual-column entries
+      let scriptContentHtml = '';
+      if (entries.length > 0) {
+        scriptContentHtml = entries.map((entry, idx) => {
+          const prose = entry.prose || '';
+          const visual = entry.visual_direction || '';
+          const section = entry.section_label || '';
+          const isAnchor = section === 'ANCHOR';
+          const isHook = section === 'HOOK';
+          const headerStyle = isAnchor ? 'color:var(--accent-warning);font-weight:700' :
+                              isHook ? 'color:var(--accent-primary);font-weight:700' :
+                              'color:var(--text-muted);font-weight:600';
+          return `
+            <div style="margin-bottom:12px;padding:8px 0;${isAnchor || isHook ? 'border-left:3px solid ' + (isAnchor ? 'var(--accent-warning)' : 'var(--accent-primary)') + ';padding-left:12px' : ''}">
+              ${section ? `<div style="font-size:11px;text-transform:uppercase;${headerStyle};margin-bottom:4px">${escHtml(section)}</div>` : ''}
+              <div style="font-size:13px;line-height:1.6;color:var(--text-primary)">${escHtml(prose)}</div>
+              ${visual ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-style:italic">📹 ${escHtml(visual)}</div>` : ''}
+            </div>`;
+        }).join('');
+      } else {
+        // Fallback: show raw JSON if no structured entries
+        scriptContentHtml = `<pre style="font-size:12px;color:var(--text-secondary);max-height:400px;overflow-y:auto">${escHtml(JSON.stringify(scriptOutput, null, 2))}</pre>`;
+      }
+
       approvalHtml = `
         <div class="card" style="border-color:var(--accent-warning);margin-bottom:12px">
-          <div class="card-header"><h3 style="color:var(--accent-warning)">👁️ Review script & visual plan</h3></div>
+          <div class="card-header">
+            <h3 style="color:var(--accent-warning)">👁️ Review script & visual plan</h3>
+            ${scriptScore ? `<span style="font-size:13px;font-weight:700;color:${scriptScore >= 85 ? 'var(--accent-success)' : 'var(--accent-warning)'}">${scriptScore.toFixed(1)}%</span>` : ''}
+          </div>
+          <div style="margin-bottom:12px">
+            <div style="font-size:15px;font-weight:700;margin-bottom:8px">${escHtml(scriptTitle)}</div>
+            <div style="max-height:500px;overflow-y:auto;padding:12px;background:var(--bg-tertiary);border-radius:var(--radius)">
+              ${scriptContentHtml}
+            </div>
+          </div>
           <div class="form-group">
             <label class="form-label">Feedback (optional)</label>
             <textarea id="review-feedback" class="form-input" placeholder="Any changes needed?"></textarea>

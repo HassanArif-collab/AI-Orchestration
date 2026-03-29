@@ -163,3 +163,59 @@ def retry_with_backoff(
 
         return wrapper
     return decorator
+
+
+def retry_with_backoff_sync(
+    max_attempts: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+    exceptions: tuple[type[Exception], ...] | None = None,
+) -> Callable:
+    """Retry decorator with exponential backoff for synchronous functions.
+
+    Same logic as retry_with_backoff but for non-async functions.
+    """
+    retryable_exceptions = exceptions if exceptions is not None else DEFAULT_RETRYABLE_EXCEPTIONS
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if not is_retryable_exception(e, retryable_exceptions):
+                        log.error(
+                            f"non_retryable_exception: func={func.__name__} error_type={type(e).__name__}",
+                            extra={"error": str(e)}
+                        )
+                        raise
+
+                    last_exception = e
+
+                    if attempt == max_attempts:
+                        log.error(
+                            f"retry_exhausted: func={func.__name__} attempts={max_attempts}",
+                            extra={"error": str(e), "error_type": type(e).__name__}
+                        )
+                        raise
+
+                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                    delay = delay * (0.5 + random.random())
+
+                    log.warning(
+                        f"retry_attempt: func={func.__name__} attempt={attempt}/{max_attempts} delay={delay:.2f}s",
+                        extra={"error": str(e), "error_type": type(e).__name__}
+                    )
+
+                    import time
+                    time.sleep(delay)
+
+            if last_exception:
+                raise last_exception
+            raise RuntimeError(f"retry logic error in {func.__name__}")
+
+        return wrapper
+    return decorator
