@@ -270,7 +270,8 @@ const Kanban = {
             else if (task.stage == 4) content = task.script || 'Script writing...';
             else if (task.stage == 5) content = task.visual_cues || 'Visual planning...';
             else if (task.stage == 6) content = task.script || 'Complete';
-            artifactBox.textContent = content;
+            // Use innerHTML to render HTML content (Task 6 fix)
+            artifactBox.innerHTML = content;
         }
         
         const notionSection = document.getElementById('notion-section');
@@ -280,6 +281,25 @@ const Kanban = {
             notionLink.href = task.notion_url;
         } else {
             notionSection.classList.add('hidden');
+        }
+        
+        // Render thoughts if available
+        const thoughtsEl = document.getElementById('drawer-thoughts');
+        if (thoughtsEl && task.thoughts) {
+            try {
+                const thoughtsList = typeof task.thoughts === 'string' ? JSON.parse(task.thoughts) : task.thoughts;
+                if (Array.isArray(thoughtsList) && thoughtsList.length > 0) {
+                    thoughtsEl.innerHTML = thoughtsList.map(t => {
+                        const time = fmtTime(t.time || new Date().toISOString());
+                        const text = escHtml(t.text || '');
+                        return `<div class="thought-item"><span class="thought-time">${time}</span><span class="thought-text">${text}</span></div>`;
+                    }).join('');
+                } else {
+                    thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded</div>';
+                }
+            } catch (e) {
+                thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded</div>';
+            }
         }
     },
     

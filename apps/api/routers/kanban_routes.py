@@ -9,7 +9,9 @@ Pipeline runs stored in pipeline.db.
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -17,8 +19,95 @@ from pydantic import BaseModel, Field
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
 from apps.api.events import emit_task_created
+from packages.core.config import get_settings
 
 router = APIRouter()
+
+
+# ─── Agent Thoughts Store ─────────────────────────────────────────────────────
+
+class ThoughtsStore:
+    """SQLite-backed store for agent thoughts/monologue.
+    
+    Thoughts are stored per run_id and retrieved when displaying the Kanban drawer.
+    This enables the "Agent Monologue" section to show historical thoughts even
+    after page refresh.
+    """
+    
+    def __init__(self, db_path: Optional[str] = None):
+        settings = get_settings()
+        self.db_path = db_path or str(Path(settings.DATA_DIR) / "agent_thoughts.db")
+        self._ensure_table()
+    
+    def _ensure_table(self) -> None:
+        """Create the agent_thoughts table if it doesn't exist."""
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_thoughts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    thought_text TEXT NOT NULL,
+                    stage TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_thoughts_run_id 
+                ON agent_thoughts(run_id)
+            """)
+            conn.commit()
+    
+    def add_thought(self, run_id: str, thought_text: str, stage: Optional[str] = None) -> None:
+        """Add a thought for a run."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_thoughts (run_id, thought_text, stage, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (run_id, thought_text, stage or "", datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+    
+    def get_thoughts(self, run_id: str, limit: int = 50) -> List[Dict]:
+        """Get all thoughts for a run, newest first."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT thought_text, stage, created_at 
+                FROM agent_thoughts 
+                WHERE run_id = ? 
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (run_id, limit),
+            )
+            return [
+                {
+                    "text": row["thought_text"],
+                    "stage": row["stage"],
+                    "time": row["created_at"],
+                }
+                for row in cursor.fetchall()
+            ]
+    
+    def delete_for_run(self, run_id: str) -> int:
+        """Delete all thoughts for a run."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM agent_thoughts WHERE run_id = ?",
+                (run_id,),
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+
+
+def get_thoughts_store() -> ThoughtsStore:
+    """Get the thoughts store instance."""
+    return ThoughtsStore()
 
 # Map pipeline stage names to Kanban column numbers (1-6)
 PIPELINE_TO_KANBAN_STAGE = {
@@ -71,11 +160,22 @@ def _run_to_kanban_dict(run) -> dict:
     stage_num = get_kanban_stage(stage_name)
     color = colors[stage_num - 1] if 1 <= stage_num <= 6 else colors[0]
 
-    # Thoughts mapping
-    thoughts = "[]"
+    # Thoughts: Load from ThoughtsStore instead of hard-coding empty
+    run_id = d.get("run_id", "")
+    thoughts = []
+    try:
+        thoughts_store = get_thoughts_store()
+        thoughts = thoughts_store.get_thoughts(run_id, limit=50)
+    except Exception as e:
+        print(f"Error loading thoughts for {run_id}: {e}")
+    
+    # Render artifacts as readable HTML (Task 6 fix)
+    research_html = _render_artifact_html(outputs.get("research"), "research")
+    script_html = _render_artifact_html(outputs.get("script_writing"), "script")
+    visual_html = _render_artifact_html(outputs.get("visual_planning"), "visual")
     
     return {
-        "id": d.get("run_id"),
+        "id": run_id,
         "title": video_title,
         "stage": stage_num,
         "status": kanban_status,
@@ -83,11 +183,120 @@ def _run_to_kanban_dict(run) -> dict:
         "updated_at": d.get("updated_at"),
         "created_at": d.get("created_at"),
         "notion_url": outputs.get("publish", {}).get("notion_url") if isinstance(outputs.get("publish"), dict) else None,
-        "research": str(outputs.get("research", ""))[:1000],
-        "script": str(outputs.get("script_writing", ""))[:1000],
-        "visual_cues": str(outputs.get("visual_planning", ""))[:1000],
-        "thoughts": thoughts
+        "research": research_html,
+        "script": script_html,
+        "visual_cues": visual_html,
+        "thoughts": json.dumps(thoughts)  # JSON string for frontend parsing
     }
+
+
+def _render_artifact_html(data: Any, artifact_type: str) -> str:
+    """Render artifact data as readable HTML instead of truncated JSON strings.
+    
+    Args:
+        data: The artifact data (dict, list, or other)
+        artifact_type: Type hint (research, script, visual)
+        
+    Returns:
+        HTML string for display in the Kanban drawer
+    """
+    if not data:
+        return ""
+    
+    if isinstance(data, str):
+        return data[:500] if len(data) > 500 else data
+    
+    if not isinstance(data, dict):
+        # Fallback for non-dict data
+        return str(data)[:500]
+    
+    # Handle AdaptedScript (script_writing output)
+    if artifact_type == "script" and "entries" in data:
+        entries = data.get("entries", [])
+        if not entries:
+            return ""
+        
+        title = data.get("adapted_title", "Untitled Script")
+        score = data.get("production_readiness_score", 0)
+        
+        html_parts = [
+            f'<div style="margin-bottom:8px;font-weight:600;">{title}</div>',
+            f'<div style="margin-bottom:8px;font-size:11px;color:#888;">Score: {score:.1f}%</div>',
+            '<table style="width:100%;border-collapse:collapse;font-size:12px;">',
+            '<thead><tr style="background:#1e1e1e;">',
+            '<th style="padding:6px;text-align:left;border-bottom:1px solid #333;">Narration</th>',
+            '<th style="padding:6px;text-align:left;border-bottom:1px solid #333;">Visual</th>',
+            '</tr></thead>',
+            '<tbody>'
+        ]
+        
+        for i, entry in enumerate(entries[:10]):  # Limit to first 10 entries
+            bg = "#141414" if i % 2 == 0 else "#1a1a1a"
+            prose = entry.get("prose", "")[:200]
+            visual = entry.get("visual_direction", "")[:100]
+            html_parts.append(
+                f'<tr style="background:{bg}"><td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;">{prose}</td>'
+                f'<td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;color:#888;">{visual}</td></tr>'
+            )
+        
+        if len(entries) > 10:
+            html_parts.append(f'<tr><td colspan="2" style="padding:6px;text-align:center;color:#888;">... and {len(entries) - 10} more entries</td></tr>')
+        
+        html_parts.append('</tbody></table>')
+        return ''.join(html_parts)
+    
+    # Handle Research output
+    if artifact_type == "research":
+        # Check for common research fields
+        if "source_video_id" in data:
+            # This is an AdaptedScript from research stage
+            title = data.get("adapted_title", data.get("source_title", "Research Output"))
+            entries = data.get("entries", [])
+            if entries:
+                return _render_artifact_html(data, "script")
+            return f'<div style="font-weight:600;">{title}</div>'
+        
+        # Generic research dict - show key fields
+        html_parts = []
+        for key in ["topic", "title", "summary", "main_findings", "key_points"]:
+            if key in data:
+                val = data[key]
+                if isinstance(val, list):
+                    val = "<br>".join(str(v)[:100] for v in val[:5])
+                elif isinstance(val, str):
+                    val = val[:300]
+                html_parts.append(f'<div style="margin-bottom:6px;"><strong>{key}:</strong> {val}</div>')
+        
+        if html_parts:
+            return ''.join(html_parts)
+    
+    # Handle Visual Planning output
+    if artifact_type == "visual" and "section_briefs" in data:
+        briefs = data.get("section_briefs", [])
+        if not briefs:
+            return ""
+        
+        html_parts = ['<div style="font-size:12px;">']
+        for i, brief in enumerate(briefs[:6]):
+            section = brief.get("section_index", i)
+            palette = brief.get("sonic_palette", "N/A")
+            html_parts.append(
+                f'<div style="margin-bottom:4px;padding:4px;background:#1a1a1a;border-radius:4px;">'
+                f'<span style="color:#1D9E75;">Section {section}:</span> {palette[:50]}</div>'
+            )
+        if len(briefs) > 6:
+            html_parts.append(f'<div style="color:#888;">... and {len(briefs) - 6} more sections</div>')
+        html_parts.append('</div>')
+        return ''.join(html_parts)
+    
+    # Fallback: show as formatted JSON limited
+    try:
+        json_str = json.dumps(data, indent=2, default=str)
+        if len(json_str) > 500:
+            return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{json_str[:500]}...</pre>'
+        return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{json_str}</pre>'
+    except Exception:
+        return str(data)[:500]
 
 # ─── Pydantic Models ────────────────────────────────────────────────────────────
 
@@ -99,6 +308,12 @@ class TopicFinderRequest(BaseModel):
     """Request model for triggering Topic Finder."""
     seed_query: str = Field(..., min_length=3, max_length=500)
     genre_id: str = Field(default="default", max_length=50)
+
+class KanbanEventRequest(BaseModel):
+    """Request model for Kanban events (thoughts, stage changes, artifacts)."""
+    task_id: str = Field(..., description="The run/task ID")
+    event_type: str = Field(..., description="Event type: thought, stage_change, artifact, status_change")
+    data: Dict[str, Any] = Field(default_factory=dict, description="Event payload")
 
 # ─── API Endpoints ──────────────────────────────────────────────────────────────
 
@@ -159,12 +374,20 @@ async def update_task(task_id: str, data: KanbanTaskUpdate, bg: BackgroundTasks)
 
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str) -> dict:
-    """Delete the underlying pipeline run."""
+    """Delete the underlying pipeline run and associated thoughts."""
     store = get_run_store()
     if not store:
         raise HTTPException(503, "Store not available")
     
     store.delete(task_id)
+    
+    # Also delete associated thoughts
+    try:
+        thoughts_store = get_thoughts_store()
+        thoughts_store.delete_for_run(task_id)
+    except Exception as e:
+        print(f"Warning: Could not delete thoughts for {task_id}: {e}")
+    
     return {"success": True, "deleted_id": task_id}
 
 @router.post("/topic-finder")
@@ -211,6 +434,32 @@ async def get_stats() -> dict:
         "by_stage": by_stage,
         "by_status": by_status
     }
+
+@router.post("/events")
+async def record_kanban_event(data: KanbanEventRequest) -> dict:
+    """Record a Kanban event (thought, stage change, artifact, etc.).
+    
+    This endpoint is called by agents via KanbanCallbackHandler to report
+    thoughts, stage changes, artifacts, and status changes.
+    
+    Args:
+        data: The event request containing task_id, event_type, and data payload
+        
+    Returns:
+        Success dict with event_type
+    """
+    store = get_thoughts_store()
+    
+    if data.event_type == "thought":
+        # Store the thought text
+        thought_text = data.data.get("content", data.data.get("text", ""))
+        stage = data.data.get("stage", "")
+        store.add_thought(data.task_id, thought_text, stage=stage)
+        return {"success": True, "event_type": data.event_type, "recorded": "thought"}
+    
+    # For other event types, we just acknowledge them
+    # In the future, we could store stage changes, artifacts, etc.
+    return {"success": True, "event_type": data.event_type}
 
 def init_kanban_db() -> None:
     """No-op for backward compatibility."""
