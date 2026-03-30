@@ -137,14 +137,6 @@ class TopicFinderAgent:
             # Try Zep first, fall back to static file
             context_str = await self._get_audience_context(genre_id)
             
-            # Add MiroFish signals to the prompt if available (non-blocking)
-            mirofish_signals = await self._get_mirofish_signals()
-            mirofish_context = ""
-            if mirofish_signals:
-                mirofish_context = f"\nTrending signals from MiroFish:\n" + \
-                                   "\n".join(f"- {s}" for s in mirofish_signals)
-                await self._report_thought(f"Found {len(mirofish_signals)} trending signals from MiroFish")
-            
             # 1. Generate the initial topic idea
             await self._report_thought("Generating topic idea from research context...")
             
@@ -155,7 +147,6 @@ class TopicFinderAgent:
             
             Historical Audience Insights (Use these to calibrate your topic focus):
             {context_str}
-            {mirofish_context}
             
             Provide your response as a JSON object:
             {{
@@ -292,50 +283,6 @@ class TopicFinderAgent:
             return str(aud_data.get("topic_resonance_map", "No data"))
         
         return "No audience data available yet — first run."
-
-    async def _get_mirofish_signals(self) -> list[str]:
-        """
-        Query MiroFish for trending topic signals.
-        Returns empty list gracefully if server is down — never blocks discovery.
-
-        MiroFish is an optional trend simulation server (packages/integrations/mirofish/).
-        When available it provides audience simulation data to calibrate topic scoring.
-        """
-        try:
-            from packages.integrations.mirofish.client import MiroFishClient
-            from packages.integrations.mirofish.seeds import create_combined_seed
-
-            client = MiroFishClient()
-
-            # Check availability first
-            status = client.get_status()
-            if not status or status.get("status") == "unknown":
-                logger.debug("mirofish_unavailable_skipping")
-                return []
-
-            # Create default seeds for Pakistan context
-            seed_text, forecast_demand = create_combined_seed(
-                geopolitical=["Pakistan economic situation", "Political transitions"],
-                tech=["AI adoption in Pakistan", "Digital regulation"]
-            )
-            
-            report = client.submit_seed(seed_text=seed_text, forecast_demand=forecast_demand)
-            if not report:
-                return []
-
-            signals = []
-            for item in (report.get("trending_topics") or [])[:5]:
-                if isinstance(item, str):
-                    signals.append(item)
-                elif isinstance(item, dict):
-                    signals.append(item.get("topic", ""))
-
-            logger.info(f"mirofish_signals_retrieved: {len(signals)} signals")
-            return [s for s in signals if s]
-
-        except Exception as e:
-            logger.debug(f"mirofish_signal_fetch_failed_non_blocking: {e}")
-            return []
 
     async def discover_adaptation_candidates(self, genre_id: str) -> list[TopicBrief]:
         """
