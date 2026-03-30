@@ -132,3 +132,20 @@ async def get_skills():
                     print(f"Warning: Could not read skill file {fname}: {e}")
     
     return {"files": files}
+
+
+@router.get("/knowledge-base")
+async def get_knowledge_base():
+    """Return the KNOWLEDGE_BASE.md content for read-only display."""
+    from pathlib import Path
+    
+    kb_path = Path(__file__).parent.parent.parent.parent / "packages" / "content_factory" / "KNOWLEDGE_BASE.md"
+    
+    if kb_path.exists():
+        try:
+            content = kb_path.read_text(encoding='utf-8')
+            return {"content": content, "path": "packages/content_factory/KNOWLEDGE_BASE.md"}
+        except Exception as e:
+            return {"content": f"# Error reading file: {e}", "path": None}
+    
+    return {"content": "# Knowledge Base\n\nNo knowledge base file found.", "path": None}
