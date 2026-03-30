@@ -137,8 +137,29 @@ class TopicFinderAgent:
             # Try Zep first, fall back to static file
             context_str = await self._get_audience_context(genre_id)
             
+            # Exa.ai real-time web discovery
+            exa_context = ""
+            exa_results = []
+            try:
+                from packages.integrations.exa.client import ExaResearchClient
+                exa_client = ExaResearchClient()
+                exa_context, exa_results = exa_client.build_discovery_context(
+                    seed_query=seed_query,
+                    card_id=self.kanban_task_id,  # None is safe, report_thought handles it
+                )
+            except Exception as e:
+                logger.warning(f"exa_discovery_failed_non_blocking: {e}")
+                if self.kanban_task_id:
+                    from packages.core.thoughts import report_thought
+                    report_thought(
+                        card_id=self.kanban_task_id,
+                        agent_name="topic_finder",
+                        thought_type="error",
+                        content=f"⚠️ Exa.ai unavailable: {str(e)[:100]}. Proceeding with LLM-only discovery.",
+                    )
+            
             # 1. Generate the initial topic idea
-            await self._report_thought("Generating topic idea from research context...")
+            await self._report_thought(f"Generating topic from {len(exa_results)} web sources + audience history...")
             
             prompt = f"""
             You are a YouTube Investigative Journalist producing Johnny harris style documentary videos.
@@ -147,6 +168,8 @@ class TopicFinderAgent:
             
             Historical Audience Insights (Use these to calibrate your topic focus):
             {context_str}
+            
+            {exa_context if exa_context else "No real-time web data available — generate topics from your training knowledge."}
             
             Provide your response as a JSON object:
             {{
@@ -169,6 +192,10 @@ class TopicFinderAgent:
                     logger.error("failed_to_parse_topic_candidate")
                     await self._report_thought("Failed to parse topic candidate from LLM response")
                     return None
+                
+                # Report parsed candidate
+                await self._report_thought(f"💡 Candidate: \"{data.get('topic_statement', 'Unknown')[:60]}...\"")
+                await self._report_thought(f"Gap Type: {data.get('gap_type', 'Unknown')} | Urgency: {data.get('urgency_flag', False)}")
                     
                 # 2. Score Viability
                 await self._report_thought(f"Evaluating viability for: {data.get('topic_statement', 'Unknown topic')[:50]}...")
@@ -177,10 +204,24 @@ class TopicFinderAgent:
                     data["topic_statement"], data["anchor_candidates"], router
                 )
                 
-                # 3. Assess Tier 1 Status
+                # Calculate category scores
                 gap_pass = all(score_breakdown[q] for q in ["gap_1", "gap_2", "gap_3"])
                 anchor_pass_count = sum(1 for q in ["anchor_1", "anchor_2", "anchor_3", "anchor_4"] if score_breakdown[q])
                 audience_pass_count = sum(1 for q in ["audience_1", "audience_2", "audience_3", "audience_4"] if score_breakdown[q])
+                prod_pass_count = sum(1 for q in ["prod_1", "prod_2", "prod_3"] if score_breakdown[q])
+                timing_pass_count = sum(1 for q in ["timing_1", "timing_2", "timing_3"] if score_breakdown[q])
+                
+                # Stream category-level results to the card
+                await self._report_thought(
+                    f"📊 Viability Results:\n"
+                    f"  • Gap Test: {'✅ PASS' if gap_pass else '❌ FAIL'} (3/3 required)\n"
+                    f"  • Anchor Test: {'✅' if anchor_pass_count >= 2 else '❌'} {anchor_pass_count}/4 (2+ required)\n"
+                    f"  • Audience Test: {'✅' if audience_pass_count >= 2 else '❌'} {audience_pass_count}/4 (2+ required)\n"
+                    f"  • Production Test: {prod_pass_count}/3\n"
+                    f"  • Timing Test: {timing_pass_count}/3"
+                )
+                
+                # 3. Assess Tier 1 Status
                 
                 if gap_pass and anchor_pass_count >= 2 and audience_pass_count >= 2:
                     logger.info("tier_1_topic_identified")
