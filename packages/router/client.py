@@ -48,6 +48,38 @@ log = get_logger(__name__)
 T = TypeVar("T")
 
 
+# ─── Rate Limit Header Parsing ─────────────────────────────────────────────────────
+
+def _parse_provider_limits(headers: httpx.Headers, provider: str) -> dict:
+    """
+    Normalize rate limit headers across providers.
+
+    Different providers use slightly different header names:
+        Groq/OpenRouter: x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens
+        Ollama: None (local, unlimited)
+
+    Returns standardized dict with rpm_remaining and tpm_remaining.
+    Falls back to -1 if provider doesn't send headers (e.g., Ollama).
+
+    Args:
+        headers: HTTP response headers
+        provider: Provider name (groq, openrouter, ollama, etc.)
+
+    Returns:
+        Dict with rpm_remaining, tpm_remaining, provider, timestamp
+    """
+    # Try standard header names first
+    rpm = headers.get("x-ratelimit-remaining-requests")
+    tpm = headers.get("x-ratelimit-remaining-tokens")
+
+    return {
+        "rpm_remaining": int(rpm) if rpm is not None else -1,
+        "tpm_remaining": int(tpm) if tpm is not None else -1,
+        "provider": provider,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # ─── SSRF Prevention (P2-09) ─────────────────────────────────────────────────────
 
 # Private IP ranges that should be blocked for health checks
@@ -321,6 +353,7 @@ class RouterClient:
             model    (str)  — actual model used (from x-freerouter-model header)
             provider (str)  — actual provider (from x-freerouter-provider header)
             usage    (dict) — prompt_tokens, completion_tokens
+            limits   (dict) — rate limit info from HTTP headers (rpm_remaining, tpm_remaining)
 
         If a specific model returns 503, automatically retries with model="auto"
         so FreeRouter's fallback chain kicks in.
@@ -352,17 +385,26 @@ class RouterClient:
                 resp.raise_for_status()
                 data = resp.json()
 
+                # Extract provider from headers for rate limit parsing
+                provider = resp.headers.get("x-freerouter-provider", "unknown")
+                
+                # Parse rate limit headers from provider response
+                limits = _parse_provider_limits(resp.headers, provider)
+
                 result = {
                     "content": data["choices"][0]["message"]["content"],
                     "model": resp.headers.get("x-freerouter-model", body["model"]),
-                    "provider": resp.headers.get("x-freerouter-provider", "unknown"),
+                    "provider": provider,
                     "usage": data.get("usage", {}),
+                    "limits": limits,  # NEW: live rate limit data from headers
                 }
                 log.info(
                     "llm_call_ok",
                     provider=result["provider"],
                     model=result["model"],
                     tokens=result["usage"].get("total_tokens", 0),
+                    rpm_remaining=limits["rpm_remaining"],
+                    tpm_remaining=limits["tpm_remaining"],
                 )
                 return result
 
