@@ -86,6 +86,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Scheduler startup failed (non-fatal): {e}")
     
+    # Start the expired card cleanup task
+    try:
+        from apps.api.background_tasks import start_cleanup_task
+        if not start_cleanup_task():
+            print("Warning: Cleanup task startup failed (non-fatal)")
+    except Exception as e:
+        print(f"Warning: Cleanup task startup failed (non-fatal): {e}")
+    
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield

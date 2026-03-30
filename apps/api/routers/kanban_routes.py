@@ -392,3 +392,35 @@ async def record_kanban_event(data: KanbanEventRequest) -> dict:
     # For other event types, we just acknowledge them
     # In the future, we could store stage changes, artifacts, etc.
     return {"success": True, "event_type": data.event_type}
+
+
+# ─── Card Management Endpoints (for React frontend) ──────────────────────────────
+
+@router.post("/cards/{card_id}/save")
+async def save_card(card_id: str) -> dict:
+    """Save a suggested topic card by removing the expires_at timestamp.
+    
+    This prevents the 3-hour auto-delete for Column 2 cards.
+    """
+    try:
+        from packages.core.supabase_client import get_supabase
+        sb = get_supabase()
+        sb.table("kanban_cards").update({"expires_at": None}).eq("id", card_id).execute()
+        return {"status": "saved"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save card: {e}")
+
+
+@router.put("/cards/{card_id}/move")
+async def move_card(card_id: str, body: dict) -> dict:
+    """Move a card to a different column."""
+    try:
+        from packages.core.supabase_client import get_supabase
+        sb = get_supabase()
+        sb.table("kanban_cards").update({
+            "column": body["column"],
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", card_id).execute()
+        return {"status": "moved"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to move card: {e}")

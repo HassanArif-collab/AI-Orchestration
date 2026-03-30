@@ -103,3 +103,32 @@ async def get_startup_commands():
         "remotion_setup": "python -c \"from packages.visual.remotion.setup import scaffold_project; scaffold_project()\"",
         "pipeline_cli":   "python apps/worker/main.py start",
     }
+
+
+@router.get("/skills")
+async def get_skills():
+    """Return all data/skills/*.md files for the read-only viewer.
+    
+    This endpoint serves the skill prompt files to the React frontend
+    for display in the System tab of the sidebar.
+    """
+    import os
+    from pathlib import Path
+    
+    # Find the data/skills directory relative to this file
+    skills_dir = Path(__file__).parent.parent.parent.parent / "data" / "skills"
+    files = []
+    
+    if skills_dir.is_dir():
+        for fname in sorted(skills_dir.iterdir()):
+            if fname.suffix == '.md':
+                try:
+                    content = fname.read_text(encoding='utf-8')
+                    files.append({
+                        "name": fname.name,
+                        "content": content
+                    })
+                except Exception as e:
+                    print(f"Warning: Could not read skill file {fname}: {e}")
+    
+    return {"files": files}

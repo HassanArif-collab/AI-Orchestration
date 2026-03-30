@@ -480,3 +480,53 @@ def get_scheduler():
         The Scheduler instance, or None if not started.
     """
     return _scheduler
+
+
+async def cleanup_expired_cards():
+    """
+    Background task: Delete expired topic cards from Column 2.
+    
+    Runs every 10 minutes. Deletes kanban_cards in Column 2
+    whose expires_at has passed and haven't been saved (expires_at is not null).
+    
+    This ensures the 3-hour timer is enforced server-side even if
+    no one has the dashboard open.
+    """
+    while True:
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            
+            now = datetime.now(timezone.utc).isoformat()
+            
+            # Delete expired cards in Column 2 that haven't been saved
+            result = sb.table("kanban_cards") \
+                .delete() \
+                .eq("column", 2) \
+                .not_.is_("expires_at", "null") \
+                .lt("expires_at", now) \
+                .execute()
+            
+            if result.data:
+                logger.info(f"cleanup_expired_cards: deleted {len(result.data)} expired cards")
+                
+        except Exception as e:
+            logger.warning(f"card_cleanup_failed (non-fatal): {e}")
+        
+        # Sleep for 10 minutes
+        await asyncio.sleep(600)
+
+
+def start_cleanup_task():
+    """Start the expired card cleanup background task.
+    
+    This should be called at application startup.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(cleanup_expired_cards())
+        logger.info("expired_card_cleanup_task_started")
+        return True
+    except Exception as e:
+        logger.warning(f"cleanup_task_start_failed: {e}")
+        return False
