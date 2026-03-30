@@ -398,6 +398,26 @@ class RouterClient:
                     "usage": data.get("usage", {}),
                     "limits": limits,  # NEW: live rate limit data from headers
                 }
+
+                # Log to usage tracker with live rate limit data
+                try:
+                    from packages.router.tracker import UsageTracker
+                    tracker = UsageTracker()
+                    usage = result.get("usage", {})
+                    tracker.record_call(
+                        provider=provider,
+                        model=result["model"],
+                        tokens_in=usage.get("prompt_tokens", 0),
+                        tokens_out=usage.get("completion_tokens", 0),
+                        latency_ms=0,  # Could add timing if needed
+                        success=True,
+                        rpm_remaining=limits["rpm_remaining"],
+                        tpm_remaining=limits["tpm_remaining"],
+                    )
+                except Exception as tracker_error:
+                    # Never crash the pipeline because tracking failed
+                    log.debug(f"usage_tracking_failed_non_blocking: {tracker_error}")
+
                 log.info(
                     "llm_call_ok",
                     provider=result["provider"],
