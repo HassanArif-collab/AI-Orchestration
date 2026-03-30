@@ -159,3 +159,38 @@ async def health_check():
     health["overall"] = "healthy" if (proxy_ok and n_keys > 0) else \
                         "degraded" if n_keys > 0 else "offline"
     return health
+
+
+@router.get("/quota")
+async def get_live_quota():
+    """
+    Returns the most recent RPM/TPM remaining values 
+    for each provider from the tracker DB.
+
+    This endpoint is used by the React frontend (Phase 5d) to display
+    live progress bars showing remaining quota per provider.
+
+    Returns:
+        Dict with "providers" list, each containing:
+            - name: Provider name (groq, openrouter, ollama, etc.)
+            - rpm_remaining: Requests per minute remaining (-1 if unknown)
+            - tpm_remaining: Tokens per minute remaining (-1 if unknown)
+            - last_updated: ISO timestamp of last recorded call
+    """
+    try:
+        from packages.router.tracker import UsageTracker
+        tracker = UsageTracker()
+        rows = tracker.get_latest_limits()
+        return {
+            "providers": [
+                {
+                    "name": row["provider"],
+                    "rpm_remaining": row["live_rpm_remaining"],
+                    "tpm_remaining": row["live_tpm_remaining"],
+                    "last_updated": row["timestamp"]
+                }
+                for row in rows
+            ]
+        }
+    except Exception as e:
+        return {"providers": [], "error": str(e)}
