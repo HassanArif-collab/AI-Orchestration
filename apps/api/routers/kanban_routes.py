@@ -201,10 +201,25 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
     Returns:
         HTML string for display in the Kanban drawer
     """
+    import html as html_module
+    
     if not data:
         return ""
     
     if isinstance(data, str):
+        # Special handling for visual plain text output (Option A)
+        if artifact_type == "visual":
+            # Highlight category labels in visual annotations
+            content = html_module.escape(data[:2000])
+            labels = ["[B-ROLL]", "[MAP]", "[DATA]", "[ARCHIVAL]", "[GRAPHIC]", "[TRANSITION]", "[SOUND]"]
+            for label in labels:
+                content = content.replace(
+                    html_module.escape(label),
+                    f'<span style="color:#1D9E75;font-weight:600;">{html_module.escape(label)}</span>'
+                )
+            # Preserve line breaks and format nicely
+            content = content.replace('\n', '<br>')
+            return f'<pre style="margin:0;font-size:12px;white-space:pre-wrap;font-family:inherit;">{content}</pre>'
         return data[:500] if len(data) > 500 else data
     
     if not isinstance(data, dict):
