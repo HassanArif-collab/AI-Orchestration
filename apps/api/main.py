@@ -88,6 +88,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Cleanup task startup failed (non-fatal): {e}")
     
+    # Initialize the chat agent (Phase 6)
+    try:
+        from apps.api.routers.chat_routes import init_chat_agent
+        await init_chat_agent()
+    except Exception as e:
+        print(f"Warning: Chat agent startup failed (non-fatal): {e}")
+    
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
