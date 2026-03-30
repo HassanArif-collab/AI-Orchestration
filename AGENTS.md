@@ -36,7 +36,7 @@ make freerouter-web    # Dashboard on :8080   ← optional, manages provider key
 | `packages/memory/` | Zep Cloud agent memory (conversation + long-term facts) |
 | `packages/pipeline/` | 9-stage state machine runner, persists state in `packages/data/pipeline.db` |
 | `packages/agents/` | Base `AgentClass` + `AgentRegistry`. Skill prompts in `data/skills/*.md` |
-| `packages/integrations/` | YouTube Data API, Notion, MiroFish clients |
+| `packages/integrations/` | YouTube Data API, Notion clients |
 | `packages/visual/` | Remotion video animations + Radiant shader backgrounds |
 
 ### Layer 2 — Business logic (`packages/content_factory/`)
@@ -142,7 +142,6 @@ User runs:  `python apps/worker/main.py start`
 ### Stage 1: TREND_ANALYSIS
   - `TopicFinderAgent.generate_candidate()` [Mode B candidates]
   - `TopicFinderAgent.discover_adaptation_candidates()` [Mode A candidates]
-  - MiroFish signals (optional, non-blocking)
   - Zep audience context (if `ZEP_ENABLED=true`)
 
 ### Stage 2: RESEARCH (human approves topic)
