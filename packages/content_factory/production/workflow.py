@@ -149,7 +149,7 @@ async def run_production_workflow(
                 fixed = await rc.complete_text(
                     prompt=f"Extract the JSON object from this text:\n\n{result_text}",
                     system="You return ONLY valid JSON. No markdown blocks.",
-                    model="auto"
+                    model="groq/llama-3.3-70b-versatile"  # Fast model for JSON extraction
                 )
                 json_match = re.search(r'\{.*\}', fixed, re.DOTALL)
                 if not json_match:

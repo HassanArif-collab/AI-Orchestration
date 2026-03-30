@@ -125,7 +125,7 @@ class ChallengerGenerator:
                 response_text = await client.complete_text(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
-                    model="auto"
+                    model="groq/llama-3.3-70b-versatile"  # Llama 70b for fast challenger generation
                 )
 
                 json_match = re.search(r'\{.*\}', response_text, re.DOTALL)

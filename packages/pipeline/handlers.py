@@ -301,6 +301,7 @@ Here is the finished script. Add visual directions to each section:
             visual_annotations = await client.complete_text(
                 prompt,
                 system="You are a video director. Output ONLY visual notes in plain text. NO JSON.",
+                model="ollama/llama3.2"  # Local Ollama for simple visual text categorization
             )
 
         # Report thought to Kanban if card_id provided
