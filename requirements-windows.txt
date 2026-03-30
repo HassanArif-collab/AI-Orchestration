@@ -10,21 +10,27 @@
 # 2. pip install -e ".[all]"
 
 # ============================================================
+# Web Framework (FastAPI + ASGI server)
+# ============================================================
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# ============================================================
 # Core Infrastructure
 # ============================================================
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-structlog>=23.0.0
-httpx>=0.24.0
-python-dotenv>=1.0.0
-nest-asyncio>=1.5.0
+pydantic>=2.11.0,<3.0.0
+pydantic-settings>=2.10.0
+structlog>=25.0.0
+httpx>=0.28.0,<0.29.0
+python-dotenv>=1.1.0
+nest-asyncio>=1.6.0
 pyyaml>=6.0
 
 # ============================================================
 # LLM Integration
 # ============================================================
-instructor>=1.0.0
-openai>=1.0.0
+instructor>=1.3.3
+openai>=1.83.0
 
 # ============================================================
 # Database
@@ -61,7 +67,8 @@ psycopg-pool>=3.2.0
 # ============================================================
 # CrewAI (Multi-Agent Framework)
 # ============================================================
-crewai>=0.86.0
+# CrewAI 1.x has a significantly changed API vs 0.x — do NOT downgrade below 1.0.0
+crewai>=1.0.0
 crewai-tools>=0.14.0
 
 # CrewAI dependencies
