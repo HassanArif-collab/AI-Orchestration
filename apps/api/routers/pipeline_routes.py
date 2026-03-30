@@ -477,3 +477,189 @@ async def recover_all_failed_runs(bg: BackgroundTasks):
         }
     except Exception as e:
         raise HTTPException(500, f"Failed to recover runs: {e}")
+
+
+# ─── LangGraph Pipeline Endpoints (Phase 4) ────────────────────────────────────
+
+# Module-level graph holders (initialized at startup)
+_discovery_graph = None
+_production_graph = None
+
+
+async def _init_graphs():
+    """Initialize LangGraph graphs at startup."""
+    global _discovery_graph, _production_graph
+    try:
+        from packages.content_factory.orchestration import (
+            get_discovery_graph,
+            get_production_graph,
+        )
+        _discovery_graph = await get_discovery_graph()
+        _production_graph = await get_production_graph()
+    except Exception as e:
+        # Graphs will be None if Supabase is not configured
+        import logging
+        logging.getLogger(__name__).warning(f"langgraph_init_failed: {e}")
+
+
+@router.post("/discover")
+async def discover_topics(
+    background_tasks: BackgroundTasks,
+    seed_hint: str = None,
+):
+    """
+    Kick off the LangGraph discovery graph asynchronously.
+    Returns immediately — progress streams via Supabase WebSocket.
+    
+    This is the NEW Phase 4 endpoint using LangGraph state machine.
+    """
+    global _discovery_graph
+    
+    if _discovery_graph is None:
+        await _init_graphs()
+    
+    if _discovery_graph is None:
+        raise HTTPException(503, "LangGraph not initialized (check Supabase DB connection)")
+    
+    card_id = str(uuid.uuid4())
+    
+    initial_state = {
+        "card_id": card_id,
+        "seed_hint": seed_hint,
+        "zep_context": "",
+        "search_results": [],
+        "generated_topics": [],
+        "graded_topics": [],
+        "pipeline_status": "discovering",
+        "error": None,
+    }
+    
+    config = {"configurable": {"thread_id": card_id}}
+    
+    # Run in background so API responds instantly
+    background_tasks.add_task(
+        _discovery_graph.ainvoke, initial_state, config
+    )
+    
+    return {"status": "started", "card_id": card_id}
+
+
+@router.post("/produce/{card_id}")
+async def produce_content(
+    card_id: str,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Start the LangGraph production pipeline for an approved topic card.
+    
+    The card must exist in kanban_cards with a topic_brief.
+    Returns immediately — progress streams via Supabase WebSocket.
+    The graph will pause at human_review and wait for /langgraph/resume.
+    """
+    global _production_graph
+    
+    if _production_graph is None:
+        await _init_graphs()
+    
+    if _production_graph is None:
+        raise HTTPException(503, "LangGraph not initialized (check Supabase DB connection)")
+    
+    try:
+        from packages.core.supabase_client import get_supabase
+        sb = get_supabase()
+        result = sb.table("kanban_cards").select("*").eq("id", card_id).execute()
+        
+        if not result.data:
+            raise HTTPException(404, f"Card {card_id} not found")
+        
+        card = result.data[0]
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch card: {e}")
+    
+    initial_state = {
+        "card_id": card_id,
+        "topic_brief": card.get("topic_brief", {"title": card.get("title", "Unknown")}),
+        "research_dossier": "",
+        "research_sources": [],
+        "zep_learnings": "",
+        "current_draft": "",
+        "best_draft": "",
+        "best_score": 0,
+        "evaluation_score": 0,
+        "evaluation_feedback": "",
+        "iteration_count": 0,
+        "visual_plan": "",
+        "human_feedback": None,
+        "approved": False,
+        "pipeline_status": "starting",
+        "error": None,
+    }
+    
+    config = {"configurable": {"thread_id": card_id}}
+    
+    background_tasks.add_task(
+        _production_graph.ainvoke, initial_state, config
+    )
+    
+    return {"status": "started", "card_id": card_id}
+
+
+@router.post("/langgraph/resume/{card_id}")
+async def resume_langgraph_pipeline(
+    card_id: str,
+    decision: dict,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Resume the LangGraph production pipeline after human review.
+    
+    decision format:
+      {"approved": true}                          → publishes to Notion
+      {"approved": false, "feedback": "..."}      → sends back to drafting
+    """
+    global _production_graph
+    
+    if _production_graph is None:
+        await _init_graphs()
+    
+    if _production_graph is None:
+        raise HTTPException(503, "LangGraph not initialized (check Supabase DB connection)")
+    
+    from langgraph.types import Command
+    
+    config = {"configurable": {"thread_id": card_id}}
+    
+    background_tasks.add_task(
+        _production_graph.ainvoke,
+        Command(resume=decision),
+        config,
+    )
+    
+    return {"status": "resumed", "card_id": card_id, "decision": decision}
+
+
+@router.get("/langgraph/state/{card_id}")
+async def get_langgraph_state(card_id: str):
+    """
+    Fetch the current checkpointed state of a LangGraph pipeline run.
+    Useful for the frontend to display current score, iteration count, etc.
+    """
+    global _production_graph
+    
+    if _production_graph is None:
+        await _init_graphs()
+    
+    if _production_graph is None:
+        raise HTTPException(503, "LangGraph not initialized")
+    
+    config = {"configurable": {"thread_id": card_id}}
+    
+    try:
+        state = await _production_graph.aget_state(config)
+        return {
+            "card_id": card_id,
+            "values": state.values,
+            "next": list(state.next) if state.next else [],
+        }
+    except Exception as e:
+        raise HTTPException(404, f"No pipeline state found for {card_id}: {e}")
