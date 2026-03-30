@@ -37,9 +37,20 @@ def _init_components():
 
 @pytest.fixture(autouse=True)
 def clean_pipeline_db(tmp_path, monkeypatch):
-    """Redirect OrchestrationDB to a fresh temp DB for every test — prevents state bleed."""
+    """Mock Supabase for all orchestration tests -- prevents real DB calls."""
     import packages.content_factory.orchestration.db as orch_db
-    monkeypatch.setattr(orch_db, "DB_PATH", tmp_path / "pipeline.db")
+    from unittest.mock import MagicMock
+    # Patch get_supabase at module level so OrchestrationDB methods use the mock
+    _mock_sb = MagicMock()
+    _r = MagicMock()
+    _r.data = []
+    _t = MagicMock()
+    for method in ['select', 'insert', 'update', 'upsert', 'delete',
+                   'eq', 'neq', 'or_', 'order', 'limit', 'maybe_single', 'single']:
+        getattr(_t, method).return_value = _t
+    _t.execute.return_value = _r
+    _mock_sb.table.return_value = _t
+    monkeypatch.setattr("packages.core.supabase_client.get_supabase", lambda: _mock_sb)
 
 def _check_production_cycle(master: MasterOrchestrator, monitor: HealthMonitor):
     print("\n[TEST 2] Testing End-To-End Production Triggers & Sync...")

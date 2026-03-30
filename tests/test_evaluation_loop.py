@@ -84,9 +84,22 @@ async def test_challenger_generator_strict_validation(mock_script):
 @pytest.mark.asyncio
 async def test_loop_linear_threshold_logic(mock_script):
     # Mock dependencies
+    def _mock_supabase():
+        m = MagicMock()
+        r = MagicMock()
+        r.data = []
+        t = MagicMock()
+        for method in ['select', 'insert', 'update', 'upsert', 'delete',
+                       'eq', 'neq', 'or_', 'order', 'limit', 'maybe_single', 'single']:
+            getattr(t, method).return_value = t
+        t.execute.return_value = r
+        m.table.return_value = t
+        return m
+
     with patch("packages.content_factory.evaluation.mutation._load_json", return_value=MOCK_EVAL_SUITE), \
          patch("packages.content_factory.evaluation.loop.ScoringEngine") as MockScoring, \
-         patch("packages.content_factory.evaluation.loop.BaselineManager") as MockBaseline:
+         patch("packages.content_factory.evaluation.loop.BaselineManager") as MockBaseline, \
+         patch("packages.core.supabase_client.get_supabase", return_value=_mock_supabase()):
         
         loop = ExperimentLoop(enable_persistence=False)
         

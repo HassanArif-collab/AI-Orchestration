@@ -79,7 +79,7 @@ class TopicReservoirDB:
             timing_rationale=row["timing_rationale"],
             created_at=datetime.fromisoformat(row["created_at"]),
             status=row.get("status", "reservoir"),
-            content_type=row.get("content_type", "original"),
+            content_type=row.get("content_type") or "original",
             adaptation_source_video_id=row.get("adaptation_source_video_id"),
             structural_reference_video_id=row.get("structural_reference_video_id"),
         )
