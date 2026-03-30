@@ -1,13 +1,10 @@
 """Pipeline state management and persistence.
 
-Handles PipelineRun state and SQLite persistence.
+Handles PipelineRun state and Supabase persistence.
 """
 
-import json
-import sqlite3
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from packages.pipeline.stages import Stage, STAGE_DEPENDENCIES
@@ -21,24 +18,24 @@ class PipelineRun:
     mutable state object that PipelineRunner works with.
 
     LIFECYCLE:
-      PipelineRun.new() → created with all stages "pending"
-      runner.execute_stage() → stage moves pending → running → complete/error
-      runner.run_until_gate() → runs until HUMAN_TOPIC_APPROVAL or HUMAN_REVIEW
-      runner.approve_gate() → human approves, status returns to "running"
-      run.status == "complete" → all stages done
+      PipelineRun.new() -> created with all stages "pending"
+      runner.execute_stage() -> stage moves pending -> running -> complete/error
+      runner.run_until_gate() -> runs until HUMAN_TOPIC_APPROVAL or HUMAN_REVIEW
+      runner.approve_gate() -> human approves, status returns to "running"
+      run.status == "complete" -> all stages done
 
     PERSISTENCE:
-      Saved to packages/data/pipeline.db (pipeline_runs table) after every
+      Saved to Supabase pipeline_runs table after every
       stage transition. If the process crashes, state is recovered on restart.
 
     RUN ID vs CYCLE ID:
-      run_id: UUID from PipelineRunner — the pipeline execution identifier
-      cycle_id: UUID from MasterOrchestrator — the production cycle identifier
+      run_id: UUID from PipelineRunner -- the pipeline execution identifier
+      cycle_id: UUID from MasterOrchestrator -- the production cycle identifier
       They are linked in OrchestrationDB.production_registry.pipeline_run_id
 
     STAGE OUTPUTS:
-      stage_outputs: dict mapping Stage.value → handler return value
-      Access via: run.get_output(Stage.RESEARCH) → AdaptedScript dict
+      stage_outputs: dict mapping Stage.value -> handler return value
+      Access via: run.get_output(Stage.RESEARCH) -> AdaptedScript dict
       Set via:    run.set_output(Stage.RESEARCH, script_data)
     """
 
@@ -219,87 +216,53 @@ def _serialize_datetimes(obj: Any) -> Any:
 
 
 class RunStore:
-    """SQLite persistence for PipelineRun objects.
+    """Supabase persistence for PipelineRun objects.
 
-    Stores runs at packages/data/pipeline.db (separate from FreeRouter DB).
-    
+    Stores runs in the pipeline_runs table.
+
     TABLE SCHEMA:
       pipeline_runs
-        run_id (PK)     — UUID
-        state_json      — Full PipelineRun JSON
-        created_at      — ISO timestamp
-        updated_at      — ISO timestamp
-    
+        run_id (PK)         -- UUID
+        current_stage       -- TEXT
+        stage_outputs       -- JSONB
+        stage_status        -- JSONB
+        status              -- TEXT
+        error_message       -- TEXT
+        created_at          -- TIMESTAMPTZ
+        updated_at          -- TIMESTAMPTZ
+
     CRASH RECOVERY:
       After any crash, PipelineRunner.load_run(run_id) can recover
       the exact state and resume from the last completed stage.
     """
 
-    def __init__(self, db_path: str = "packages/data/pipeline.db"):
-        """Initialize the run store.
+    def __init__(self):
+        pass  # Supabase tables are pre-created via migration SQL
 
-        Args:
-            db_path: Path to SQLite database file
-        """
-        self.db_path = db_path
-        # Create directory if it doesn't exist
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _init_db(self) -> None:
-        """Initialize database schema."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS pipeline_runs (
-                    run_id TEXT PRIMARY KEY,
-                    state_json TEXT NOT NULL,
-                    current_stage TEXT,
-                    status TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            # Migration: Add columns if they don't exist
-            try:
-                conn.execute("ALTER TABLE pipeline_runs ADD COLUMN current_stage TEXT")
-            except sqlite3.OperationalError:
-                pass  # Already exists
-            try:
-                conn.execute("ALTER TABLE pipeline_runs ADD COLUMN status TEXT")
-            except sqlite3.OperationalError:
-                pass  # Already exists
-            conn.commit()
+    def _db(self):
+        from packages.core.supabase_client import get_supabase
+        return get_supabase().table("pipeline_runs")
 
     def save(self, run: PipelineRun) -> None:
-        """Save a pipeline run to the database.
-
-        Uses INSERT OR REPLACE to handle both new and existing runs.
+        """Save a pipeline run to Supabase (upsert on run_id).
 
         Args:
             run: The pipeline run to save
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO pipeline_runs
-                (run_id, state_json, current_stage, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run.run_id,
-                    json.dumps(run.to_dict()),
-                    run.current_stage.value if hasattr(run.current_stage, "value") else str(run.current_stage),
-                    run.status,
-                    run.created_at.isoformat(),
-                    run.updated_at.isoformat(),
-                ),
-            )
-            conn.commit()
+        data = {
+            "run_id": run.run_id,
+            "current_stage": run.current_stage.value if hasattr(run.current_stage, "value") else str(run.current_stage),
+            "stage_outputs": run.to_dict()["stage_outputs"],
+            "stage_status": run.stage_status,
+            "status": run.status,
+            "error_message": run.error_message,
+            "created_at": run.created_at.isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        self._db().upsert(data, on_conflict="run_id").execute()
 
     def load(self, run_id: str) -> PipelineRun | None:
-        """Load a pipeline run from the database.
+        """Load a pipeline run from Supabase.
 
         Args:
             run_id: The run ID to load
@@ -307,17 +270,20 @@ class RunStore:
         Returns:
             PipelineRun instance or None if not found
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                "SELECT state_json FROM pipeline_runs WHERE run_id = ?",
-                (run_id,),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            data = json.loads(row["state_json"])
-            return PipelineRun.from_dict(data)
+        result = self._db().select("*").eq("run_id", run_id).maybe_single().execute()
+        if not result.data:
+            return None
+        row = result.data
+        return PipelineRun(
+            run_id=row["run_id"],
+            current_stage=Stage(row["current_stage"]),
+            stage_outputs=row["stage_outputs"] or {},
+            stage_status=row["stage_status"] or {},
+            status=row["status"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            error_message=row.get("error_message", ""),
+        )
 
     def list_runs(self, limit: int = 20) -> list[dict]:
         """List recent pipeline runs.
@@ -328,18 +294,14 @@ class RunStore:
         Returns:
             List of run summaries (run_id, current_stage, status, updated_at)
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                """
-                SELECT run_id, current_stage, status, updated_at
-                FROM pipeline_runs
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            return [dict(row) for row in cursor.fetchall()]
+        result = (
+            self._db()
+            .select("run_id, current_stage, status, updated_at")
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
 
     def delete(self, run_id: str) -> None:
         """Delete a pipeline run.
@@ -347,6 +309,4 @@ class RunStore:
         Args:
             run_id: The run ID to delete
         """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM pipeline_runs WHERE run_id = ?", (run_id,))
-            conn.commit()
+        self._db().delete().eq("run_id", run_id).execute()
