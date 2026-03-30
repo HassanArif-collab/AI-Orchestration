@@ -533,6 +533,69 @@ DO NOT write narrative. DO NOT write script prose. Facts only."""
         except Exception as e:
             logger.warning(f"research_cache_save_failed: {e}")
 
+    async def _get_past_learnings(
+        self,
+        topic_statement: str,
+        genre_id: str | None = None,
+    ) -> str:
+        """Retrieve relevant past learnings from Zep memory.
+
+        Queries the learning_synthesis user's memory for facts relevant
+        to the current topic. Returns a formatted string ready for prompt injection.
+
+        Args:
+            topic_statement: The topic being written about
+            genre_id: Optional genre for more targeted queries
+
+        Returns:
+            Formatted string with past learnings, or empty string if unavailable
+        """
+        settings = get_settings()
+
+        if not settings.ZEP_API_KEY or not settings.ZEP_ENABLED:
+            return ""
+
+        try:
+            from packages.memory.client import AsyncZepMemoryClient
+
+            zep = AsyncZepMemoryClient()
+            session_id = f"{settings.ZEP_LEARNING_USER_ID}_session"
+
+            # Search for learnings relevant to this topic
+            queries = [
+                f"What script improvements work for topics about {topic_statement[:50]}?",
+                "What structural patterns consistently improve script scores?",
+                "What mutations have worked best for opening hooks and bridge sections?",
+            ]
+
+            all_facts = []
+            for query in queries:
+                results = await zep.search_memory(
+                    session_id=session_id,
+                    query=query,
+                    limit=3,
+                )
+                for r in results:
+                    fact = r.get("fact", r.get("content", ""))
+                    if fact and fact not in all_facts:
+                        all_facts.append(fact)
+
+            if not all_facts:
+                logger.debug("no_past_learnings_found_in_zep")
+                return ""
+
+            # Format into a prompt-injectable block
+            learning_block = "LESSONS FROM PAST SCRIPTS (these are proven improvements — apply them):\n"
+            for i, fact in enumerate(all_facts[:8], 1):  # Cap at 8 to save tokens
+                learning_block += f"  {i}. {fact}\n"
+
+            logger.info(f"past_learnings_retrieved: {len(all_facts)} facts from Zep")
+            return learning_block
+
+        except Exception as e:
+            logger.warning(f"past_learnings_retrieval_failed: {e}")
+            return ""
+
     async def _round_anchor_check(self, research, idea, references, router):
         """Round 1B: Ensure at least 2 Level 1-3 anchors exist."""
         anchor_check_prompt = f"""Review this research for visual anchors:
@@ -555,9 +618,14 @@ Otherwise return the research unchanged."""
 
     async def _round_script_opening(self, research, idea, router):
         """Round 2: Generate and self-check the HOOK + ANCHOR sections only."""
+        # Retrieve cross-script learnings from Zep memory
+        past_learnings = await self._get_past_learnings(idea.topic, idea.genre_id)
+
+        learning_section = f"\n{past_learnings}\n" if past_learnings else ""
+
         prompt = f"""Write ONLY the opening two sections (HOOK and ANCHOR) of a Johnny harris
 style script about: {idea.topic}
-
+{learning_section}
 Research:
 {research[:3000]}
 
@@ -583,11 +651,15 @@ If any rule fails, rewrite the opening fixing only what failed. Return same JSON
         """Round 3: Full script with up to 2 rewrites targeting 32/40 questions."""
         import json
 
+        # Retrieve cross-script learnings from Zep memory
+        past_learnings = await self._get_past_learnings(idea.topic, idea.genre_id)
+        learning_section = f"\n{past_learnings}\n" if past_learnings else ""
+
         prompt = f"""Write a complete Johnny harris-style dual-column script.
 Topic: {idea.topic}
 Genre: {idea.genre_id}
 Big Question: {getattr(idea, 'big_question', '')}
-
+{learning_section}
 Research:
 {research[:4000]}
 
