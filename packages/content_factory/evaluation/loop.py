@@ -269,9 +269,7 @@ class ExperimentLoop:
             challenger_score = challenger.production_readiness_score
 
             is_new_best = self.baseline.process_challenger(challenger)
-            if is_new_best and challenger_score > baseline_score:
-                current_best = challenger
-
+            
             # Compute specific fixed/regressed questions for logging
             baseline_fails = {
                 c.question_id for c in current_best.self_check_results if not c.passed
@@ -282,6 +280,19 @@ class ExperimentLoop:
 
             fixed = list(baseline_fails - challenger_fails)
             regressed = list(challenger_fails - baseline_fails)
+            
+            if is_new_best and challenger_score > baseline_score:
+                current_best = challenger
+                
+                # Extract and persist the learning from this winning mutation
+                await self._save_winning_learning(
+                    mutation_zone=mutation_zone,
+                    score_before=baseline_score,
+                    score_after=challenger_score,
+                    fixed_questions=fixed,
+                    genre_id=current_best.genre,
+                    cycle_id=cycle_id,
+                )
 
             # 5. Log Learning Event
             log_entry = LearningLogEntry(
@@ -523,3 +534,84 @@ class ExperimentLoop:
             logger.info(f"cleanup_old_snapshots: removed={removed}")
 
         return removed
+
+    async def _save_winning_learning(
+        self,
+        mutation_zone: str,
+        score_before: float,
+        score_after: float,
+        fixed_questions: list[str],
+        genre_id: str,
+        cycle_id: str,
+    ) -> None:
+        """Extract a reusable learning from a winning mutation and store in Zep.
+
+        This is the core of cross-script intelligence: we take the specific
+        structural change that improved a score and encode it as a permanent
+        fact in Zep memory. Future ScriptWriter runs will retrieve these
+        facts and incorporate them into their drafts.
+
+        Args:
+            mutation_zone: Which script zone was mutated (e.g., "script_prose")
+            score_before: Score before the mutation
+            score_after: Score after the mutation
+            fixed_questions: List of question IDs that were fixed by this mutation
+            genre_id: Genre of the script
+            cycle_id: Experiment cycle ID for reference
+        """
+        from packages.core.thoughts import report_thought
+
+        settings = get_settings()
+        improvement = score_after - score_before
+
+        # Get a human-readable description of what this zone targets
+        zone_descriptions = {
+            "script_prose": "prose quality (active voice, jargon removal)",
+            "visual_direction": "visual anchors and direction clarity",
+            "structural_architecture": "anchor-bridge structure and flow",
+        }
+        zone_description = zone_descriptions.get(mutation_zone, mutation_zone)
+
+        # Construct a human-readable learning fact
+        fact_text = (
+            f"PROVEN SCRIPT IMPROVEMENT (+{improvement:.1f}%): "
+            f"In zone '{mutation_zone}' ({zone_description}), "
+            f"mutation improved score from {score_before:.1f}% to {score_after:.1f}%. "
+        )
+
+        if fixed_questions:
+            fact_text += f"Fixed questions: {', '.join(fixed_questions[:5])}. "
+
+        fact_text += (
+            f"Context: genre={genre_id}, cycle={cycle_id}. "
+            f"Apply similar structural changes to future scripts in the same zone."
+        )
+
+        # Write to Zep learning memory
+        try:
+            from packages.memory.client import AsyncZepMemoryClient
+
+            zep = AsyncZepMemoryClient()
+            session_id = f"{settings.ZEP_LEARNING_USER_ID}_session"
+
+            # Use add_facts for structured learning data
+            await zep.add_facts(
+                session_id=session_id,
+                facts=[{
+                    "fact": fact_text,
+                    "log_type": "Winning Mutation",
+                    "zone_mutated": mutation_zone,
+                    "score_improvement": improvement,
+                    "genre": genre_id,
+                    "production_cycle_id": cycle_id,
+                }]
+            )
+
+            logger.info(
+                f"learning_saved_to_zep: zone={mutation_zone}, "
+                f"improvement=+{improvement:.1f}%, genre={genre_id}"
+            )
+
+        except Exception as e:
+            # Never crash the evolution loop because Zep is down
+            logger.warning(f"learning_save_to_zep_failed: {e}")
