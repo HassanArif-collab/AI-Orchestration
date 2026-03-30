@@ -242,31 +242,84 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     return refined.model_dump()
 
 
-async def handle_visual_planning(run: PipelineRun, context: dict = None) -> dict:
-    """Generates music architecture from the refined script.
+async def handle_visual_planning(run: PipelineRun, context: dict = None) -> str:
+    """Generates visual annotations for a human video editor.
+
+    Uses the visual_planner skill prompt to produce plain-text visual notes.
+    Output is meant for direct display to a video editor — no JSON parsing needed.
 
     Args:
         run: Current pipeline run
-        context: Additional context
+        context: Additional context (supports 'card_id' for thought reporting)
 
     Returns:
-        Music architecture data as dict
+        Plain text visual annotations (NOT JSON)
     """
-    from packages.content_factory.music.agent import MusicAgent
+    from packages.router.client import RouterClient
     from packages.content_factory.models import AdaptedScript
+    from packages.core.thoughts import report_thought
 
     script_data = run.get_output(Stage.SCRIPT_WRITING)
     if not script_data or "error" in (script_data or {}):
-        return {"status": "stub_no_script"}
+        return "Visual planning skipped: no script available."
 
+    # Build script text for visual annotation
     try:
         script = AdaptedScript(**script_data)
-        agent = MusicAgent()
-        doc = agent.generate_music_architecture(script.video_id, script)
-        return doc.model_dump()
+    except Exception as e:
+        logger.warning(f"visual_planning_script_parse_failed: {e}")
+        script_text = str(script_data)[:2000]
+    else:
+        # Format script entries for the visual planner
+        lines = []
+        for entry in script.entries:
+            lines.append(f"> \"{entry.prose}\"\n")
+        script_text = "\n".join(lines)
+
+    # Load the skill prompt
+    skill_path = Path(__file__).parent.parent.parent / "data" / "skills" / "visual_planner.md"
+    if skill_path.exists():
+        skill_prompt = skill_path.read_text()
+    else:
+        # Fallback inline prompt
+        skill_prompt = """You are a documentary video director speaking to a human video editor.
+Read the script and add visual suggestions in plain text.
+Use labels: [B-ROLL], [MAP], [DATA], [ARCHIVAL], [GRAPHIC], [TRANSITION], [SOUND].
+Keep notes short — one sentence each. NO JSON."""
+
+    prompt = f"""{skill_prompt}
+
+---
+
+Here is the finished script. Add visual directions to each section:
+
+{script_text}
+"""
+
+    try:
+        async with RouterClient() as client:
+            visual_annotations = await client.complete_text(
+                prompt,
+                system="You are a video director. Output ONLY visual notes in plain text. NO JSON.",
+            )
+
+        # Report thought to Kanban if card_id provided
+        card_id = (context or {}).get("card_id")
+        if card_id:
+            line_count = visual_annotations.count('\n')
+            report_thought(
+                card_id=card_id,
+                agent_name="visual_annotator",
+                thought_type="output",
+                content=f"🎬 Visual annotations complete ({line_count} lines of direction for the editor).",
+            )
+
+        logger.info(f"visual_planning_complete: {len(visual_annotations)} chars")
+        return visual_annotations.strip()
+
     except Exception as e:
         logger.error(f"visual_planning_failed: {e}")
-        return {"status": "error", "error": str(e)}
+        return f"Visual planning error: {str(e)}"
 
 
 async def handle_seo(run: PipelineRun, context: dict = None) -> dict:
@@ -318,6 +371,10 @@ Return ONLY valid JSON."""
 async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
     """Registers render jobs with the VisualManifest.
 
+    NOTE: After Option A refactoring, visual_planning outputs plain text for human
+    editors. This handler now skips automated render job registration. The visual
+    annotations are displayed in the Kanban drawer for manual review.
+
     Args:
         run: Current pipeline run
         context: Additional context
@@ -332,27 +389,40 @@ async def handle_asset_creation(run: PipelineRun, context: dict = None) -> dict:
         logger.info("asset_creation_skipped_feature_disabled")
         return {"status": "skipped", "assets": [], "reason": "feature_disabled"}
 
-    from packages.visual.manifest import VisualManifest
-
     visual_data = run.get_output(Stage.VISUAL_PLANNING) or {}
 
-    try:
-        manifest = VisualManifest(run_id=run.run_id)
+    # After Option A refactoring: visual_data is plain text (str), not dict
+    # Automated render job registration is no longer supported
+    # Visual annotations are now for human editors only
+    if isinstance(visual_data, str):
+        logger.info("asset_creation_skipped_visual_is_plain_text")
+        return {
+            "status": "skipped",
+            "reason": "visual_output_is_plain_text_for_human_editors",
+            "visual_length": len(visual_data),
+        }
 
-        section_briefs = visual_data.get("section_briefs", [])
-        for brief in section_briefs:
-            if brief.get("tool") in ("remotion", "animation"):
-                manifest.add_pending(
-                    asset_id=f"{run.run_id}_{brief.get('section_index', 0)}",
-                    description=str(brief.get("sonic_palette", "render job")),
-                )
+    # Legacy dict format handling (for backwards compatibility if needed)
+    if isinstance(visual_data, dict):
+        try:
+            from packages.visual.manifest import VisualManifest
+            manifest = VisualManifest(run_id=run.run_id)
 
-        summary = manifest.summary()
-        logger.info(f"asset_creation_registered: {summary}")
-        return {"manifest_summary": summary, "status": "registered"}
-    except Exception as e:
-        logger.warning(f"visual_manifest_not_available: {e}")
-        return {"status": "stub", "assets": []}
+            section_briefs = visual_data.get("section_briefs", [])
+            for brief in section_briefs:
+                if brief.get("tool") in ("remotion", "animation"):
+                    manifest.add_pending(
+                        asset_id=f"{run.run_id}_{brief.get('section_index', 0)}",
+                        description=str(brief.get("sonic_palette", "render job")),
+                    )
+
+            summary = manifest.summary()
+            logger.info(f"asset_creation_registered: {summary}")
+            return {"manifest_summary": summary, "status": "registered"}
+        except Exception as e:
+            logger.warning(f"visual_manifest_not_available: {e}")
+
+    return {"status": "stub", "assets": []}
 
 
 async def handle_publish(run: PipelineRun, context: dict = None) -> dict:
