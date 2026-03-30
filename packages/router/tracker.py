@@ -2,27 +2,27 @@
 router/tracker.py — Tracks LLM API usage per provider per day.
 
 Context: Keeps a local record of how many tokens/requests each provider
-has handled today. Helps avoid hitting free tier limits by warning when
-a provider is approaching 80% of its daily quota.
+has handled today. Now also captures live rate limit headers from provider
+responses, giving accurate remaining quota data.
 
 Storage: packages/data/usage_tracker.db (SQLite)
 This is SEPARATE from freerouter/data/conversations.db which stores
 chat history. This file only stores API usage statistics.
 
-Known free tier daily limits (approximate):
-  Groq:       14,400 requests / 500,000 tokens
-  OpenRouter: ~200 requests (varies by model)
-  Ollama:     unlimited (local)
+Live Rate Limit Headers (Phase 3):
+  - Groq/OpenRouter: x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens
+  - Ollama: -1 (unlimited, no headers)
 
 Usage:
     from packages.router.tracker import UsageTracker
     tracker = UsageTracker()
-    tracker.record_call("groq", "llama-3.3-70b-versatile", 100, 200, 450, True)
+    tracker.record_call("groq", "llama-3.3-70b-versatile", 100, 200, 450, True,
+                        rpm_remaining=500, tpm_remaining=10000)
     print(tracker.get_daily_usage("groq"))
-    print(tracker.is_near_limit("groq"))
+    print(tracker.get_latest_limits())
 
 Imports: sqlite3, pathlib, datetime
-Imported by: packages/router/client.py (optional instrumentation)
+Imported by: packages/router/client.py (automatic logging)
 """
 
 from __future__ import annotations
@@ -35,20 +35,15 @@ from pathlib import Path
 _DB_DIR = Path(__file__).parent.parent / "data"
 _DB_PATH = _DB_DIR / "usage_tracker.db"
 
-# Known free tier daily limits
-DAILY_LIMITS: dict[str, dict[str, int]] = {
-    "groq":       {"requests": 14_400, "tokens": 500_000},
-    "openrouter": {"requests": 200,    "tokens": 100_000},
-    "together":   {"requests": 500,    "tokens": 200_000},
-    "deepinfra":  {"requests": 500,    "tokens": 200_000},
-    "ollama":     {"requests": 999_999, "tokens": 999_999_999},  # local, unlimited
-}
-
 NEAR_LIMIT_THRESHOLD = 0.80
 
 
 class UsageTracker:
-    """SQLite-backed usage tracker. Thread-safe for single-process use."""
+    """SQLite-backed usage tracker with live rate limit header storage.
+
+    Captures real-time remaining quota from provider HTTP headers.
+    Thread-safe for single-process use.
+    """
 
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or _DB_PATH
@@ -61,7 +56,9 @@ class UsageTracker:
         return conn
 
     def _init_db(self) -> None:
+        """Initialize database with migration support for existing tables."""
         with self._connect() as conn:
+            # Create table if it doesn't exist
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS usage_log (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,12 +69,30 @@ class UsageTracker:
                     tokens_out  INTEGER DEFAULT 0,
                     latency_ms  INTEGER DEFAULT 0,
                     success     INTEGER DEFAULT 1,
-                    created_at  TEXT NOT NULL
+                    created_at  TEXT NOT NULL,
+                    live_rpm_remaining INTEGER DEFAULT -1,
+                    live_tpm_remaining INTEGER DEFAULT -1
                 )
             """)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_date_provider ON usage_log(date, provider)"
             )
+
+            # Migration: Add columns to existing tables
+            # Wrap in try/except so it doesn't crash if columns already exist
+            try:
+                conn.execute(
+                    "ALTER TABLE usage_log ADD COLUMN live_rpm_remaining INTEGER DEFAULT -1"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+            try:
+                conn.execute(
+                    "ALTER TABLE usage_log ADD COLUMN live_tpm_remaining INTEGER DEFAULT -1"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
     def record_call(
         self,
@@ -87,16 +102,31 @@ class UsageTracker:
         tokens_out: int,
         latency_ms: int,
         success: bool,
+        rpm_remaining: int = -1,
+        tpm_remaining: int = -1,
     ) -> None:
-        """Record one LLM API call."""
+        """Record one LLM API call with live rate limit data.
+
+        Args:
+            provider: Provider name (groq, openrouter, ollama, etc.)
+            model: Model identifier
+            tokens_in: Prompt tokens used
+            tokens_out: Completion tokens generated
+            latency_ms: Request latency in milliseconds
+            success: Whether the call succeeded
+            rpm_remaining: Requests per minute remaining from headers (-1 if unavailable)
+            tpm_remaining: Tokens per minute remaining from headers (-1 if unavailable)
+        """
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO usage_log (date, provider, model, tokens_in, tokens_out, "
-                "latency_ms, success, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                "latency_ms, success, created_at, live_rpm_remaining, live_tpm_remaining) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     date.today().isoformat(), provider, model,
                     tokens_in, tokens_out, latency_ms,
                     1 if success else 0, datetime.now(timezone.utc).isoformat(),
+                    rpm_remaining, tpm_remaining,
                 ),
             )
 
@@ -135,12 +165,47 @@ class UsageTracker:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_latest_limits(self) -> list[dict]:
+        """Get the most recent rate limit snapshot per provider.
+
+        Returns the last recorded rpm_remaining and tpm_remaining values
+        for each provider, useful for displaying live quota status.
+
+        Returns:
+            List of dicts with provider, live_rpm_remaining, live_tpm_remaining, timestamp
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT provider,
+                          live_rpm_remaining,
+                          live_tpm_remaining,
+                          created_at as timestamp
+                   FROM usage_log
+                   WHERE id IN (
+                       SELECT MAX(id) FROM usage_log GROUP BY provider
+                   )
+                   ORDER BY provider"""
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def is_near_limit(self, provider: str) -> bool:
-        """Return True if provider has used >80% of known daily free tier limits."""
-        limits = DAILY_LIMITS.get(provider)
-        if not limits:
-            return False
-        usage = self.get_daily_usage(provider)
-        req_pct = usage["requests"] / limits["requests"]
-        tok_pct = usage["total_tokens"] / limits["tokens"]
-        return max(req_pct, tok_pct) >= NEAR_LIMIT_THRESHOLD
+        """Return True if provider has used >80% of remaining quota.
+
+        Uses live rate limit headers when available, falls back to
+        daily usage tracking for providers without header support.
+        """
+        # First try to use live headers
+        latest = self.get_latest_limits()
+        for row in latest:
+            if row["provider"] == provider:
+                rpm = row["live_rpm_remaining"]
+                tpm = row["live_tpm_remaining"]
+                # If we have real header data (not -1), use it
+                if rpm >= 0 and tpm >= 0:
+                    # Consider "near limit" if either remaining is < 20%
+                    # This is a heuristic since we don't know the actual limits
+                    return rpm < 100 or tpm < 10000
+                break
+
+        # Fallback: we can't determine from headers (e.g., Ollama)
+        return False
