@@ -1,56 +1,37 @@
-"""Supabase client singleton for the pipeline backend.
+"""Supabase client singleton for the AI Orchestration pipeline.
 
-This module provides a cached Supabase client that connects using
-the SERVICE_ROLE_KEY (bypasses Row Level Security). This is correct
-for server-side Python code. The React frontend (Phase 5) will use
-SUPABASE_ANON_KEY directly via @supabase/supabase-js.
+Provides a lazy-initialized Supabase client that all store modules
+use to interact with the remote Postgres database.
 
 Usage:
     from packages.core.supabase_client import get_supabase
-    
-    db = get_supabase()
-    result = db.table("kanban_cards").select("*").execute()
-    cards = result.data  # list of dicts
-
-IMPORTANT:
-    - Raises RuntimeError if SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set
-    - The client is cached (singleton) — safe to call get_supabase() many times
-    - All Supabase calls are synchronous HTTP requests under the hood
-    - When calling from async code, the brief blocking is acceptable
-      (same pattern as the SQLite calls being replaced)
+    table = get_supabase().table("kanban_cards")
+    result = table.select("*").execute()
 """
 
-from functools import lru_cache
+from __future__ import annotations
 
-from supabase import create_client, Client
+import os
 
-from packages.core.config import get_settings
-from packages.core.logger import get_logger
-
-logger = get_logger(__name__)
+_supabase_client = None
 
 
-@lru_cache(maxsize=1)
-def get_supabase() -> Client:
-    """Return a cached Supabase client singleton.
+def get_supabase():
+    """Return the singleton Supabase client, initializing on first call."""
+    global _supabase_client
+    if _supabase_client is not None:
+        return _supabase_client
 
-    Uses SERVICE_ROLE_KEY for full backend access (bypasses RLS).
-    Raises RuntimeError if Supabase is not configured.
-    """
-    settings = get_settings()
+    from supabase import create_client
 
-    if not settings.SUPABASE_URL:
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_ANON_KEY", "")
+
+    if not url or not key:
         raise RuntimeError(
-            "SUPABASE_URL is not set. Add it to your .env file. "
-            "See supabase/README.md for setup instructions."
-        )
-    if not settings.SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is not set. Add it to your .env file. "
-            "Get it from: Supabase Dashboard → Settings → API → service_role key. "
-            "NEVER expose this key to the frontend."
+            "SUPABASE_URL and SUPABASE_ANON_KEY environment variables are required. "
+            "Set them in your .env file or environment."
         )
 
-    client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
-    logger.info("supabase_client_initialized", url=settings.SUPABASE_URL)
-    return client
+    _supabase_client = create_client(url, key)
+    return _supabase_client
