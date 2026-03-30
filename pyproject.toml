@@ -13,6 +13,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "nest-asyncio>=1.5.0",
     "pyyaml>=6.0",
+    "supabase>=2.0",
+    "exa-py>=1.0.0",
 ]
 
 [project.optional-dependencies]

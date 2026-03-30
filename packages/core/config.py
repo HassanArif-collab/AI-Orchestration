@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     NOTION_DATABASE_ID: str = ""  # Database ID for script pages
     GITHUB_TOKEN: str = ""
 
+    # ─── Supabase (Postgres DB + Realtime for agent thoughts) ────────────────
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+
+    # ─── Exa.ai (AI-Native Web Search for Topic Discovery) ──────────────────
+    EXA_API_KEY: str = ""
+
     # Internal storage — separate from freerouter/data/conversations.db
     DATA_DIR: str = "packages/data"
 
@@ -233,13 +241,27 @@ class Settings(BaseSettings):
                 return ServiceStatus.NOT_CONFIGURED
             return ServiceStatus.AVAILABLE
 
+        if service == "supabase":
+            if not self.SUPABASE_URL:
+                return ServiceStatus.NOT_CONFIGURED
+            if not self.SUPABASE_URL.startswith("http"):
+                return ServiceStatus.MISCONFIGURED
+            return ServiceStatus.AVAILABLE
+
+        if service == "exa":
+            if not self.EXA_API_KEY:
+                return ServiceStatus.NOT_CONFIGURED
+            if len(self.EXA_API_KEY) < 10:
+                return ServiceStatus.MISCONFIGURED
+            return ServiceStatus.AVAILABLE
+
         raise ValueError(f"Unknown service: {service}")
 
     def get_service_status(self) -> dict[str, str]:
         """Return a dict mapping service names to their status value strings."""
         return {
             service: self.validate_service(service).value
-            for service in ("zep", "youtube", "notion", "freerouter")
+            for service in ("zep", "youtube", "notion", "freerouter", "supabase", "exa")
         }
 
 
