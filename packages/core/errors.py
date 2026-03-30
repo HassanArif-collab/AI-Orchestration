@@ -44,7 +44,7 @@ class PipelineError(Exception):
 
 class IntegrationError(Exception):
     """
-    Failed to call an external API (YouTube, Notion, MiroFish).
+    Failed to call an external API (YouTube, Notion).
     The integration name and endpoint should be in the message.
     """
 

@@ -7,7 +7,7 @@ Layer 1 — Infrastructure (thin wrappers, shared utilities):
   memory/        Zep Cloud agent memory (conversation + long-term)
   pipeline/      9-stage state machine runner
   agents/        Base AgentClass + registry. Skills in data/skills/*.md
-  integrations/  YouTube, Notion, MiroFish API clients
+  integrations/  YouTube, Notion API clients
   visual/        Remotion video animations + Radiant shader backgrounds
 
 Layer 2 — Business logic (actual AI pipeline work):
