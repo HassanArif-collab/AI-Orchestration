@@ -15,6 +15,10 @@ dependencies = [
     "pyyaml>=6.0",
     "supabase>=2.0",
     "exa-py>=1.0.0",
+    # LangGraph state machine (Phase 4)
+    "langgraph>=0.2.0",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.1",
 ]
 
 [project.optional-dependencies]
