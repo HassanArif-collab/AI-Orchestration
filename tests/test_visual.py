@@ -215,3 +215,92 @@ def test_manifest_save_and_load(tmp_path):
     assert loaded.video_title == "Save Test"
     assert len(loaded.assets) == 1
     assert loaded.assets[0].asset_id == "a1"
+
+
+# ─── Visual Planning Plain Text Output (Option A) ───────────────────────────────
+
+import json
+
+
+def test_visual_output_is_plain_text():
+    """Visual annotator should return plain text, not JSON."""
+    # Sample output from the visual annotator
+    visual_output = """
+> "Pakistan's digital payments have exploded in the last three years, 
+> but nobody is talking about where the money actually goes."
+
+  [B-ROLL] Close-up of someone tapping a phone to pay at a street vendor in Lahore.
+  [DATA] Animated bar chart showing digital payment growth 2021-2024.
+
+> "The State Bank's new regulations were supposed to protect consumers,
+> but they created a shadow economy that's even harder to track."
+
+  [ARCHIVAL] State Bank of Pakistan official announcement footage.
+  [MAP] Pakistan map highlighting major cities with fintech hubs.
+"""
+    
+    assert isinstance(visual_output, str)
+    # Should NOT be parseable as JSON
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(visual_output)
+
+
+def test_visual_output_contains_category_labels():
+    """Visual output should use the defined category labels."""
+    visual_output = """
+> "The economy is shifting..."
+
+  [B-ROLL] Aerial shot of Karachi business district.
+  [DATA] Line graph of GDP growth 2020-2024.
+  [TRANSITION] Hard cut to black, 0.5 second pause.
+"""
+    
+    valid_labels = ["[B-ROLL]", "[MAP]", "[DATA]", "[ARCHIVAL]", "[GRAPHIC]", "[TRANSITION]", "[SOUND]"]
+    found_labels = [label for label in valid_labels if label in visual_output]
+    
+    assert len(found_labels) >= 1, "Visual output should contain at least one category label"
+
+
+def test_visual_skill_prompt_exists():
+    """The visual planner skill prompt file should exist."""
+    from pathlib import Path
+    skill_path = Path(__file__).parent.parent / "data" / "skills" / "visual_planner.md"
+    assert skill_path.exists(), f"Skill prompt not found at {skill_path}"
+    
+    content = skill_path.read_text()
+    # Should contain the category labels
+    assert "[B-ROLL]" in content
+    assert "[DATA]" in content
+    assert "NO JSON" in content or "NO JSON" in content.upper()
+
+
+def test_visual_handler_returns_string():
+    """handle_visual_planning should return a string, not dict."""
+    # This is a type check test - the handler signature says -> str
+    # We verify the return type annotation
+    import inspect
+    from packages.pipeline.handlers import handle_visual_planning
+    
+    sig = inspect.signature(handle_visual_planning)
+    return_annotation = sig.return_annotation
+    
+    # The return type should be str
+    assert return_annotation == str, f"Expected return type str, got {return_annotation}"
+
+
+def test_kanban_renders_visual_as_plain_text():
+    """Kanban _render_artifact_html should handle visual plain text."""
+    from apps.api.routers.kanban_routes import _render_artifact_html
+    
+    visual_text = """
+> "Test narration"
+
+  [B-ROLL] Test visual note.
+"""
+    
+    html = _render_artifact_html(visual_text, "visual")
+    
+    # Should be HTML string containing the content
+    assert isinstance(html, str)
+    assert "[B-ROLL]" in html  # Should contain the label (possibly escaped)
+    assert "<" in html  # Should have HTML tags

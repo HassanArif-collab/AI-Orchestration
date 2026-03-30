@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     NOTION_DATABASE_ID: str = ""  # Database ID for script pages
     GITHUB_TOKEN: str = ""
 
+    # ─── Exa.ai (AI-Native Web Search for Topic Discovery) ──────────────────
+    EXA_API_KEY: str = ""
+
     # Internal storage — separate from freerouter/data/conversations.db
     DATA_DIR: str = "packages/data"
 
@@ -88,6 +91,11 @@ class Settings(BaseSettings):
 
     # CORS Settings
     CORS_ORIGINS: str = "http://localhost:3000"
+
+    # Quality thresholds
+    SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
+    SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
+    SCRIPT_MAX_ITERATIONS: int = 20
 
     # ─── P2-04: Field Validators ───────────────────────────────────────────────
 
@@ -211,11 +219,6 @@ class Settings(BaseSettings):
             return []
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
-    # Quality thresholds
-    SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
-    SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
-    SCRIPT_MAX_ITERATIONS: int = 20
-
     # ─── Service Validation ──────────────────────────────────────────────────
 
     def validate_service(self, service: str) -> ServiceStatus:
@@ -255,13 +258,20 @@ class Settings(BaseSettings):
                 return ServiceStatus.MISCONFIGURED
             return ServiceStatus.AVAILABLE
 
+        if service == "exa":
+            if not self.EXA_API_KEY:
+                return ServiceStatus.NOT_CONFIGURED
+            if len(self.EXA_API_KEY) < 10:
+                return ServiceStatus.MISCONFIGURED
+            return ServiceStatus.AVAILABLE
+
         raise ValueError(f"Unknown service: {service}")
 
     def get_service_status(self) -> dict[str, str]:
         """Return a dict mapping service names to their status value strings."""
         return {
             service: self.validate_service(service).value
-            for service in ("zep", "youtube", "notion", "freerouter", "supabase")
+            for service in ("zep", "youtube", "notion", "freerouter", "supabase", "exa")
         }
 
 

@@ -1,149 +1,267 @@
-"""
-pipeline/research_cache.py — Caching layer for research results.
+"""Permanent research dossier storage backed by Supabase.
 
-Context: Research is expensive (multiple web searches + LLM calls).
-This cache avoids re-researching the same topic within a TTL window.
+Every successful research is saved forever.
+Repeated runs of the same topic return the cached dossier instantly.
 
-NOTE: This is now a thin wrapper around the unified FileCache class.
-The FileCache provides the core caching functionality with TTL support.
-
-Cache Structure:
-    packages/data/research_cache/
-        {topic_hash}.json  → data with metadata
-
-TTL: 24 hours (configurable via ttl_hours parameter)
+This replaces the previous file-based cache with TTL. Now all research
+is stored permanently in Supabase - no expiration, no cleanup.
 
 Usage:
     from packages.pipeline.research_cache import ResearchCache
 
     cache = ResearchCache()
-    dossier = cache.get(topic)
-    if not dossier:
+    cached = cache.get(topic_statement="Pakistan AI policy")
+    if cached:
+        dossier = cached["dossier"]
+    else:
         dossier = await engine.research(topic)
-        cache.set(topic, dossier)
+        cache.save(
+            cache_key=ResearchCache.make_key(topic_statement=topic),
+            topic_statement=topic,
+            dossier=dossier.model_dump(),
+            source_urls=list_of_urls,
+        )
 
-Imports: pathlib
-Imported by: packages/pipeline/handlers.py
+Imports: packages.core.supabase_client, hashlib
+Imported by: packages/pipeline/handlers.py, packages/content_factory/production/workflow.py
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
+from datetime import datetime, timezone
 from typing import Optional
 
-from packages.core.cache import FileCache
-from packages.core.config import get_settings
 from packages.core.logger import get_logger
 
-log = get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ResearchCache:
-    """
-    File-based cache for research results.
+    """Supabase-backed permanent research cache.
 
-    This is a thin wrapper around FileCache that maintains the existing
-    ResearchCache interface for backward compatibility.
-
-    Uses topic hash as key to avoid filesystem issues with special characters.
-    Thread-safe for read operations. Write operations use atomic file writes.
+    No TTL, no expiration. All research is stored forever.
+    Provides instant cache hits on repeated topics to save API tokens.
     """
 
-    def __init__(
-        self,
-        ttl_hours: int = 24,
-        cache_dir: Optional[Path] = None,
-        refresh_ttl_on_access: bool = True,  # Kept for API compatibility, not used
-        max_refreshes: int = 10,  # Kept for API compatibility, not used
-    ) -> None:
-        """
-        Initialize the research cache.
+    def _db(self):
+        """Get the Supabase table client lazily."""
+        from packages.core.supabase_client import get_supabase
+        return get_supabase().table("research_cache")
+
+    @staticmethod
+    def make_key(
+        brief_id: Optional[str] = None,
+        topic_statement: Optional[str] = None
+    ) -> str:
+        """Generate a cache key from brief_id or topic statement.
 
         Args:
-            ttl_hours: Cache time-to-live in hours (default: 24)
-            cache_dir: Override cache directory (default: packages/data/research_cache)
-            refresh_ttl_on_access: Kept for API compatibility (not used in new implementation)
-            max_refreshes: Kept for API compatibility (not used in new implementation)
-        """
-        settings = get_settings()
-        dir_path = cache_dir or Path(settings.DATA_DIR) / "research_cache"
-
-        self._cache = FileCache(cache_dir=dir_path, ttl_hours=ttl_hours)
-        log.debug(f"research_cache_initialized: dir={dir_path}")
-
-    def get(self, topic: str) -> Optional[dict]:
-        """
-        Retrieve cached research for a topic.
-
-        Args:
-            topic: The research topic
+            brief_id: Optional TopicBrief ID (used directly if provided)
+            topic_statement: Topic text (hashed if no brief_id)
 
         Returns:
-            Cached ResearchDossier as dict, or None if not found/expired
+            Cache key string
+
+        Raises:
+            ValueError: If neither argument is provided
         """
-        result = self._cache.get(topic)
-        if result:
-            log.info(f"cache_hit: topic='{topic[:50]}...'")
-        return result
+        if brief_id:
+            return brief_id
+        if topic_statement:
+            normalized = topic_statement.strip().lower()
+            return hashlib.sha256(normalized.encode()).hexdigest()[:32]
+        raise ValueError("Either brief_id or topic_statement must be provided")
+
+    def get(
+        self,
+        brief_id: Optional[str] = None,
+        topic_statement: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Retrieve cached research for a topic.
+
+        Args:
+            brief_id: Optional TopicBrief ID for lookup
+            topic_statement: Topic text for lookup (hashed)
+
+        Returns:
+            Dict with dossier and metadata, or None if not found.
+            Keys: dossier, source_urls, source_count, age_hours,
+                topic_statement, from_cache
+        """
+        cache_key = self.make_key(brief_id=brief_id, topic_statement=topic_statement)
+
+        try:
+            result = (
+                self._db()
+                .select("*")
+                .eq("cache_key", cache_key)
+                .maybe_single()
+                .execute()
+            )
+
+            if not result.data:
+                logger.debug(f"research_cache_miss: key={cache_key[:12]}...")
+                return None
+
+            row = result.data
+            created = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+            age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+
+            logger.info(
+                f"research_cache_hit: key={cache_key[:12]}..., "
+                f"age={age_hours:.1f}h old (PERMANENT)"
+            )
+
+            return {
+                "dossier": row["dossier"],
+                "source_urls": row.get("source_urls", []),
+                "source_count": row.get("source_count", 0),
+                "age_hours": round(age_hours, 1),
+                "topic_statement": row["topic_statement"],
+                "from_cache": True,
+            }
+
+        except Exception as e:
+            logger.warning(f"research_cache_get_failed: {e}")
+            return None
+
+    def save(
+        self,
+        cache_key: str,
+        topic_statement: str,
+        dossier: dict,
+        source_urls: Optional[list[str]] = None,
+        brief_id: Optional[str] = None,
+    ) -> None:
+        """Save research results to the permanent cache.
+
+        Args:
+            cache_key: Unique key for this research
+            topic_statement: The topic text
+            dossier: ResearchDossier as dict (from model_dump())
+            source_urls: List of source URLs consulted
+            brief_id: Optional TopicBrief ID for reference
+        """
+        try:
+            self._db().upsert(
+                {
+                    "cache_key": cache_key,
+                    "topic_statement": topic_statement,
+                    "dossier": dossier,
+                    "source_urls": source_urls or [],
+                    "source_count": len(source_urls) if source_urls else 0,
+                    "brief_id": brief_id,
+                },
+                on_conflict="cache_key",
+            ).execute()
+
+            logger.info(
+                f"research_cache_saved: key={cache_key[:12]}..., "
+                f"sources={len(source_urls or [])} (PERMANENT)"
+            )
+
+        except Exception as e:
+            logger.warning(f"research_cache_save_failed: {e}")
+
+    # Legacy compatibility methods (for smooth migration)
 
     def set(self, topic: str, dossier: dict) -> None:
-        """
-        Cache research results for a topic.
+        """Legacy method for backward compatibility.
 
         Args:
             topic: The research topic
-            dossier: ResearchDossier as dict (from model_dump())
+            dossier: ResearchDossier as dict
         """
-        self._cache.set(topic, dossier)
-        log.info(f"cache_set: topic='{topic[:50]}...'")
+        cache_key = self.make_key(topic_statement=topic)
+        self.save(
+            cache_key=cache_key,
+            topic_statement=topic,
+            dossier=dossier,
+            source_urls=dossier.get("sources", []),
+        )
 
     def delete(self, topic: str) -> bool:
-        """
-        Remove cached research for a topic.
+        """Remove cached research for a topic.
+
+        Note: In permanent storage mode, this is rarely used.
 
         Args:
             topic: The research topic
 
         Returns:
-            True if cache was deleted, False if not found
+            True if deleted, False if not found
         """
-        return self._cache.delete(topic)
+        cache_key = self.make_key(topic_statement=topic)
+        try:
+            result = (
+                self._db()
+                .delete()
+                .eq("cache_key", cache_key)
+                .execute()
+            )
+            deleted = len(result.data) > 0
+            if deleted:
+                logger.info(f"research_cache_deleted: key={cache_key[:12]}...")
+            return deleted
+        except Exception as e:
+            logger.warning(f"research_cache_delete_failed: {e}")
+            return False
 
     def clear(self) -> int:
-        """
-        Clear all cached research.
+        """Clear all cached research.
+
+        WARNING: This removes all research from the database.
+        Use with caution.
 
         Returns:
-            Number of cache files removed
+            Number of entries deleted
         """
-        return self._cache.clear()
+        try:
+            # Get count first
+            count_result = self._db().select("id", count="exact").execute()
+            count = count_result.count if hasattr(count_result, 'count') else 0
+
+            # Delete all
+            self._db().delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+
+            logger.warning(f"research_cache_cleared: {count} entries removed")
+            return count
+        except Exception as e:
+            logger.warning(f"research_cache_clear_failed: {e}")
+            return 0
 
     def stats(self) -> dict:
-        """
-        Get cache statistics.
+        """Get cache statistics.
 
         Returns:
-            Dict with cache stats
+            Dict with count and other stats
         """
-        # Simplified stats for the new implementation
-        files = list(self._cache.cache_dir.glob("*.json"))
-        total_size = sum(f.stat().st_size for f in files if f.exists())
-        return {
-            "count": len(files),
-            "total_size_bytes": total_size,
-            "total_size_mb": round(total_size / (1024 * 1024), 2),
-            "cache_dir": str(self._cache.cache_dir),
-            "ttl_hours": self._cache.ttl.total_seconds() / 3600,
-        }
+        try:
+            result = self._db().select("id", count="exact").execute()
+            count = result.count if hasattr(result, 'count') else len(result.data)
+
+            return {
+                "count": count,
+                "storage": "supabase",
+                "ttl": "permanent",
+                "cache_type": "database",
+            }
+        except Exception as e:
+            logger.warning(f"research_cache_stats_failed: {e}")
+            return {
+                "count": 0,
+                "storage": "supabase",
+                "error": str(e),
+            }
 
     def cleanup_expired(self) -> int:
-        """
-        Remove all expired cache entries.
+        """No-op for permanent storage.
 
-        Note: In the new implementation, expired entries are cleaned up
-        on access. This method is kept for API compatibility.
+        Kept for backward compatibility with existing code.
+        Research never expires in this implementation.
 
         Returns:
-            0 (expired entries are cleaned on access)
+            Always 0 (nothing to clean up)
         """
         return 0

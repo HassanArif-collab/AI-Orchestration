@@ -265,6 +265,7 @@ class RoundBasedProductionWorkflow:
         references: list,
         router: RouterClient,
         max_iterations: int = 2,
+        card_id: str | None = None,
     ) -> ResearchDossier | str | None:
         """Round 1A: Research with DeepResearchEngine (new) or legacy method.
         
@@ -275,13 +276,50 @@ class RoundBasedProductionWorkflow:
           3. Diversity & Validation — ensure all info types covered
           4. Synthesis Check — verify quality bar
         
+        Checks permanent Supabase cache first to avoid duplicate research.
+        
+        Args:
+            idea: VideoIdea with topic and genre
+            references: List of source video references
+            router: RouterClient for LLM calls
+            max_iterations: Max research iterations
+            card_id: Optional Kanban card ID for thought reporting
+        
         Returns:
             ResearchDossier if use_deep_research=True
             str (markdown) if use_deep_research=False
             None if research fails
         """
+        from packages.core.thoughts import report_thought
+        
+        # Check permanent cache first
+        cache = ResearchCache()
+        cached = cache.get(topic_statement=idea.topic)
+        if cached:
+            if card_id:
+                report_thought(
+                    card_id=card_id,
+                    agent_name="researcher",
+                    thought_type="memory_read",
+                    content=f"📦 Research cache hit — loaded dossier from {cached['age_hours']:.0f} hours ago (PERMANENT). Skipping web search.",
+                )
+            logger.info(f"research_cache_hit_returning_cached: topic='{idea.topic[:50]}...'")
+            
+            # Return in the expected format
+            if self.use_deep_research:
+                # Return as ResearchDossier
+                try:
+                    return ResearchDossier(**cached["dossier"])
+                except Exception:
+                    # If deserialization fails, return as dict wrapper
+                    return cached["dossier"]
+            else:
+                # Return as markdown string for legacy
+                return cached["dossier"].get("markdown", str(cached["dossier"]))
+        
+        # No cache hit - perform research
         if self.use_deep_research:
-            return await self._deep_research(idea, references, router)
+            return await self._deep_research(idea, references, router, card_id=card_id)
         else:
             return await self._legacy_research(idea, references, router, max_iterations)
 
@@ -290,9 +328,20 @@ class RoundBasedProductionWorkflow:
         idea: VideoIdea,
         references: list,
         router: RouterClient,
+        card_id: str | None = None,
     ) -> ResearchDossier | None:
         """Execute systematic deep research using DeepResearchEngine."""
+        from packages.core.thoughts import report_thought
+        
         logger.info(f"deep_research_started: topic='{idea.topic[:50]}...' genre='{idea.genre_id}'")
+        
+        if card_id:
+            report_thought(
+                card_id=card_id,
+                agent_name="researcher",
+                thought_type="search",
+                content=f"🔍 Starting deep research: {idea.topic[:60]}...",
+            )
         
         try:
             engine = DeepResearchEngine(
@@ -316,8 +365,23 @@ class RoundBasedProductionWorkflow:
                 f"sources={len(dossier.all_sources)}"
             )
             
-            # Save to cache
-            self._save_research_to_cache(idea.topic, dossier.model_dump())
+            # Save to permanent cache
+            cache = ResearchCache()
+            cache_key = ResearchCache.make_key(topic_statement=idea.topic)
+            cache.save(
+                cache_key=cache_key,
+                topic_statement=idea.topic,
+                dossier=dossier.model_dump(),
+                source_urls=list(dossier.all_sources),
+            )
+            
+            if card_id:
+                report_thought(
+                    card_id=card_id,
+                    agent_name="researcher",
+                    thought_type="output",
+                    content=f"💾 Research dossier saved permanently ({len(dossier.all_sources)} sources).",
+                )
             
             return dossier
             
@@ -436,7 +500,7 @@ Find and document:
 DO NOT write narrative. DO NOT write script prose. Facts only."""
     
     def _save_research_to_cache(self, topic: str, research: str | dict) -> None:
-        """Save research results to cache.
+        """Save research results to permanent cache.
         
         Args:
             topic: The research topic (used as cache key)
@@ -444,14 +508,93 @@ DO NOT write narrative. DO NOT write script prose. Facts only."""
         """
         try:
             cache = ResearchCache()
+            cache_key = ResearchCache.make_key(topic_statement=topic)
+            
             if isinstance(research, str):
                 # Create a simple dict wrapper for string research
-                cache.set(topic, {"markdown": research, "format": "legacy"})
+                cache.save(
+                    cache_key=cache_key,
+                    topic_statement=topic,
+                    dossier={"markdown": research, "format": "legacy"},
+                    source_urls=[],
+                )
             else:
-                cache.set(topic, research)
-            logger.info(f"research_cached: topic='{topic[:50]}...'" )
+                # Extract source URLs if available
+                source_urls = research.get("all_sources", [])
+                if isinstance(source_urls, set):
+                    source_urls = list(source_urls)
+                cache.save(
+                    cache_key=cache_key,
+                    topic_statement=topic,
+                    dossier=research,
+                    source_urls=source_urls,
+                )
+            logger.info(f"research_cached_permanently: topic='{topic[:50]}...'" )
         except Exception as e:
             logger.warning(f"research_cache_save_failed: {e}")
+
+    async def _get_past_learnings(
+        self,
+        topic_statement: str,
+        genre_id: str | None = None,
+    ) -> str:
+        """Retrieve relevant past learnings from Zep memory.
+
+        Queries the learning_synthesis user's memory for facts relevant
+        to the current topic. Returns a formatted string ready for prompt injection.
+
+        Args:
+            topic_statement: The topic being written about
+            genre_id: Optional genre for more targeted queries
+
+        Returns:
+            Formatted string with past learnings, or empty string if unavailable
+        """
+        settings = get_settings()
+
+        if not settings.ZEP_API_KEY or not settings.ZEP_ENABLED:
+            return ""
+
+        try:
+            from packages.memory.client import AsyncZepMemoryClient
+
+            zep = AsyncZepMemoryClient()
+            session_id = f"{settings.ZEP_LEARNING_USER_ID}_session"
+
+            # Search for learnings relevant to this topic
+            queries = [
+                f"What script improvements work for topics about {topic_statement[:50]}?",
+                "What structural patterns consistently improve script scores?",
+                "What mutations have worked best for opening hooks and bridge sections?",
+            ]
+
+            all_facts = []
+            for query in queries:
+                results = await zep.search_memory(
+                    session_id=session_id,
+                    query=query,
+                    limit=3,
+                )
+                for r in results:
+                    fact = r.get("fact", r.get("content", ""))
+                    if fact and fact not in all_facts:
+                        all_facts.append(fact)
+
+            if not all_facts:
+                logger.debug("no_past_learnings_found_in_zep")
+                return ""
+
+            # Format into a prompt-injectable block
+            learning_block = "LESSONS FROM PAST SCRIPTS (these are proven improvements — apply them):\n"
+            for i, fact in enumerate(all_facts[:8], 1):  # Cap at 8 to save tokens
+                learning_block += f"  {i}. {fact}\n"
+
+            logger.info(f"past_learnings_retrieved: {len(all_facts)} facts from Zep")
+            return learning_block
+
+        except Exception as e:
+            logger.warning(f"past_learnings_retrieval_failed: {e}")
+            return ""
 
     async def _round_anchor_check(self, research, idea, references, router):
         """Round 1B: Ensure at least 2 Level 1-3 anchors exist."""
@@ -475,9 +618,14 @@ Otherwise return the research unchanged."""
 
     async def _round_script_opening(self, research, idea, router):
         """Round 2: Generate and self-check the HOOK + ANCHOR sections only."""
+        # Retrieve cross-script learnings from Zep memory
+        past_learnings = await self._get_past_learnings(idea.topic, idea.genre_id)
+
+        learning_section = f"\n{past_learnings}\n" if past_learnings else ""
+
         prompt = f"""Write ONLY the opening two sections (HOOK and ANCHOR) of a Johnny harris
 style script about: {idea.topic}
-
+{learning_section}
 Research:
 {research[:3000]}
 
@@ -503,11 +651,15 @@ If any rule fails, rewrite the opening fixing only what failed. Return same JSON
         """Round 3: Full script with up to 2 rewrites targeting 32/40 questions."""
         import json
 
+        # Retrieve cross-script learnings from Zep memory
+        past_learnings = await self._get_past_learnings(idea.topic, idea.genre_id)
+        learning_section = f"\n{past_learnings}\n" if past_learnings else ""
+
         prompt = f"""Write a complete Johnny harris-style dual-column script.
 Topic: {idea.topic}
 Genre: {idea.genre_id}
 Big Question: {getattr(idea, 'big_question', '')}
-
+{learning_section}
 Research:
 {research[:4000]}
 
