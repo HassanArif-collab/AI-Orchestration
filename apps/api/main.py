@@ -64,13 +64,7 @@ async def lifespan(app: FastAPI):
     
     Initializes databases on startup and cleans up on shutdown.
     """
-    # Initialize Kanban database
-    try:
-        from apps.api.routers.kanban_routes import init_kanban_db
-        init_kanban_db()
-    except Exception as e:
-        print(f"Warning: Could not init Kanban DB: {e}")
-    
+
     # Bootstrap agents into registry
     try:
         from packages.agents.bootstrap import bootstrap_agents

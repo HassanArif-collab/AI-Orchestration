@@ -1,0 +1,89 @@
+# requirements-windows.txt - Windows-specific installation
+# Use this if the standard installation fails on Windows
+#
+# Windows-specific issues:
+# 1. psycopg[binary] may fail to compile - use psycopg-binary instead
+# 2. Some packages need pre-compiled wheels
+#
+# Installation steps:
+# 1. pip install -r requirements-windows.txt
+# 2. pip install -e ".[all]"
+
+# ============================================================
+# Core Infrastructure
+# ============================================================
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+structlog>=23.0.0
+httpx>=0.24.0
+python-dotenv>=1.0.0
+nest-asyncio>=1.5.0
+pyyaml>=6.0
+
+# ============================================================
+# LLM Integration
+# ============================================================
+instructor>=1.0.0
+openai>=1.0.0
+
+# ============================================================
+# Database
+# ============================================================
+supabase>=2.0.0
+
+# ============================================================
+# Search
+# ============================================================
+exa-py>=1.0.0
+
+# ============================================================
+# LangChain Ecosystem (shared by CrewAI and LangGraph)
+# ============================================================
+langchain-core>=0.3.0
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
+langsmith>=0.1.0
+
+# ============================================================
+# LangGraph (State Machine)
+# ============================================================
+langgraph>=0.2.0
+langgraph-checkpoint>=2.0.0
+
+# ============================================================
+# PostgreSQL Checkpointer - WINDOWS SPECIFIC
+# ============================================================
+# Use psycopg-binary instead of psycopg[binary] on Windows
+# This provides pre-compiled wheels without needing MSVC
+psycopg-binary>=3.1.0
+psycopg-pool>=3.2.0
+
+# ============================================================
+# CrewAI (Multi-Agent Framework)
+# ============================================================
+crewai>=0.86.0
+crewai-tools>=0.14.0
+
+# CrewAI dependencies
+litellm>=1.52.0
+
+# ============================================================
+# Development Tools
+# ============================================================
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+ruff>=0.6.0
+
+# ============================================================
+# Windows-Specific Notes
+# ============================================================
+# If you still have issues with psycopg-binary:
+# 1. Install Microsoft C++ Build Tools from:
+#    https://visualstudio.microsoft.com/visual-cpp-build-tools/
+# 2. Or install PostgreSQL client libraries from:
+#    https://www.postgresql.org/download/windows/
+#
+# If CrewAI installation fails:
+# 1. Try: pip install crewai>=0.86.0 --no-deps
+# 2. Then: pip install crewai-tools>=0.14.0 --no-deps
+# 3. Then install dependencies manually

@@ -1,0 +1,93 @@
+# requirements.txt - Minimum version requirements
+# Use: pip install -r requirements.txt
+# Then: pip install -e ".[all]"
+#
+# This file specifies MINIMUM versions. pip will install the latest
+# compatible versions. Use this for reproducible installs.
+#
+# For exact pinned versions, use: pip freeze > requirements-lock.txt
+
+# ============================================================
+# Core Infrastructure
+# ============================================================
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+structlog>=23.0.0
+httpx>=0.24.0
+python-dotenv>=1.0.0
+nest-asyncio>=1.5.0
+pyyaml>=6.0
+
+# ============================================================
+# LLM Integration
+# ============================================================
+instructor>=1.0.0
+openai>=1.0.0
+
+# ============================================================
+# Database
+# ============================================================
+supabase>=2.0.0
+
+# ============================================================
+# Search
+# ============================================================
+exa-py>=1.0.0
+
+# ============================================================
+# LangChain Ecosystem (shared by CrewAI and LangGraph)
+# ============================================================
+# IMPORTANT: These minimum versions ensure compatibility between CrewAI and LangGraph
+# CrewAI >= 0.86.0 supports langchain-core 0.3.x
+langchain-core>=0.3.0
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
+langsmith>=0.1.0
+
+# ============================================================
+# LangGraph (State Machine)
+# ============================================================
+langgraph>=0.2.0
+langgraph-checkpoint>=2.0.0
+
+# ============================================================
+# PostgreSQL Checkpointer (for LangGraph)
+# ============================================================
+# On Windows, if psycopg[binary] fails, use: pip install psycopg-binary
+psycopg[binary]>=3.1.0
+psycopg-pool>=3.2.0
+
+# ============================================================
+# CrewAI (Multi-Agent Framework)
+# ============================================================
+# CrewAI >= 0.86.0 is required for langchain-core 0.3.x compatibility
+crewai>=0.86.0
+crewai-tools>=0.14.0
+
+# CrewAI dependencies
+litellm>=1.52.0
+
+# ============================================================
+# Development Tools
+# ============================================================
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+ruff>=0.6.0
+
+# ============================================================
+# Optional Integrations (uncomment as needed)
+# ============================================================
+# Zep Cloud memory
+# zep-cloud>=0.1.0
+
+# YouTube Data API
+# google-api-python-client>=2.0.0
+# google-auth-oauthlib>=1.0.0
+# youtube-transcript-api>=0.6.0
+
+# Notion API
+# notion-client>=2.0.0
+
+# Pipeline CLI
+# typer>=0.9.0
+# rich>=13.0.0
