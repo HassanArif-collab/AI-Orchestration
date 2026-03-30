@@ -1,17 +1,15 @@
 """
-Kanban task management routes — Refactored to use PipelineRunner.
+Kanban task management routes -- Refactored to use PipelineRunner.
 
 These endpoints handle the Kanban board operations for the YouTube Pipeline
 dashboard. The Kanban board is a view-only (mostly) representation of the
-Pipeline runs stored in pipeline.db.
+Pipeline runs stored in Supabase pipeline_runs table.
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -23,91 +21,6 @@ from packages.core.config import get_settings
 
 router = APIRouter()
 
-
-# ─── Agent Thoughts Store ─────────────────────────────────────────────────────
-
-class ThoughtsStore:
-    """SQLite-backed store for agent thoughts/monologue.
-    
-    Thoughts are stored per run_id and retrieved when displaying the Kanban drawer.
-    This enables the "Agent Monologue" section to show historical thoughts even
-    after page refresh.
-    """
-    
-    def __init__(self, db_path: Optional[str] = None):
-        settings = get_settings()
-        self.db_path = db_path or str(Path(settings.DATA_DIR) / "agent_thoughts.db")
-        self._ensure_table()
-    
-    def _ensure_table(self) -> None:
-        """Create the agent_thoughts table if it doesn't exist."""
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS agent_thoughts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    thought_text TEXT NOT NULL,
-                    stage TEXT,
-                    created_at TEXT NOT NULL
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_agent_thoughts_run_id 
-                ON agent_thoughts(run_id)
-            """)
-            conn.commit()
-    
-    def add_thought(self, run_id: str, thought_text: str, stage: Optional[str] = None) -> None:
-        """Add a thought for a run."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO agent_thoughts (run_id, thought_text, stage, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (run_id, thought_text, stage or "", datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
-    
-    def get_thoughts(self, run_id: str, limit: int = 50) -> List[Dict]:
-        """Get all thoughts for a run, newest first."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                """
-                SELECT thought_text, stage, created_at 
-                FROM agent_thoughts 
-                WHERE run_id = ? 
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (run_id, limit),
-            )
-            return [
-                {
-                    "text": row["thought_text"],
-                    "stage": row["stage"],
-                    "time": row["created_at"],
-                }
-                for row in cursor.fetchall()
-            ]
-    
-    def delete_for_run(self, run_id: str) -> int:
-        """Delete all thoughts for a run."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                "DELETE FROM agent_thoughts WHERE run_id = ?",
-                (run_id,),
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-            return deleted
-
-
-def get_thoughts_store() -> ThoughtsStore:
-    """Get the thoughts store instance."""
-    return ThoughtsStore()
 
 # Map pipeline stage names to Kanban column numbers (1-6)
 PIPELINE_TO_KANBAN_STAGE = {
@@ -130,7 +43,7 @@ def _run_to_kanban_dict(run) -> dict:
     """Convert a PipelineRun to a Kanban-friendly dictionary."""
     d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
     stage_name = d.get("current_stage", "trend_analysis")
-    
+
     # Extract title - check 'title' first (normalized field), then 'topic_statement' (raw field)
     # This handles both normalized data (from frontend approval) and raw data (from pipeline storage)
     video_title = "Untitled"
@@ -142,7 +55,7 @@ def _run_to_kanban_dict(run) -> dict:
         trend = outputs.get("trend_analysis")
         if isinstance(trend, list) and trend:
             video_title = trend[0].get("title") or trend[0].get("topic_statement") or "Untitled"
-    
+
     # Status mapping to Kanban visual states
     status = d.get("status", "idle")
     if status == "running":
@@ -161,20 +74,20 @@ def _run_to_kanban_dict(run) -> dict:
     stage_num = get_kanban_stage(stage_name)
     color = colors[stage_num - 1] if 1 <= stage_num <= 6 else colors[0]
 
-    # Thoughts: Load from ThoughtsStore instead of hard-coding empty
+    # Thoughts: Load from centralized Supabase thoughts module
     run_id = d.get("run_id", "")
     thoughts = []
     try:
-        thoughts_store = get_thoughts_store()
-        thoughts = thoughts_store.get_thoughts(run_id, limit=50)
+        from packages.core.thoughts import get_thoughts_for_card
+        thoughts = get_thoughts_for_card(str(run_id))
     except Exception as e:
         print(f"Error loading thoughts for {run_id}: {e}")
-    
+
     # Render artifacts as readable HTML (Task 6 fix)
     research_html = _render_artifact_html(outputs.get("research"), "research")
     script_html = _render_artifact_html(outputs.get("script_writing"), "script")
     visual_html = _render_artifact_html(outputs.get("visual_planning"), "visual")
-    
+
     return {
         "id": run_id,
         "title": video_title,
@@ -193,33 +106,33 @@ def _run_to_kanban_dict(run) -> dict:
 
 def _render_artifact_html(data: Any, artifact_type: str) -> str:
     """Render artifact data as readable HTML instead of truncated JSON strings.
-    
+
     Args:
         data: The artifact data (dict, list, or other)
         artifact_type: Type hint (research, script, visual)
-        
+
     Returns:
         HTML string for display in the Kanban drawer
     """
     if not data:
         return ""
-    
+
     if isinstance(data, str):
         return data[:500] if len(data) > 500 else data
-    
+
     if not isinstance(data, dict):
         # Fallback for non-dict data
         return str(data)[:500]
-    
+
     # Handle AdaptedScript (script_writing output)
     if artifact_type == "script" and "entries" in data:
         entries = data.get("entries", [])
         if not entries:
             return ""
-        
+
         title = data.get("adapted_title", "Untitled Script")
         score = data.get("production_readiness_score", 0)
-        
+
         html_parts = [
             f'<div style="margin-bottom:8px;font-weight:600;">{title}</div>',
             f'<div style="margin-bottom:8px;font-size:11px;color:#888;">Score: {score:.1f}%</div>',
@@ -230,7 +143,7 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
             '</tr></thead>',
             '<tbody>'
         ]
-        
+
         for i, entry in enumerate(entries[:10]):  # Limit to first 10 entries
             bg = "#141414" if i % 2 == 0 else "#1a1a1a"
             prose = entry.get("prose", "")[:200]
@@ -239,13 +152,13 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
                 f'<tr style="background:{bg}"><td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;">{prose}</td>'
                 f'<td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;color:#888;">{visual}</td></tr>'
             )
-        
+
         if len(entries) > 10:
             html_parts.append(f'<tr><td colspan="2" style="padding:6px;text-align:center;color:#888;">... and {len(entries) - 10} more entries</td></tr>')
-        
+
         html_parts.append('</tbody></table>')
         return ''.join(html_parts)
-    
+
     # Handle Research output
     if artifact_type == "research":
         # Check for common research fields
@@ -256,7 +169,7 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
             if entries:
                 return _render_artifact_html(data, "script")
             return f'<div style="font-weight:600;">{title}</div>'
-        
+
         # Generic research dict - show key fields
         html_parts = []
         for key in ["topic", "title", "summary", "main_findings", "key_points"]:
@@ -267,16 +180,16 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
                 elif isinstance(val, str):
                     val = val[:300]
                 html_parts.append(f'<div style="margin-bottom:6px;"><strong>{key}:</strong> {val}</div>')
-        
+
         if html_parts:
             return ''.join(html_parts)
-    
+
     # Handle Visual Planning output
     if artifact_type == "visual" and "section_briefs" in data:
         briefs = data.get("section_briefs", [])
         if not briefs:
             return ""
-        
+
         html_parts = ['<div style="font-size:12px;">']
         for i, brief in enumerate(briefs[:6]):
             section = brief.get("section_index", i)
@@ -289,7 +202,7 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
             html_parts.append(f'<div style="color:#888;">... and {len(briefs) - 6} more sections</div>')
         html_parts.append('</div>')
         return ''.join(html_parts)
-    
+
     # Fallback: show as formatted JSON limited
     try:
         json_str = json.dumps(data, indent=2, default=str)
@@ -324,7 +237,7 @@ async def list_tasks(limit: int = 100) -> dict:
     store = get_run_store()
     if not store:
         return {"tasks": []}
-    
+
     runs = store.list_runs(limit=limit)
     tasks = []
     for summary in runs:
@@ -335,7 +248,7 @@ async def list_tasks(limit: int = 100) -> dict:
         except Exception as e:
             print(f"Error loading task {summary.get('run_id')}: {e}")
             continue
-    
+
     return {"tasks": tasks}
 
 @router.get("/tasks/{task_id}")
@@ -344,11 +257,11 @@ async def get_task(task_id: str) -> dict:
     store = get_run_store()
     if not store:
         raise HTTPException(503, "Store not available")
-    
+
     run = store.load(task_id)
     if not run:
         raise HTTPException(404, f"Task {task_id} not found")
-    
+
     return _run_to_kanban_dict(run)
 
 @router.patch("/tasks/{task_id}")
@@ -358,7 +271,7 @@ async def update_task(task_id: str, data: KanbanTaskUpdate, bg: BackgroundTasks)
     store = get_run_store()
     if not runner or not store:
         raise HTTPException(503, "Pipeline runner not available")
-    
+
     run = store.load(task_id)
     if not run:
         raise HTTPException(404, f"Task {task_id} not found")
@@ -379,16 +292,16 @@ async def delete_task(task_id: str) -> dict:
     store = get_run_store()
     if not store:
         raise HTTPException(503, "Store not available")
-    
+
     store.delete(task_id)
-    
-    # Also delete associated thoughts
+
+    # Also delete associated thoughts via centralized module
     try:
-        thoughts_store = get_thoughts_store()
-        thoughts_store.delete_for_run(task_id)
+        from packages.core.thoughts import delete_thoughts_for_card
+        delete_thoughts_for_card(str(task_id))
     except Exception as e:
         print(f"Warning: Could not delete thoughts for {task_id}: {e}")
-    
+
     return {"success": True, "deleted_id": task_id}
 
 @router.post("/topic-finder")
@@ -397,15 +310,15 @@ async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) ->
     runner = get_pipeline_runner()
     if not runner:
         raise HTTPException(503, "Pipeline runner not available")
-    
+
     run = await runner.create_run()
     from apps.api.routers.pipeline_routes import _run_pipeline_bg
     bg.add_task(_run_pipeline_bg, run.run_id)
-    
+
     # Bug B Fix: Emit task_created immediately for Kanban board
     task_data = _run_to_kanban_dict(run)
     bg.add_task(emit_task_created, task_data)
-    
+
     return {
         "id": run.run_id,
         "status": "thinking",
@@ -418,18 +331,18 @@ async def get_stats() -> dict:
     store = get_run_store()
     if not store:
         return {"total_tasks": 0, "by_stage": {}, "by_status": {}}
-    
+
     summaries = store.list_runs(limit=1000)
     total = len(summaries)
     by_stage = {}
     by_status = {}
-    
+
     for s in summaries:
         stage_num = get_kanban_stage(s.get("current_stage", "trend_analysis"))
         by_stage[stage_num] = by_stage.get(stage_num, 0) + 1
         status = s.get("status", "idle")
         by_status[status] = by_status.get(status, 0) + 1
-        
+
     return {
         "total_tasks": total,
         "by_stage": by_stage,
@@ -439,29 +352,28 @@ async def get_stats() -> dict:
 @router.post("/events")
 async def record_kanban_event(data: KanbanEventRequest) -> dict:
     """Record a Kanban event (thought, stage change, artifact, etc.).
-    
+
     This endpoint is called by agents via KanbanCallbackHandler to report
     thoughts, stage changes, artifacts, and status changes.
-    
+
     Args:
         data: The event request containing task_id, event_type, and data payload
-        
+
     Returns:
         Success dict with event_type
     """
-    store = get_thoughts_store()
-    
     if data.event_type == "thought":
-        # Store the thought text
+        # Write thought directly to Supabase via centralized module
+        from packages.core.thoughts import report_thought
         thought_text = data.data.get("content", data.data.get("text", ""))
-        stage = data.data.get("stage", "")
-        store.add_thought(data.task_id, thought_text, stage=stage)
+        report_thought(
+            card_id=data.task_id,
+            agent_name=data.data.get("agent_name", "unknown"),
+            thought_type="thinking",
+            content=thought_text,
+        )
         return {"success": True, "event_type": data.event_type, "recorded": "thought"}
-    
+
     # For other event types, we just acknowledge them
     # In the future, we could store stage changes, artifacts, etc.
     return {"success": True, "event_type": data.event_type}
-
-def init_kanban_db() -> None:
-    """No-op for backward compatibility."""
-    pass
