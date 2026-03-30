@@ -265,6 +265,7 @@ class RoundBasedProductionWorkflow:
         references: list,
         router: RouterClient,
         max_iterations: int = 2,
+        card_id: str | None = None,
     ) -> ResearchDossier | str | None:
         """Round 1A: Research with DeepResearchEngine (new) or legacy method.
         
@@ -275,13 +276,50 @@ class RoundBasedProductionWorkflow:
           3. Diversity & Validation — ensure all info types covered
           4. Synthesis Check — verify quality bar
         
+        Checks permanent Supabase cache first to avoid duplicate research.
+        
+        Args:
+            idea: VideoIdea with topic and genre
+            references: List of source video references
+            router: RouterClient for LLM calls
+            max_iterations: Max research iterations
+            card_id: Optional Kanban card ID for thought reporting
+        
         Returns:
             ResearchDossier if use_deep_research=True
             str (markdown) if use_deep_research=False
             None if research fails
         """
+        from packages.core.thoughts import report_thought
+        
+        # Check permanent cache first
+        cache = ResearchCache()
+        cached = cache.get(topic_statement=idea.topic)
+        if cached:
+            if card_id:
+                report_thought(
+                    card_id=card_id,
+                    agent_name="researcher",
+                    thought_type="memory_read",
+                    content=f"📦 Research cache hit — loaded dossier from {cached['age_hours']:.0f} hours ago (PERMANENT). Skipping web search.",
+                )
+            logger.info(f"research_cache_hit_returning_cached: topic='{idea.topic[:50]}...'")
+            
+            # Return in the expected format
+            if self.use_deep_research:
+                # Return as ResearchDossier
+                try:
+                    return ResearchDossier(**cached["dossier"])
+                except Exception:
+                    # If deserialization fails, return as dict wrapper
+                    return cached["dossier"]
+            else:
+                # Return as markdown string for legacy
+                return cached["dossier"].get("markdown", str(cached["dossier"]))
+        
+        # No cache hit - perform research
         if self.use_deep_research:
-            return await self._deep_research(idea, references, router)
+            return await self._deep_research(idea, references, router, card_id=card_id)
         else:
             return await self._legacy_research(idea, references, router, max_iterations)
 
@@ -290,9 +328,20 @@ class RoundBasedProductionWorkflow:
         idea: VideoIdea,
         references: list,
         router: RouterClient,
+        card_id: str | None = None,
     ) -> ResearchDossier | None:
         """Execute systematic deep research using DeepResearchEngine."""
+        from packages.core.thoughts import report_thought
+        
         logger.info(f"deep_research_started: topic='{idea.topic[:50]}...' genre='{idea.genre_id}'")
+        
+        if card_id:
+            report_thought(
+                card_id=card_id,
+                agent_name="researcher",
+                thought_type="search",
+                content=f"🔍 Starting deep research: {idea.topic[:60]}...",
+            )
         
         try:
             engine = DeepResearchEngine(
@@ -316,8 +365,23 @@ class RoundBasedProductionWorkflow:
                 f"sources={len(dossier.all_sources)}"
             )
             
-            # Save to cache
-            self._save_research_to_cache(idea.topic, dossier.model_dump())
+            # Save to permanent cache
+            cache = ResearchCache()
+            cache_key = ResearchCache.make_key(topic_statement=idea.topic)
+            cache.save(
+                cache_key=cache_key,
+                topic_statement=idea.topic,
+                dossier=dossier.model_dump(),
+                source_urls=list(dossier.all_sources),
+            )
+            
+            if card_id:
+                report_thought(
+                    card_id=card_id,
+                    agent_name="researcher",
+                    thought_type="output",
+                    content=f"💾 Research dossier saved permanently ({len(dossier.all_sources)} sources).",
+                )
             
             return dossier
             
@@ -436,7 +500,7 @@ Find and document:
 DO NOT write narrative. DO NOT write script prose. Facts only."""
     
     def _save_research_to_cache(self, topic: str, research: str | dict) -> None:
-        """Save research results to cache.
+        """Save research results to permanent cache.
         
         Args:
             topic: The research topic (used as cache key)
@@ -444,12 +508,28 @@ DO NOT write narrative. DO NOT write script prose. Facts only."""
         """
         try:
             cache = ResearchCache()
+            cache_key = ResearchCache.make_key(topic_statement=topic)
+            
             if isinstance(research, str):
                 # Create a simple dict wrapper for string research
-                cache.set(topic, {"markdown": research, "format": "legacy"})
+                cache.save(
+                    cache_key=cache_key,
+                    topic_statement=topic,
+                    dossier={"markdown": research, "format": "legacy"},
+                    source_urls=[],
+                )
             else:
-                cache.set(topic, research)
-            logger.info(f"research_cached: topic='{topic[:50]}...'" )
+                # Extract source URLs if available
+                source_urls = research.get("all_sources", [])
+                if isinstance(source_urls, set):
+                    source_urls = list(source_urls)
+                cache.save(
+                    cache_key=cache_key,
+                    topic_statement=topic,
+                    dossier=research,
+                    source_urls=source_urls,
+                )
+            logger.info(f"research_cached_permanently: topic='{topic[:50]}...'" )
         except Exception as e:
             logger.warning(f"research_cache_save_failed: {e}")
 
