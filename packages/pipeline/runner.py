@@ -1,3 +1,18 @@
+"""
+⚠️  DEPRECATED — This file is no longer used.
+     Pipeline orchestration has moved to LangGraph.
+     See: packages/content_factory/orchestration/graphs.py
+     
+     This file is kept for reference only. Do not import from it.
+     Will be deleted after Phase 5 frontend is confirmed working.
+"""
+import warnings
+warnings.warn(
+    "This module is deprecated. Use orchestration.graphs instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 """Pipeline orchestration runner.
 
 Executes stages in dependency order with human gate support.
