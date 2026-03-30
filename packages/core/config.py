@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # Whether to perform startup health check (set to False for lazy initialization)
     FREEROUTER_STARTUP_CHECK: bool = True
 
+    # ─── Supabase (V2 Storage Backend) ────────────────────────────────────────
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+
     # GetZep Cloud — agent memory
     ZEP_API_KEY: str = ""
     ZEP_BASE_URL: str = "https://api.getzep.com"
@@ -109,6 +114,16 @@ class Settings(BaseSettings):
         if not v.startswith(("http://", "https://")):
             raise ValueError(
                 f"FREEROUTER_URL must start with http:// or https://, got '{v}'"
+            )
+        return v.rstrip("/")
+
+    @field_validator("SUPABASE_URL")
+    @classmethod
+    def validate_supabase_url(cls, v: str) -> str:
+        """Validate SUPABASE_URL format if provided."""
+        if v and not v.startswith("https://"):
+            raise ValueError(
+                f"SUPABASE_URL must start with https://, got '{v}'"
             )
         return v.rstrip("/")
 
@@ -233,13 +248,20 @@ class Settings(BaseSettings):
                 return ServiceStatus.NOT_CONFIGURED
             return ServiceStatus.AVAILABLE
 
+        if service == "supabase":
+            if not self.SUPABASE_URL or not self.SUPABASE_SERVICE_ROLE_KEY:
+                return ServiceStatus.NOT_CONFIGURED
+            if not self.SUPABASE_URL.startswith("https://"):
+                return ServiceStatus.MISCONFIGURED
+            return ServiceStatus.AVAILABLE
+
         raise ValueError(f"Unknown service: {service}")
 
     def get_service_status(self) -> dict[str, str]:
         """Return a dict mapping service names to their status value strings."""
         return {
             service: self.validate_service(service).value
-            for service in ("zep", "youtube", "notion", "freerouter")
+            for service in ("zep", "youtube", "notion", "freerouter", "supabase")
         }
 
 
