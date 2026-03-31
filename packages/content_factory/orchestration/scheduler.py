@@ -57,20 +57,24 @@ class Scheduler:
 
     def _load_job_state(self):
         """Load job execution timestamps from SQLite on startup."""
+        loaded = {}  # Initialize loaded at the start to ensure it's always defined
         try:
             db_path = self._get_db_path()
             if not db_path.exists():
+                self._loaded_state = loaded
                 return
             with sqlite3.connect(str(db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("SELECT job_name, last_run, next_run FROM scheduler_state").fetchall()
                 if not rows:
+                    self._loaded_state = loaded
                     return
                 loaded = {row["job_name"]: row for row in rows}
                 logger.info(f"scheduler_loading_state | {len(loaded)} jobs found in DB")
         except Exception as e:
             logger.debug(f"scheduler_load_state_failed: {e}")
             loaded = {}
+            self._loaded_state = loaded
             return
 
         # Store loaded state to apply after boot_schedule registers the jobs
@@ -172,6 +176,11 @@ class Scheduler:
 
     def boot_schedule(self):
         """Initializes all Phase 7 prescribed cron definitions."""
+        # Guard against double-init (e.g., hot-reload)
+        if hasattr(self, '_boot_schedule_called') and self._boot_schedule_called:
+            logger.debug("boot_schedule_already_called, skipping")
+            return
+        
         self.register_cron_job("TopicFinder_Daily", 24, self.run_topic_finder_cycle, "retry")
         self.register_cron_job("Production_Polling", 6, self.trigger_production_cycle, "skip")
         self.register_cron_job("Learning_Synthesis_Weekly", 168, self.run_learning_synthesis, "escalate")
@@ -180,6 +189,7 @@ class Scheduler:
         self.register_cron_job("Maintenance_Weekly", 168, lambda: logger.info("Weekly Archive & Maintenance"), "escalate")
         # Restore persisted timing state from previous runs
         self._apply_loaded_state()
+        self._boot_schedule_called = True
 
     async def simulate_tick(self):
         """Execute only jobs whose next_run has been reached.
@@ -220,4 +230,8 @@ class Scheduler:
                 self._persist_job_state()
                 
                 if job['failure_behavior'] == "escalate":
-                    await self.master.handle_escalation("SYS", "cron_failure", "high", {"job": job['name']})
+                    try:
+                        await self.master.handle_escalation("SYS", "cron_failure", "high", {"job": job['name']})
+                    except Exception as esc_e:
+                        # If escalation fails (e.g., Supabase is down), at least log it
+                        logger.error(f"escalation_failed_for_cron_failure | job={job['name']} error={esc_e}")
