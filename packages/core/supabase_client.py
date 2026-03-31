@@ -19,6 +19,7 @@ Tables Used:
     - research_cache: Permanent storage for research results
 """
 
+import threading
 from typing import Optional
 
 from packages.core.config import get_settings
@@ -28,13 +29,15 @@ logger = get_logger(__name__)
 
 _supabase_client = None
 _supabase_client_url = None
+_supabase_lock = threading.Lock()
 
 
 def _reset_supabase_client() -> None:
     """Invalidate the cached Supabase client. Called on connection errors."""
     global _supabase_client, _supabase_client_url
-    _supabase_client = None
-    _supabase_client_url = None
+    with _supabase_lock:
+        _supabase_client = None
+        _supabase_client_url = None
 
 
 def get_supabase():
@@ -61,28 +64,30 @@ def get_supabase():
             "Get your anon key from https://app.supabase.com/project/_/settings/api"
         )
 
-    # Return cached client if URL hasn't changed
-    if _supabase_client is not None and _supabase_client_url == settings.SUPABASE_URL:
-        return _supabase_client
+    # Use lock for thread-safe access to global cache
+    with _supabase_lock:
+        # Return cached client if URL hasn't changed
+        if _supabase_client is not None and _supabase_client_url == settings.SUPABASE_URL:
+            return _supabase_client
 
-    try:
-        from supabase import create_client, Client
+        try:
+            from supabase import create_client, Client
 
-        client: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_ANON_KEY
-        )
+            client: Client = create_client(
+                settings.SUPABASE_URL,
+                settings.SUPABASE_ANON_KEY
+            )
 
-        logger.info("supabase_client_initialized")
-        _supabase_client = client
-        _supabase_client_url = settings.SUPABASE_URL
-        return client
+            logger.info("supabase_client_initialized")
+            _supabase_client = client
+            _supabase_client_url = settings.SUPABASE_URL
+            return client
 
-    except ImportError:
-        raise RuntimeError(
-            "supabase-py package not installed. "
-            "Add 'supabase' to your dependencies."
-        )
+        except ImportError:
+            raise RuntimeError(
+                "supabase-py package not installed. "
+                "Add 'supabase' to your dependencies."
+            )
 
 
 def get_supabase_optional():
