@@ -53,16 +53,23 @@ class CircuitBreaker:
             return self._state
 
     def allow_request(self) -> bool:
-        state = self.state  # property handles state transitions
-        if state == CircuitState.CLOSED:
-            return True
-        if state == CircuitState.HALF_OPEN:
-            with self._lock:
+        with self._lock:
+            # Handle state transitions inside the lock to prevent race conditions
+            if self._state == CircuitState.OPEN:
+                if time.time() - self._last_failure_time >= self.recovery_timeout:
+                    self._state = CircuitState.HALF_OPEN
+                    self._half_open_calls = 0
+                    logger.info(f"circuit_breaker_half_open: {self.name}")
+            
+            state = self._state
+            if state == CircuitState.CLOSED:
+                return True
+            if state == CircuitState.HALF_OPEN:
                 if self._half_open_calls < self.half_open_max_calls:
                     self._half_open_calls += 1
                     return True
                 return False
-        return False  # OPEN
+            return False  # OPEN
 
     def record_success(self) -> None:
         with self._lock:
