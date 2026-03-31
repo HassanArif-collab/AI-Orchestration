@@ -35,6 +35,7 @@ STAGE_TO_COLUMN = {
     "review": 5,
     "publishing": 6,
     "complete": 6,
+    "completed": 6,  # C12 compat: PipelineRunner uses "completed"
     "error": None,  # Don't move on error
 }
 

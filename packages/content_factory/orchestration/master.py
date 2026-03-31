@@ -92,22 +92,35 @@ class MasterOrchestrator:
         except Exception as e:
             logger.error(f"pipeline_trigger_failed: {e} cycle={cycle_id}")
         
-    async def advance_phase(self, cycle_id: str, new_phase: str):
-        """Sequential Routing enforcement."""
+    async def advance_phase(self, cycle_id: str, new_phase: str) -> bool:
+        """Sequential Routing enforcement — advances a cycle to the next phase.
+        
+        C5 FIX: Actually updates the phase in Supabase. Previously was a stub
+        that only wrote Zep facts and returned True without any DB change.
+        Now also returns False on DB failure (was always True before).
+        """
         # 1. Acquire Lock
         if not self.db.acquire_lock(cycle_id):
             logger.warning(f"state_conflict_error | cycle_id={cycle_id}")
             return False
             
         try:
-            # 2. Update DB (mocked as simple release for now)
-            # Fetch, modify, save logic would go here.
+            # 2. C5 FIX: Update the phase in Supabase
+            self.db._cycles().update({
+                "current_phase": new_phase,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("cycle_id", cycle_id).execute()
+            
+            # 3. Write Zep fact for memory tracking
             await self.zep_client.add_facts(session_id=cycle_id, facts=[{
                 "fact": f"Advanced to phase {new_phase}",
                 "source": "orchestrator",
                 "phase": new_phase
             }])
             logger.info(f"routing_advancement | cycle_id={cycle_id} new_phase={new_phase}")
+        except Exception as e:
+            logger.error(f"advance_phase_failed | cycle_id={cycle_id} error={e}")
+            return False
         finally:
             self.db.release_lock(cycle_id)
             return True
@@ -132,12 +145,19 @@ class MasterOrchestrator:
         
         logger.warning(f"escalation_routed_to_human | cycle_id={cycle_id} type={error_type}")
         
-        # Pause the cycle
+        # C6 FIX: Pause the cycle — actually update DB status/phase
         if not self.db.acquire_lock(cycle_id):
             return
         try:
-            # Code to set status to 'paused' and phase to 'awaiting_review'
-            pass
+            now = datetime.now(timezone.utc).isoformat()
+            self.db._cycles().update({
+                "status": "paused",
+                "current_phase": "awaiting_review",
+                "updated_at": now
+            }).eq("cycle_id", cycle_id).execute()
+            logger.info(f"cycle_paused_for_review | cycle_id={cycle_id}")
+        except Exception as e:
+            logger.error(f"pause_cycle_failed | cycle_id={cycle_id} error={e}")
         finally:
             self.db.release_lock(cycle_id)
 
