@@ -409,7 +409,11 @@ class UpdatePipeline:
         Args:
           agent_id: The agent whose instruction to rollback
         """
-        version = self.active_versions[agent_id]
-        version.is_rollback = True
-        logger.info(f"rollback_completed | version_id={version.version_id}")
+        version = self.active_versions.pop(agent_id, None)
+        if version:
+            version.is_rollback = True
+            logger.info(
+                f"rollback_completed | version_id={version.version_id} "
+                f"agent={agent_id} — removed from active_versions"
+            )
         # Notify synthesis engine that this insight was proven incorrect

@@ -10,7 +10,8 @@ from pathlib import Path
 
 from packages.core.logger import get_logger
 
-from .models import AdaptationError
+from .models import AdaptationError, AdaptationStage
+from typing import Union
 
 logger = get_logger(__name__)
 
@@ -38,7 +39,7 @@ class ErrorLogger:
     def log_error(
         self,
         production_cycle_id: str,
-        stage_number: int,
+        stage_number: Union[int, AdaptationStage],
         error_type: str,
         description: str,
         content_element: str = "",
@@ -48,7 +49,7 @@ class ErrorLogger:
 
         Args:
             production_cycle_id: Unique ID for this adaptation run.
-            stage_number: Stage where error occurred (1-4).
+            stage_number: Stage where error occurred (use AdaptationStage enum).
             error_type: Error type name from the spec.
             description: Human-readable error description.
             content_element: The specific content that caused the error.
@@ -76,7 +77,7 @@ class ErrorLogger:
     def log_warning(
         self,
         production_cycle_id: str,
-        stage_number: int,
+        stage_number: Union[int, AdaptationStage],
         error_type: str,
         description: str,
         content_element: str = "",
@@ -85,7 +86,7 @@ class ErrorLogger:
 
         Args:
             production_cycle_id: Unique ID for this adaptation run.
-            stage_number: Stage where warning occurred (1-4).
+            stage_number: Stage where warning occurred (use AdaptationStage enum).
             error_type: Warning type name.
             description: Human-readable warning description.
             content_element: The specific content that triggered the warning.

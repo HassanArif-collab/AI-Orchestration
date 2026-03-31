@@ -251,8 +251,10 @@ class RoundBasedProductionWorkflow:
             opening = await self._round_script_opening(research, idea, router)
 
             # Round 3 — Full script with score threshold
+            from packages.core.config import get_settings
+            settings = get_settings()
             full_script = await self._round_full_script(
-                research, opening, idea, router, target_pass_count=32
+                research, opening, idea, router, target_pass_count=settings.SCRIPT_TARGET_PASS_COUNT
             )
             if not full_script:
                 return None
@@ -649,7 +651,11 @@ If any rule fails, rewrite the opening fixing only what failed. Return same JSON
         return await router.complete_text(recheck_prompt, system="Return only valid JSON.")
 
     async def _round_full_script(self, research, opening, idea, router, target_pass_count=32):
-        """Round 3: Full script with up to 2 rewrites targeting 32/40 questions."""
+        """Round 3: Full script with up to 2 rewrites targeting configurable pass count.
+
+        Args:
+            target_pass_count: Minimum score entries needed (default from Settings.SCRIPT_TARGET_PASS_COUNT)
+        """
         import json
 
         # Retrieve cross-script learnings from Zep memory

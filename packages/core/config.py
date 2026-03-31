@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
     SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
     SCRIPT_MAX_ITERATIONS: int = 20
+    SCRIPT_TARGET_PASS_COUNT: int = 32      # Minimum score threshold entries for full script
 
     # ─── P2-04: Field Validators ───────────────────────────────────────────────
 
