@@ -123,7 +123,7 @@ class MasterOrchestrator:
             return False
         finally:
             self.db.release_lock(cycle_id)
-            return True
+        return True
 
     async def handle_escalation(self, cycle_id: str, error_type: str, severity: str, context: dict):
         """Escalation Handler wrapping."""
