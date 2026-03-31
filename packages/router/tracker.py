@@ -5,9 +5,9 @@ Context: Keeps a local record of how many tokens/requests each provider
 has handled today. Now also captures live rate limit headers from provider
 responses, giving accurate remaining quota data.
 
-Storage: packages/data/usage_tracker.db (SQLite)
-This is SEPARATE from freerouter/data/conversations.db which stores
-chat history. This file only stores API usage statistics.
+Storage: packages/data/pipeline.db (SQLite)
+Shares pipeline.db with baseline_scripts and source_videos tables.
+This file only stores API usage statistics (usage_log table).
 
 Live Rate Limit Headers (Phase 3):
   - Groq/OpenRouter: x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens
@@ -31,9 +31,9 @@ import sqlite3
 from datetime import datetime, date, timezone
 from pathlib import Path
 
-# Separate from freerouter/data/conversations.db
+# Consolidated into pipeline.db (shared with baseline_scripts, source_videos)
 _DB_DIR = Path(__file__).parent.parent / "data"
-_DB_PATH = _DB_DIR / "usage_tracker.db"
+_DB_PATH = _DB_DIR / "pipeline.db"
 
 NEAR_LIMIT_THRESHOLD = 0.80
 

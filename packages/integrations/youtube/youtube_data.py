@@ -15,13 +15,13 @@ Rate limits:
 """
 
 import asyncio
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 
+from packages.core.config import get_settings
 from packages.core.logger import get_logger
 
 log = get_logger(__name__)
@@ -74,7 +74,7 @@ class YouTubeDataClient:
     BASE_URL = "https://www.googleapis.com/youtube/v3"
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("YOUTUBE_API_KEY", "")
+        self.api_key = api_key or get_settings().YOUTUBE_API_KEY
         
         if not self.api_key:
             log.warning("youtube_api_key_not_set: API calls will fail")
@@ -333,7 +333,7 @@ class QuotaExceededError(YouTubeAPIError):
 
 async def fetch_trending_for_region(region: str = "PK", max_results: int = 50) -> list[TrendingVideo]:
     """Convenience function to fetch trending videos."""
-    api_key = os.getenv("YOUTUBE_API_KEY", "")
+    api_key = get_settings().YOUTUBE_API_KEY
     if not api_key:
         log.warning("youtube_api_key_not_configured")
         return []
@@ -344,7 +344,7 @@ async def fetch_trending_for_region(region: str = "PK", max_results: int = 50) -
 
 async def search_youtube(query: str, max_results: int = 25) -> list[YouTubeVideo]:
     """Convenience function to search YouTube."""
-    api_key = os.getenv("YOUTUBE_API_KEY", "")
+    api_key = get_settings().YOUTUBE_API_KEY
     if not api_key:
         log.warning("youtube_api_key_not_configured")
         return []

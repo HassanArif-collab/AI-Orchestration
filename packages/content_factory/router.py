@@ -13,7 +13,7 @@ Usage:
     refined_script = await router.run_experiment_loop(script)
 """
 
-import os
+from packages.core.config import get_settings
 from packages.core.logger import get_logger
 from packages.content_factory.topic_finder.models import TopicBrief
 from packages.content_factory.models import AdaptedScript, DualColumnEntry, SectionLabel
@@ -21,7 +21,7 @@ from packages.content_factory.evaluation.loop import ExperimentLoop
 
 logger = get_logger(__name__)
 
-DEV_MODE = os.getenv("PIPELINE_DEV_MODE", "false").lower() == "true"
+DEV_MODE = get_settings().PIPELINE_DEV_MODE
 
 
 class ContentCreationRouter:

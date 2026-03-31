@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from packages.core.config import get_settings
+from packages.core.json_utils import extract_json_array
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 from packages.router.web_search import WebSearchClient, SearchResult
@@ -592,9 +593,9 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
             )
 
             # Parse JSON array
-            match = re.search(r'\[.*?\]', response, re.DOTALL)
-            if match:
-                dimensions = json.loads(match.group(0))
+            arr_str = extract_json_array(response)
+            if arr_str:
+                dimensions = json.loads(arr_str)
                 if isinstance(dimensions, list):
                     return [str(d).strip() for d in dimensions if d]
 

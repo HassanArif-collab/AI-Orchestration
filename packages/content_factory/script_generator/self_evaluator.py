@@ -13,10 +13,10 @@ The evaluation covers:
 """
 
 import json
-import re
 from typing import Any
 
 from packages.core.logger import get_logger
+from packages.core.json_utils import extract_json_object
 from packages.router.client import RouterClient
 from .models import DualColumnScript, EvaluationResult, SelfEvaluationReport
 
@@ -299,9 +299,9 @@ Score 0.7 or above = passed. Be critical but constructive.
                 )
                 
                 # Parse response
-                match = re.search(r'\{.*\}', response, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
+                obj_str = extract_json_object(response)
+                if obj_str:
+                    data = json.loads(obj_str)
                     score = float(data.get("score", 0.0))
                     passed = data.get("passed", score >= 0.7)
                     feedback = data.get("feedback", "")

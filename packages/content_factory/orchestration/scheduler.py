@@ -5,7 +5,9 @@ Analytics Ingestions, and Learning Synthesis triggers.
 """
 
 import asyncio
+import sqlite3
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Callable
 from packages.core.logger import get_logger
 from packages.content_factory.orchestration.master import MasterOrchestrator
@@ -18,7 +20,83 @@ class Scheduler:
         self.master = master
         self.topic_db = TopicReservoirDB()
         self.jobs = []
+        self._load_job_state()
         
+    def _get_db_path(self) -> Path:
+        """Return absolute path to pipeline.db."""
+        return Path(__file__).resolve().parent.parent.parent.parent / "packages" / "data" / "pipeline.db"
+
+    def _persist_job_state(self):
+        """Save job execution timestamps to SQLite for crash recovery."""
+        try:
+            db_path = self._get_db_path()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS scheduler_state (
+                        job_name TEXT PRIMARY KEY,
+                        last_run TEXT,
+                        next_run TEXT,
+                        is_enabled INTEGER DEFAULT 1
+                    )
+                """)
+                conn.commit()
+                for job in self.jobs:
+                    last_run = job.get("last_run")
+                    next_run = job.get("next_run")
+                    conn.execute("""
+                        INSERT OR REPLACE INTO scheduler_state (job_name, last_run, next_run, is_enabled)
+                        VALUES (?, ?, ?, ?)
+                    """, (job["name"],
+                          last_run.isoformat() if last_run else None,
+                          next_run.isoformat() if next_run else None,
+                          1))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"scheduler_persist_failed: {e}")
+
+    def _load_job_state(self):
+        """Load job execution timestamps from SQLite on startup."""
+        try:
+            db_path = self._get_db_path()
+            if not db_path.exists():
+                return
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT job_name, last_run, next_run FROM scheduler_state").fetchall()
+                if not rows:
+                    return
+                loaded = {row["job_name"]: row for row in rows}
+                logger.info(f"scheduler_loading_state | {len(loaded)} jobs found in DB")
+        except Exception as e:
+            logger.debug(f"scheduler_load_state_failed: {e}")
+            loaded = {}
+            return
+
+        # Store loaded state to apply after boot_schedule registers the jobs
+        self._loaded_state = loaded
+
+    def _apply_loaded_state(self):
+        """Apply previously loaded state to registered jobs. Call after boot_schedule()."""
+        if not hasattr(self, '_loaded_state'):
+            return
+        for job in self.jobs:
+            state = self._loaded_state.get(job["name"])
+            if state:
+                if state["last_run"]:
+                    try:
+                        job["last_run"] = datetime.fromisoformat(state["last_run"])
+                    except (ValueError, TypeError):
+                        pass
+                if state["next_run"]:
+                    try:
+                        job["next_run"] = datetime.fromisoformat(state["next_run"])
+                    except (ValueError, TypeError):
+                        pass
+                logger.info(f"scheduler_state_restored | job={job['name']} last_run={job.get('last_run')} next_run={job.get('next_run')}")
+        # Clean up
+        self._loaded_state = {}
+
     def register_cron_job(self, name: str, interval_hours: int, action: Callable, failure_behavior: str = "retry"):
         """Register a cron job with the scheduler."""
         self.jobs.append({
@@ -100,6 +178,8 @@ class Scheduler:
         self.register_cron_job("Health_Check_Hourly", 1, self.run_health_check, "escalate")
         self.register_cron_job("Analytics_Sweep_Daily", 24, self.trigger_analytics_ingestion, "retry")
         self.register_cron_job("Maintenance_Weekly", 168, lambda: logger.info("Weekly Archive & Maintenance"), "escalate")
+        # Restore persisted timing state from previous runs
+        self._apply_loaded_state()
 
     async def simulate_tick(self):
         """Execute only jobs whose next_run has been reached.
@@ -130,12 +210,14 @@ class Scheduler:
                 # Update timing after successful execution
                 job["last_run"] = now
                 job["next_run"] = now + timedelta(hours=job.get("interval_hours", 24))
+                self._persist_job_state()
                 
             except Exception as e:
                 logger.error(f"cron_failure | job={job['name']} error={str(e)}")
                 # Still update timing to prevent retry storm
                 job["last_run"] = now
                 job["next_run"] = now + timedelta(hours=1)  # Retry after 1h on failure
+                self._persist_job_state()
                 
                 if job['failure_behavior'] == "escalate":
                     await self.master.handle_escalation("SYS", "cron_failure", "high", {"job": job['name']})

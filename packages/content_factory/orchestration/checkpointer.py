@@ -23,9 +23,11 @@ can break checkpoint writes.
 
 from __future__ import annotations
 
-import os
-import logging
 from typing import Optional
+
+import logging
+
+from packages.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +66,7 @@ async def get_checkpointer():
             "Please retry after a brief delay."
         )
     
-    db_url = os.getenv("SUPABASE_DB_URL")
+    db_url = get_settings().SUPABASE_DB_URL
     if not db_url:
         raise RuntimeError(
             "SUPABASE_DB_URL not set. "

@@ -100,6 +100,7 @@ class UpdatePipeline:
         self.master = master
         self.active_versions: dict[str, InstructionVersion] = {}
         self._pending_tasks: list = []
+        self.pre_update_scores: list[float] = []
 
     def _fire_escalation(self, **kwargs):
         """Bridge sync→async: queue escalation, log failures."""
@@ -191,32 +192,39 @@ class UpdatePipeline:
         return "narrow"
 
     def _run_regression_test(self, draft: InstructionVersion, genres: list[str]) -> bool:
-        """
-        Simulates scoring the last 5 completed cycles with the new draft instruction.
-        Special Rule: For Islamic History updates, Tonal Calibration must not decrease.
+        """Compare pre/post update evaluation scores from Supabase.
         
-        This is a VIRTUAL TEST — it doesn't actually re-run the pipeline,
-        but evaluates whether the proposed change would have helped
-        on past data.
+        Queries the last 10 binary evaluation scores and compares
+        the current average against the pre-update baseline.
         
         Args:
           draft: The proposed instruction version
           genres: List of genres this affects
         
         Returns:
-          True if regression test passes, False if it would make things worse
+          True if regression test passes (within 10 points), False if regression detected
         """
         logger.info(f"running_regression_protocol | target_agent={draft.agent_id}")
-        # Mocking passing all simulations
-        
+
         for g in genres:
             if g == "islamic_history" or g == "south_asian_history":
                 logger.info("regression_testing_tonal_calibration_flag")
-                # Specific tonal check mapping
-                pass
-                
-        # If simulation score < actual old score -> False
-        return True
+
+        try:
+            from packages.core.supabase_client import get_supabase_optional
+            sb = get_supabase_optional()
+            if sb and self.pre_update_scores:
+                result = sb.table("binary_evaluations").select("score") \
+                    .order("created_at", desc=True).limit(10).execute()
+                if result.data:
+                    post_avg = sum(r["score"] for r in result.data if r.get("score")) / len(result.data)
+                    pre_avg = sum(self.pre_update_scores) / len(self.pre_update_scores) if self.pre_update_scores else 0
+                    # Regression if post-update average dropped more than 10 points
+                    logger.info(f"regression_comparison | pre_avg={pre_avg:.1f} post_avg={post_avg:.1f}")
+                    return (pre_avg - post_avg) < 10
+        except Exception as e:
+            logger.warning(f"regression_test_failed: {e}")
+        return True  # Fail open — don't block update if test can't run
 
     def _route_approval(self, draft: InstructionVersion, insight: Insight):
         """Routing to Human Review Interface based on Matrix.
@@ -305,48 +313,91 @@ class UpdatePipeline:
         Args:
           draft: The instruction version to activate
         """
-        # Capture pre-update scores if not already set
-        if not draft.pre_update_scores:
+        # Capture pre-update scores for regression monitoring
+        try:
+            from packages.core.supabase_client import get_supabase_optional
+            sb = get_supabase_optional()
+            if sb:
+                result = sb.table("binary_evaluations").select("score") \
+                    .order("created_at", desc=True).limit(10).execute()
+                self.pre_update_scores = [r["score"] for r in (result.data or []) if r.get("score") is not None]
+                if self.pre_update_scores:
+                    draft.pre_update_scores = list(self.pre_update_scores)
+                logger.info(f"pre_update_scores_captured | count={len(self.pre_update_scores)}")
+        except Exception as e:
+            logger.debug(f"pre_update_score_capture_failed: {e}")
+
+        # Fallback: copy from draft if Supabase not available
+        if not draft.pre_update_scores and draft.post_update_scores:
             draft.pre_update_scores = list(draft.post_update_scores)
             draft.post_update_scores = []
         draft.active_date = datetime.now(timezone.utc)
         self.active_versions[draft.agent_id] = draft
         # This will be where we invoke Hermes memory skills update component
         
-    def check_rollback_monitor(self, agent_id: str, new_score: float):
-        """Monitors post-update actual cycles for regressions. Three drops -> Rollback.
+    def check_rollback_monitor(self, agent_id: str, new_score: float) -> bool:
+        """Check if instruction update caused regression using live Supabase data.
         
-        After an instruction is activated, this method is called
-        after each production cycle to check if scores are improving
-        or getting worse.
-        
-        ROLLBACK TRIGGER:
-          3+ post-update cycles with average LOWER than pre-update average
-          → Auto-rollback to previous instruction
-          → Notify SynthesisEngine that insight was incorrect
+        Queries current binary evaluation scores from Supabase and compares
+        against pre-update baseline. If the current average is more than 10
+        percentage points lower than pre-update, triggers rollback.
         
         Args:
           agent_id: The agent whose instruction to check
           new_score: The score from the most recent cycle
+        
+        Returns:
+          True if rollback was triggered, False otherwise
         """
         version = self.active_versions.get(agent_id)
         if not version or version.is_rollback:
-            return
-            
-        # Skip if we don't have baseline data
-        if not version.pre_update_scores:
+            return False
+
+        # Append the new score to version tracking
+        version.post_update_scores.append(new_score)
+
+        # Use pipeline-level pre_update_scores (captured from Supabase) or version-level
+        baseline = self.pre_update_scores if self.pre_update_scores else version.pre_update_scores
+        if not baseline:
             logger.warning(
                 f"rollback_monitor_skipped: no pre_update_scores for agent={agent_id}"
             )
-            return
+            return False
 
-        version.post_update_scores.append(new_score)
-        if len(version.post_update_scores) >= 3:
-            avg_post = sum(version.post_update_scores) / len(version.post_update_scores)
-            avg_pre = sum(version.pre_update_scores) / len(version.pre_update_scores)
-            if avg_post < avg_pre:
-                logger.warning(f"rollback_triggered | agent={agent_id} pre={avg_pre} post={avg_post}")
+        # Wait for at least 3 data points before triggering
+        if len(version.post_update_scores) < 3:
+            return False
+
+        try:
+            from packages.core.supabase_client import get_supabase_optional
+            sb = get_supabase_optional()
+            if not sb:
+                # Fallback: use accumulated post_update_scores on the version
+                avg_post = sum(version.post_update_scores) / len(version.post_update_scores)
+                avg_pre = sum(baseline) / len(baseline)
+                if (avg_pre - avg_post) > 10:
+                    logger.warning(f"rollback_triggered | agent={agent_id} pre={avg_pre:.1f} post={avg_post:.1f}")
+                    self._rollback(agent_id)
+                    return True
+                return False
+
+            # Query live evaluation scores from Supabase
+            result = sb.table("binary_evaluations").select("score") \
+                .order("created_at", desc=True).limit(10).execute()
+            if not result.data:
+                return False
+
+            post_avg = sum(r["score"] for r in result.data if r.get("score") is not None) / max(len(result.data), 1)
+            pre_avg = sum(baseline) / len(baseline)
+
+            if (pre_avg - post_avg) > 10:  # 10 point drop = regression
+                logger.warning(f"regression_detected: pre={pre_avg:.1f} post={post_avg:.1f}")
                 self._rollback(agent_id)
+                return True
+            return False
+        except Exception as e:
+            logger.warning(f"rollback_monitor_check_failed: {e}")
+            return False
 
     def _rollback(self, agent_id: str):
         """Revert to the previous instruction version.

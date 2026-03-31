@@ -16,10 +16,10 @@ Johnny Harris style characteristics:
 """
 
 import json
-import re
 from typing import Optional
 
 from packages.core.logger import get_logger
+from packages.core.json_utils import extract_json_object
 from packages.router.client import RouterClient
 from packages.content_factory.production.models import ResearchDossier
 from .models import DualColumnScript, DualColumnEntry, SectionLabel, VisualType
@@ -202,11 +202,11 @@ Output strictly in JSON format:
                 )
                 
                 # Parse response
-                match = re.search(r'\{.*\}', response, re.DOTALL)
-                if not match:
+                obj_str = extract_json_object(response)
+                if not obj_str:
                     raise ValueError("Could not extract JSON from response")
                 
-                data = json.loads(match.group(0))
+                data = json.loads(obj_str)
                 
                 # Build script
                 entries = []

@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Optional
 
 from packages.core.logger import get_logger
+from packages.core.json_utils import extract_json_object
 from packages.router.client import RouterClient
 
 log = get_logger(__name__)
@@ -343,7 +344,6 @@ Score 0.67-1.0 = High complexity
         
         try:
             import json
-            import re
             
             async with RouterClient() as router:
                 response = await router.complete_text(
@@ -352,9 +352,9 @@ Score 0.67-1.0 = High complexity
                     max_tokens=300
                 )
                 
-                match = re.search(r'\{.*\}', response, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
+                obj_str = extract_json_object(response)
+                if obj_str:
+                    data = json.loads(obj_str)
                     return ComplexityFactor(
                         name=factor_name,
                         weight=factor_config["weight"],

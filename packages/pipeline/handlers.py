@@ -18,10 +18,10 @@ REFACTORED:
 
 from typing import Any, Callable
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from packages.core.json_utils import extract_json_object
 from packages.pipeline.stages import Stage
 from packages.pipeline.state import PipelineRun
 from packages.pipeline.research_cache import ResearchCache
@@ -362,8 +362,8 @@ Return ONLY valid JSON."""
             raw = await client.complete_text(
                 prompt, system="Return only valid JSON. No markdown blocks."
             )
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        return json.loads(match.group(0)) if match else {"titles": [title]}
+        obj_str = extract_json_object(raw)
+        return json.loads(obj_str) if obj_str else {"titles": [title]}
     except Exception as e:
         logger.error(f"seo_handler_failed: {e}")
         return {"titles": [title], "description": "", "tags": [], "thumbnail_concepts": []}

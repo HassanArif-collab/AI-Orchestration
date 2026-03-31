@@ -255,8 +255,20 @@ class HermesMemoryAdapter:
             loop = asyncio.get_running_loop()
             loop.create_task(self._persist_skills())
         except RuntimeError:
-            # No event loop available — persist is deferred to next async context
-            logger.debug("persist_skills_deferred_no_event_loop")
+            # No event loop running — use sync Supabase client
+            try:
+                from packages.core.supabase_client import get_supabase_optional
+                sb = get_supabase_optional()
+                if sb:
+                    skills_data = {k: v.model_dump() if hasattr(v, 'model_dump') else v
+                                   for k, v in self.skills.items()}
+                    sb.table("hermes_memory_state").upsert(
+                        {"key": "skills", "value": skills_data, "updated_at": datetime.now(timezone.utc).isoformat()},
+                        on_conflict="key"
+                    ).execute()
+                    logger.info("persist_skills_sync_fallback_success")
+            except Exception as e:
+                logger.warning(f"persist_skills_sync_fallback_failed: {e}")
         # Hermes API call would happen here to refresh its runtime contextual scope
 
     def update_audience_memory(self, ingestion_data: dict[str, Any]):
@@ -285,8 +297,19 @@ class HermesMemoryAdapter:
             loop = asyncio.get_running_loop()
             loop.create_task(self._persist_audience_memory())
         except RuntimeError:
-            # No event loop available — persist is deferred to next async context
-            logger.debug("persist_audience_memory_deferred_no_event_loop")
+            # No event loop running — use sync Supabase client
+            try:
+                from packages.core.supabase_client import get_supabase_optional
+                sb = get_supabase_optional()
+                if sb:
+                    data = self.audience_memory.model_dump() if hasattr(self.audience_memory, 'model_dump') else {}
+                    sb.table("hermes_memory_state").upsert(
+                        {"key": "audience_memory", "value": data, "updated_at": datetime.now(timezone.utc).isoformat()},
+                        on_conflict="key"
+                    ).execute()
+                    logger.info("persist_audience_memory_sync_fallback_success")
+            except Exception as e:
+                logger.warning(f"persist_audience_memory_sync_fallback_failed: {e}")
 
     async def update_audience_memory_async(self, ingestion_data: dict[str, Any]):
         """Async-safe version of update_audience_memory that persists immediately.

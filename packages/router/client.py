@@ -40,6 +40,7 @@ from urllib.parse import urlparse
 import httpx
 import requests
 
+from packages.core.circuit_breaker import CircuitBreaker
 from packages.core.config import get_settings
 from packages.core.errors import LLMClientError, RateLimitError
 from packages.core.logger import get_logger
@@ -208,6 +209,13 @@ class RouterClient:
     # Class-level cached AsyncOpenAI client for structured completions
     _shared_openai_client: Optional[Any] = None
     _shared_openai_base_url: Optional[str] = None
+
+    # Class-level circuit breaker to prevent cascading failures
+    _circuit_breaker = CircuitBreaker(
+        name="RouterClient",
+        failure_threshold=5,
+        recovery_timeout=30,
+    )
 
     @classmethod
     def _get_shared_client(cls, base_url: str, timeout: float = 90.0) -> httpx.AsyncClient:
@@ -390,6 +398,10 @@ class RouterClient:
         If a specific model returns 503, automatically retries with model="auto"
         so FreeRouter's fallback chain kicks in.
         """
+        # Circuit breaker check — reject immediately if OPEN
+        if not self._circuit_breaker.allow_request():
+            raise LLMClientError("Circuit breaker is OPEN for RouterClient")
+
         body = {
             "model": model,
             "messages": messages,
@@ -450,6 +462,8 @@ class RouterClient:
                     # Never crash the pipeline because tracking failed
                     log.debug(f"usage_tracking_failed_non_blocking: {tracker_error}")
 
+                self._circuit_breaker.record_success()
+
                 log.info(
                     "llm_call_ok",
                     provider=result["provider"],
@@ -462,21 +476,69 @@ class RouterClient:
 
             except httpx.HTTPStatusError as e:
                 last_error = e
+                self._circuit_breaker.record_failure()
                 if attempt < retries - 1:
                     wait_time = (2**attempt) + 1
                     log.warning(f"http_error_{e.response.status_code}_retrying_in_{wait_time}s")
                     await asyncio.sleep(wait_time)
                 continue
-            except httpx.ConnectError as e:
-                raise LLMClientError(
-                    f"Cannot connect to FreeRouter at {self.base_url}. "
-                    "Start it with: python -m freerouter proxy"
-                ) from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                last_error = e
+                self._circuit_breaker.record_failure()
+                if attempt < retries - 1:
+                    wait_time = (2**attempt) + 1
+                    log.warning(f"connection_or_timeout_error_retrying_in_{wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                continue
             except Exception as e:
                 last_error = e
                 if attempt < retries - 1:
                     await asyncio.sleep(1)
                 continue
+
+        # ─── Fallback Router URL ─────────────────────────────────────────────
+        fallback_url = get_settings().FALLBACK_ROUTER_URL
+        if fallback_url:
+            log.warning(
+                "primary_router_failed_trying_fallback",
+                fallback_url=fallback_url,
+                last_error=str(last_error),
+            )
+            try:
+                async with httpx.AsyncClient(
+                    base_url=fallback_url.rstrip("/"),
+                    timeout=httpx.Timeout(self.timeout, connect=10.0),
+                ) as fallback_client:
+                    fallback_resp = await fallback_client.post(
+                        "/v1/chat/completions", json=body,
+                    )
+                    fallback_resp.raise_for_status()
+                    fallback_data = fallback_resp.json()
+                    self._circuit_breaker.record_success()
+                    log.info(
+                        "llm_call_ok_via_fallback",
+                        fallback_url=fallback_url,
+                    )
+                    return {
+                        "content": fallback_data["choices"][0]["message"]["content"],
+                        "model": fallback_resp.headers.get("x-freerouter-model", body["model"]),
+                        "provider": fallback_resp.headers.get("x-freerouter-provider", "fallback"),
+                        "usage": fallback_data.get("usage", {}),
+                        "limits": _parse_provider_limits(
+                            fallback_resp.headers,
+                            fallback_resp.headers.get("x-freerouter-provider", "fallback"),
+                        ),
+                    }
+            except Exception as fallback_error:
+                log.error(
+                    "fallback_router_also_failed",
+                    fallback_url=fallback_url,
+                    error=str(fallback_error),
+                )
+                raise LLMClientError(
+                    f"LLM call failed after {retries} attempts on primary, and fallback "
+                    f"router also failed: {fallback_error}"
+                ) from fallback_error
 
         raise LLMClientError(f"LLM call failed after {retries} attempts: {last_error}")
 

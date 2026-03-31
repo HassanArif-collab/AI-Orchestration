@@ -49,11 +49,14 @@ class Settings(BaseSettings):
     FREEROUTER_API_KEY: str = "not-needed"
     # Whether to perform startup health check (set to False for lazy initialization)
     FREEROUTER_STARTUP_CHECK: bool = True
+    # Fallback router URL used when primary FreeRouter is unreachable after all retries
+    FALLBACK_ROUTER_URL: str = ""
 
     # ─── Supabase (V2 Storage Backend) ────────────────────────────────────────
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_DB_URL: str = ""  # Direct PostgreSQL connection string (session mode, port 5432)
 
     # GetZep Cloud — agent memory
     ZEP_API_KEY: str = ""
@@ -68,9 +71,17 @@ class Settings(BaseSettings):
     ASSET_CREATION_ENABLED: bool = True
     # Set to false to skip publishing (Notion pages, YouTube upload prep)
     PUBLISH_ENABLED: bool = True
+    # Set to true to use mock data instead of real pipeline execution
+    PIPELINE_DEV_MODE: bool = False
+
+    # ─── LLM Model Selection ──────────────────────────────────────────────
+    CHAT_MODEL: str = "openrouter/google/gemini-2.0-flash-001"
 
     # External integrations
     YOUTUBE_API_KEY: str = ""
+    YOUTUBE_CLIENT_ID: str = ""
+    YOUTUBE_CLIENT_SECRET: str = ""
+    YOUTUBE_REFRESH_TOKEN: str = ""
     NOTION_API_KEY: str = ""
     NOTION_DATABASE_ID: str = ""  # Database ID for script pages
     GITHUB_TOKEN: str = ""

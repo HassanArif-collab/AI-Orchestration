@@ -12,6 +12,7 @@ A real-time visibility module that acts as a dashboard aggregating:
 import json
 from typing import Any
 from packages.core.logger import get_logger
+from packages.core.supabase_client import get_supabase_optional
 from packages.content_factory.orchestration.master import MasterOrchestrator
 from pydantic import BaseModel
 import sqlite3
@@ -74,17 +75,34 @@ class HealthMonitor:
 
             hard_failures = 0
             try:
-                if self.pipeline_db.exists():
-                    conn = sqlite3.connect(self.pipeline_db)
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM pipeline_runs WHERE cycle_id = ? AND status = 'error'",
-                        (a.cycle_id,)
+                supabase = get_supabase_optional()
+                if supabase is not None:
+                    # Get pipeline_run_id for this cycle from production_cycles
+                    cycle_data = (
+                        supabase.table("production_cycles")
+                        .select("pipeline_run_id")
+                        .eq("cycle_id", a.cycle_id)
+                        .execute()
                     )
-                    hard_failures = cursor.fetchone()[0]
-                    conn.close()
+                    if cycle_data.data:
+                        for row in cycle_data.data:
+                            run_id = row.get("pipeline_run_id")
+                            if run_id:
+                                run_data = (
+                                    supabase.table("pipeline_runs")
+                                    .select("status")
+                                    .eq("run_id", run_id)
+                                    .execute()
+                                )
+                                if run_data.data:
+                                    hard_failures = sum(
+                                        1 for r in run_data.data
+                                        if r.get("status") == "error"
+                                    )
+                else:
+                    hard_failures = -1  # Graceful fallback: Supabase not configured
             except Exception:
-                pass
+                hard_failures = -1
 
             res.append({
                 "cycle_id": a.cycle_id,
@@ -97,35 +115,28 @@ class HealthMonitor:
         return res
 
     def _get_reservoir_status(self) -> dict[str, Any]:
-        """Queries Topic Reservoir from Phase 5."""
-        # Using sqlite directly to fetch cross-phase data
+        """Queries Topic Reservoir from Supabase topic_briefs."""
         status = {"total": 0, "tier1": 0, "tier2": 0, "alert_empty": False}
-        if self.pipeline_db.exists():
-            try:
-                with sqlite3.connect(self.pipeline_db) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    # Check table exists before query
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='topic_reservoir'")
-                    if cursor.fetchone():
-                        cursor.execute("SELECT score_breakdown FROM topic_reservoir")
-                        rows = cursor.fetchall()
-                        status["total"] = len(rows)
-                        for r in rows:
-                            try:
-                                breakdown = json.loads(r['score_breakdown'])
-                                # Calculate total score from breakdown (sum of all boolean values)
-                                total_score = sum(1 for v in breakdown.values() if v)
-                                if total_score >= 12:
-                                    status["tier1"] += 1
-                                else:
-                                    status["tier2"] += 1
-                            except (json.JSONDecodeError, TypeError):
-                                # If breakdown is invalid, count as tier2
-                                status["tier2"] += 1
-            except Exception as e:
-                logger.error(f"Failed loading reservoir status: {e}")
-                
+        try:
+            supabase = get_supabase_optional()
+            if supabase is not None:
+                result = (
+                    supabase.table("topic_briefs")
+                    .select("viability_score_breakdown")
+                    .eq("status", "reservoir")
+                    .execute()
+                )
+                if result.data:
+                    status["total"] = len(result.data)
+                    for row in result.data:
+                        breakdown = row.get("viability_score_breakdown") or {}
+                        total_score = sum(1 for v in breakdown.values() if v)
+                        if total_score >= 12:
+                            status["tier1"] += 1
+                        else:
+                            status["tier2"] += 1
+        except Exception as e:
+            logger.error(f"Failed loading reservoir status from Supabase: {e}")
         status["alert_empty"] = status["tier1"] < 3
         return status
 
@@ -206,12 +217,15 @@ class HealthMonitor:
 
         error_count = -1
         try:
-            conn = sqlite3.connect(self.pipeline_db)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM pipeline_runs WHERE status = 'error'")
-            row = cursor.fetchone()
-            error_count = row[0] if row else 0
-            conn.close()
+            supabase = get_supabase_optional()
+            if supabase is not None:
+                result = (
+                    supabase.table("pipeline_runs")
+                    .select("run_id", count="exact")
+                    .eq("status", "error")
+                    .execute()
+                )
+                error_count = result.count if result.count is not None else 0
         except Exception:
             error_count = -1
 

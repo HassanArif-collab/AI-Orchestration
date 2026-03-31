@@ -119,6 +119,7 @@ class LearningLogger:
         self.zep_client = AsyncZepMemoryClient()
         self.learning_user_id = get_settings().ZEP_LEARNING_USER_ID
         self.zep_session_id = f"{self.learning_user_id}_session"
+        self._pending_zep_entries: list[tuple[str, dict]] = []  # queued when no event loop available
 
     def log_experiment(self, entry: LearningLogEntry) -> None:
         """Append an experiment record to the log.
@@ -156,10 +157,17 @@ class LearningLogger:
         # Try async Zep write if event loop is available
         try:
             loop = asyncio.get_running_loop()
-            asyncio.create_task(self._write_to_zep(content, metadata))
+            # Flush any previously queued pending entries along with current
+            pending = list(self._pending_zep_entries)
+            self._pending_zep_entries.clear()
+            if pending:
+                asyncio.create_task(self._write_all_to_zep(pending + [(content, metadata)]))
+            else:
+                asyncio.create_task(self._write_to_zep(content, metadata))
         except RuntimeError:
-            # No running event loop — skip Zep write (acceptable degradation)
-            logger.debug("zep_write_skipped_no_event_loop")
+            # No running event loop — queue for later async submission
+            self._pending_zep_entries.append((content, metadata))
+            logger.debug(f"zep_write_queued_pending_total_{len(self._pending_zep_entries)}")
 
         if entry.beat_baseline:
             logger.info(f"experiment_success: Zone {entry.mutation_zone} improved score from {entry.baseline_score:.1f}% to {entry.challenger_score:.1f}%")
@@ -172,6 +180,27 @@ class LearningLogger:
             await self.zep_client.add_facts(session_id=self.zep_session_id, facts=[{"fact": content, **metadata}])
         except Exception as e:
             logger.debug(f"zep_write_failed: {e}")
+
+    async def _write_all_to_zep(self, entries: list[tuple[str, dict]]) -> None:
+        """Write multiple queued entries to Zep in one call."""
+        facts = [{"fact": content, **metadata} for content, metadata in entries]
+        try:
+            await self.zep_client.add_facts(session_id=self.zep_session_id, facts=facts)
+        except Exception as e:
+            logger.debug(f"zep_batch_write_failed: {e}")
+
+    async def flush_pending_zep_entries(self) -> None:
+        """Submit any Zep entries that were queued when no event loop was available.
+        
+        Call this from an async context (e.g., during startup or periodic
+        maintenance) to drain the pending Zep queue.
+        """
+        if not self._pending_zep_entries:
+            return
+        entries = list(self._pending_zep_entries)
+        self._pending_zep_entries.clear()
+        logger.info(f"flushing_{len(entries)}_pending_zep_entries")
+        await self._write_all_to_zep(entries)
 
     def read_logs(self) -> list[LearningLogEntry]:
         """Read all experiment logs from local file.
