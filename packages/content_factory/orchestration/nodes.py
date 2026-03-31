@@ -524,23 +524,23 @@ Output ONLY the script narration text. Keep it conversational, active voice, and
             "success"
         )
         
-    # C7 FIX: When human rejects, reset iteration_count so revised draft
-    # gets a fresh mutation budget. Track revision_count separately.
-    if human_feedback:
-        return {
-            "current_draft": draft,
-            "iteration_count": 0,  # Reset for fresh mutation budget
-            "revision_count": state.get("revision_count", 0) + 1,  # Track revision cycles
-            "pipeline_status": "drafting",
-            "human_feedback": None,  # Clear after using
-        }
-    else:
-        return {
-            "current_draft": draft,
-            "iteration_count": iteration,
-            "pipeline_status": "drafting",
-            "human_feedback": None,  # Clear after using
-        }
+        # C7 FIX: When human rejects, reset iteration_count so revised draft
+        # gets a fresh mutation budget. Track revision_count separately.
+        if human_feedback:
+            return {
+                "current_draft": draft,
+                "iteration_count": 0,  # Reset for fresh mutation budget
+                "revision_count": state.get("revision_count", 0) + 1,  # Track revision cycles
+                "pipeline_status": "drafting",
+                "human_feedback": None,  # Clear after using
+            }
+        else:
+            return {
+                "current_draft": draft,
+                "iteration_count": iteration,
+                "pipeline_status": "drafting",
+                "human_feedback": None,  # Clear after using
+            }
         
     except Exception as e:
         logger.error(f"draft_failed: {e}")
