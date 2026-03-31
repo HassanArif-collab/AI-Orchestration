@@ -13,7 +13,6 @@ Output: AdaptedScript with refined Pakistani prose
 """
 
 import json
-import re
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 from packages.content_factory.models import AdaptedScript, DualColumnEntry
@@ -67,12 +66,13 @@ Return a JSON array with the same structure, prose rewritten:
             model="auto"
         )
 
-        json_match = re.search(r'\[.*\]', response, re.DOTALL)
-        if not json_match:
+        from packages.core.json_utils import extract_json_array
+        json_str = extract_json_array(response)
+        if not json_str:
             logger.warning(f"stage5_no_json_found: {cycle_id}")
             return script  # Return original if refinement fails
 
-        data = json.loads(json_match.group(0))
+        data = json.loads(json_str)
         refined_entries = []
         for i, item in enumerate(data):
             try:

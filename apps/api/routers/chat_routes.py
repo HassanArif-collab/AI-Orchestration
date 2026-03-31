@@ -184,8 +184,8 @@ async def get_chat_history(session_id: str):
                     })
 
         return {"session_id": session_id, "messages": history}
-    except Exception:
-        return {"session_id": session_id, "messages": []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Keep the old FreeRouter-direct endpoints for backward compatibility
@@ -198,7 +198,7 @@ async def get_models():
         models = await get_router().list_models()
         return {"models": models}
     except Exception as e:
-        return {"models": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/conversations")
@@ -208,4 +208,4 @@ async def list_conversations():
         from freerouter.storage import list_conversations as _list
         return {"conversations": _list()}
     except Exception as e:
-        return {"conversations": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))

@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path, Body
 from pydantic import BaseModel
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
@@ -71,8 +71,11 @@ STAGE_DEFINITIONS = {
 
 
 def _run_to_dict(run) -> dict:
-    """Convert PipelineRun to API response dict."""
-    d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
+    """Convert PipelineRun or run dict to API response dict."""
+    if isinstance(run, dict):
+        d = run
+    else:
+        d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
     # Build stages dict from stage_status + stage_outputs
     stages = {}
     for stage_name in STAGE_DEFINITIONS["execution_order"]:
@@ -227,23 +230,21 @@ async def get_stage_definitions():
 MAX_LIST_LIMIT = 100
 
 @router.get("/runs")
-async def list_runs(limit: int = 20):
+async def list_runs(limit: int = Query(default=20, ge=1, le=MAX_LIST_LIMIT)):
     """List all pipeline runs, newest first."""
-    if limit < 1 or limit > MAX_LIST_LIMIT:
-        limit = 20
     store = get_run_store()
     if not store:
         return [{"run_id": "demo-001", "current_stage": "human_topic_approval",
                  "status": "waiting_human", "video_title": "Demo Run (pipeline package loading)",
                  "updated_at": datetime.now(timezone.utc).isoformat(), "stages": {}}]
     try:
-        summaries = store.list_runs(limit=limit)
+        # 3.7 FIX: Use include_details=True to fetch all columns in one query,
+        # avoiding N+1 per-run load() calls
+        runs = store.list_runs(limit=limit, include_details=True)
         result = []
-        for summary in summaries:
+        for run_data in runs:
             try:
-                run = store.load(summary["run_id"])
-                if run:
-                    result.append(_run_to_dict(run))
+                result.append(_run_to_dict(run_data))
             except Exception:
                 pass
         return result
@@ -353,8 +354,15 @@ async def request_feedback(run_id: str, req: FeedbackRequest, bg: BackgroundTask
 
 
 @router.get("/runs/{run_id}/output/{stage}")
-async def get_stage_output(run_id: str, stage: str):
+async def get_stage_output(
+    run_id: str,
+    stage: str = Path(..., pattern=r'^[a-zA-Z0-9_]+$'),
+):
     """Get the raw output of a specific pipeline stage."""
+    # 3.4 FIX: Validate stage against known definitions
+    valid_stages = [s["name"] for s in STAGE_DEFINITIONS["stages"]]
+    if stage not in valid_stages:
+        raise HTTPException(400, f"Invalid stage '{stage}'. Must be one of: {valid_stages}")
     store = get_run_store()
     if not store:
         raise HTTPException(503, "Pipeline package not available")
@@ -497,10 +505,20 @@ async def _init_graphs():
         logging.getLogger(__name__).warning(f"langgraph_init_failed: {e}")
 
 
+class ResumeDecision(BaseModel):
+    """Pydantic model for LangGraph pipeline resume decision.
+
+    Replaces untyped dict with validated fields to prevent injection of
+    arbitrary keys into the LangGraph state machine.
+    """
+    approved: bool
+    feedback: str = ""
+
+
 @router.post("/discover")
 async def discover_topics(
     background_tasks: BackgroundTasks,
-    seed_hint: str = None,
+    seed_hint: str = Query(default=None, max_length=200),
 ):
     """
     Kick off the LangGraph discovery graph asynchronously.
@@ -602,8 +620,8 @@ async def produce_content(
 @router.post("/langgraph/resume/{card_id}")
 async def resume_langgraph_pipeline(
     card_id: str,
-    decision: dict,
-    background_tasks: BackgroundTasks,
+    decision: ResumeDecision = Body(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     """
     Resume the LangGraph production pipeline after human review.

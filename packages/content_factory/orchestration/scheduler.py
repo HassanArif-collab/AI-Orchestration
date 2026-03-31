@@ -33,11 +33,25 @@ class Scheduler:
 
     def run_topic_finder_cycle(self):
         """Interval: Every 24 hours. Scans signals, scores topics, saves to reservoir."""
-        logger.info("Executing Topic Finder Cycle (Signal Detection -> Scoring -> Maintenance)")
+        try:
+            logger.info("topic_finder_cycle_starting")
+            from packages.content_factory.topic_finder.finder import TopicFinderAgent
+            # This is a sync stub — actual implementation needs async context
+            # TODO: Move to async and call TopicFinderAgent.scan() with Exa search
+            logger.info("topic_finder_cycle_completed: stub")
+        except Exception as e:
+            logger.error(f"topic_finder_cycle_failed: {e}")
         
     def run_learning_synthesis(self):
         """Interval: Weekly (Every 168 hours)."""
-        logger.info("Executing Learning Synthesis Engine (All phases log aggregation)")
+        try:
+            logger.info("learning_synthesis_starting")
+            from packages.content_factory.orchestration.synthesis import SynthesisEngine
+            # TODO: Need async context for SynthesisEngine.execute_synthesis_cycle()
+            # For now, log that synthesis is needed
+            logger.info("learning_synthesis_cycle_completed: stub — async implementation pending")
+        except Exception as e:
+            logger.error(f"learning_synthesis_failed: {e}")
         
     async def run_health_check(self):
         """Now async."""
@@ -69,7 +83,14 @@ class Scheduler:
 
     def trigger_analytics_ingestion(self):
         """Daily sweep of Analytics API pipelines."""
-        logger.info("Executing YouTube Analytics Ingestion")
+        try:
+            logger.info("analytics_ingestion_starting")
+            from packages.integrations.youtube.analytics import YouTubeAnalytics
+            analytics = YouTubeAnalytics()
+            # TODO: Call analytics.fetch_channel_stats() and save to video_performance table
+            logger.info("analytics_ingestion_completed: stub — async implementation pending")
+        except Exception as e:
+            logger.error(f"analytics_ingestion_failed: {e}")
 
     def boot_schedule(self):
         """Initializes all Phase 7 prescribed cron definitions."""

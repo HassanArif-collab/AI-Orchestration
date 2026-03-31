@@ -34,7 +34,7 @@ import asyncio
 import ipaddress
 import re
 from datetime import datetime, timezone
-from typing import Any, Type, TypeVar
+from typing import Any, Optional, Type, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -188,16 +188,52 @@ def validate_health_check_url(url: str, allowed_hosts: set[str] | None = None) -
 
 
 class RouterClient:
-    """
-    Async HTTP client for FreeRouter proxy.
+    """Client for the FreeRouter LLM proxy with connection pooling.
+
     Use as an async context manager or call close() when done.
 
     Features:
+        - Shared class-level HTTP client with connection pooling
         - Startup health check to ensure FreeRouter is running
         - Async health_check() method for monitoring
         - Automatic retry with exponential backoff
         - Fallback to "auto" model on 503 errors
+        - Cached AsyncOpenAI client for structured completions
     """
+
+    # Class-level shared HTTP client for connection pooling
+    _shared_client: Optional[httpx.AsyncClient] = None
+    _shared_client_refcount: int = 0
+
+    # Class-level cached AsyncOpenAI client for structured completions
+    _shared_openai_client: Optional[Any] = None
+    _shared_openai_base_url: Optional[str] = None
+
+    @classmethod
+    def _get_shared_client(cls, base_url: str, timeout: float = 90.0) -> httpx.AsyncClient:
+        """Get or create the shared HTTP client with connection pooling."""
+        if cls._shared_client is None or cls._shared_client.is_closed:
+            cls._shared_client = httpx.AsyncClient(
+                base_url=base_url,
+                timeout=httpx.Timeout(timeout, connect=10.0),
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=30.0,
+                ),
+            )
+            cls._shared_client_refcount = 0
+        cls._shared_client_refcount += 1
+        return cls._shared_client
+
+    @classmethod
+    async def _release_shared_client(cls):
+        """Decrement reference count; close when last user releases."""
+        cls._shared_client_refcount -= 1
+        if cls._shared_client_refcount <= 0 and cls._shared_client is not None:
+            await cls._shared_client.aclose()
+            cls._shared_client = None
+            cls._shared_client_refcount = 0
 
     def __init__(
         self,
@@ -222,7 +258,7 @@ class RouterClient:
         self._healthy: bool | None = None  # None = unchecked, True/False = checked
         self._startup_check_enabled = startup_check and settings.FREEROUTER_STARTUP_CHECK
 
-        self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        self._http = self._get_shared_client(self.base_url, timeout)
 
     async def _startup_health_check(self) -> None:
         """
@@ -241,8 +277,7 @@ class RouterClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/health")
+            response = await self._http.get("/health")
             if response.status_code == 200:
                 self._healthy = True
                 log.info("freerouter_startup_check_passed", url=self.base_url)
@@ -270,12 +305,11 @@ class RouterClient:
         """
         start = datetime.now(timezone.utc)
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/health")
-                if response.status_code == 200:
-                    latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
-                    self._healthy = True
-                    return {"healthy": True, "latency_ms": latency}
+            response = await self._http.get("/health")
+            if response.status_code == 200:
+                latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
+                self._healthy = True
+                return {"healthy": True, "latency_ms": latency}
         except Exception as e:
             log.debug(f"health_check_failed: {e}")
 
@@ -292,7 +326,7 @@ class RouterClient:
         return self
 
     async def __aexit__(self, *_: Any) -> None:
-        await self.close()
+        await self._release_shared_client()
 
     # P2-06: Sync context manager support
     def __enter__(self) -> RouterClient:
@@ -321,19 +355,19 @@ class RouterClient:
                     "Consider using async with RouterClient() instead"
                 )
                 # Create a task to close later
-                loop.create_task(self._http.aclose())
+                loop.create_task(self.close())
             else:
                 # No running loop, we can close synchronously
-                loop.run_until_complete(self._http.aclose())
+                loop.run_until_complete(self.close())
         except RuntimeError:
             # No event loop exists - create one to close
-            asyncio.run(self._http.aclose())
+            asyncio.run(self.close())
         except Exception as e:
             log.debug(f"context_manager_close_error: {e}")
 
     async def close(self) -> None:
-        """Close the HTTP client connection."""
-        await self._http.aclose()
+        """Release the shared HTTP client (closes when last user releases)."""
+        await self._release_shared_client()
 
     async def complete(
         self,
@@ -499,11 +533,17 @@ class RouterClient:
         import instructor
         from openai import AsyncOpenAI
 
-        openai_client = AsyncOpenAI(
-            base_url=f"{self.base_url}/v1",
-            api_key="not-needed",
-            timeout=self.timeout,
-        )
+        # Reuse cached AsyncOpenAI client if base URL matches
+        base_url = f"{self.base_url}/v1"
+        if (RouterClient._shared_openai_client is None
+                or RouterClient._shared_openai_base_url != base_url):
+            RouterClient._shared_openai_client = AsyncOpenAI(
+                base_url=base_url,
+                api_key="not-needed",
+                timeout=self.timeout,
+            )
+            RouterClient._shared_openai_base_url = base_url
+        openai_client = RouterClient._shared_openai_client
         client = instructor.from_openai(openai_client)
 
         last_error = None

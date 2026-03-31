@@ -143,12 +143,9 @@ class BaseAgent(ABC):
             See packages/router/capabilities.py for the mapping.
         """
         model = get_model_for_capability(self.capability)
-        client = RouterClient()
-        try:
+        async with RouterClient() as client:
             return await client.complete_text(
                 prompt,
                 model=model,
                 system=system,
             )
-        finally:
-            await client.close()

@@ -99,20 +99,39 @@ class UpdatePipeline:
     def __init__(self, master: MasterOrchestrator):
         self.master = master
         self.active_versions: dict[str, InstructionVersion] = {}
+        self._pending_tasks: list = []
 
     def _fire_escalation(self, **kwargs):
-        """C4 FIX: Fire an escalation asynchronously, handling both sync and async contexts.
-        
-        process_insight() is synchronous but handle_escalation() is async.
-        Calling async without await returns a coroutine that never executes.
-        This helper properly schedules the escalation via the event loop.
-        """
+        """Bridge sync→async: queue escalation, log failures."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.master.handle_escalation(**kwargs))
+            task = loop.create_task(self.master.handle_escalation(**kwargs))
+            task.add_done_callback(
+                lambda t: logger.warning(f"escalation_task_failed: {t.exception()}")
+                if t.exception() else None
+            )
+            self._pending_tasks.append(task)
+            logger.info(f"escalation_fired: {kwargs.get('escalation_type', 'unknown')}")
         except RuntimeError:
-            # No running loop — log warning instead of crashing
-            logger.warning(f"no_event_loop_for_escalation: {kwargs}")
+            logger.error(f"escalation_NO_LOOP: no running event loop, escalation queued: {kwargs}")
+            self._pending_tasks.append(("queued", kwargs))
+
+    async def flush_pending_tasks(self):
+        """Flush pending async tasks. Call from an async context to guarantee execution."""
+        remaining = []
+        for item in self._pending_tasks:
+            if isinstance(item, tuple) and item[0] == "queued":
+                try:
+                    await self.master.handle_escalation(**item[1])
+                    logger.info(f"flushed_queued_escalation: {item[1].get('escalation_type')}")
+                except Exception as e:
+                    logger.error(f"flushed_escalation_failed: {e}")
+            elif isinstance(item, asyncio.Task):
+                try:
+                    await item
+                except Exception as e:
+                    logger.error(f"flushed_task_failed: {e}")
+        self._pending_tasks.clear()
         
     def process_insight(self, insight: Insight):
         """Creates a Draft Version for an accepted Synthesis Insight.

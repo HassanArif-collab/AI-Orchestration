@@ -80,12 +80,12 @@ Transcript to localize:
             system_prompt=system_prompt,
         )
 
-        import re
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if not json_match:
+        from packages.core.json_utils import extract_json_object
+        json_str = extract_json_object(response_text)
+        if not json_str:
             raise ValueError("Could not extract JSON from LLM response")
 
-        data = json.loads(json_match.group(0))
+        data = json.loads(json_str)
 
     except Exception as e:
         errors.log_error(cycle_id, 3, "Localization Failed", f"LLM mapping failed: {e}", content_element=smap.video_id)

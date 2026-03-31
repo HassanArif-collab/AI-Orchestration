@@ -44,6 +44,7 @@ from typing import Literal, Optional, Any
 from pydantic import BaseModel, Field
 import json
 import uuid
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from packages.core.logger import get_logger
@@ -169,6 +170,61 @@ class SynthesisEngine:
             
         return report
 
+    @staticmethod
+    def _classify_query(query: str) -> dict:
+        """Derive pattern metadata from the semantic query text.
+        
+        Analyzes query keywords to determine pattern type, agent,
+        genre focus, and category for downstream insight generation.
+        """
+        q_lower = query.lower()
+
+        # Determine pattern type from query intent
+        if any(kw in q_lower for kw in ("fail", "failed", "failure")):
+            pattern_type = "persistent_failure"
+        elif any(kw in q_lower for kw in ("improved", "successfully resolved", "largest score improvements", "most reliably", "higher retention")):
+            pattern_type = "successful_mutation"
+        elif any(kw in q_lower for kw in ("associated", "correlation", "relationship")):
+            pattern_type = "cross_agent_correlation"
+        elif any(kw in q_lower for kw in ("response", "retention", "engagement", "audience")):
+            pattern_type = "audience_response"
+        else:
+            pattern_type = "genre_drift"
+
+        # Determine which agent the query targets
+        if any(kw in q_lower for kw in ("prose", "script", "zone 1", "rewriting", "passive voice")):
+            agent = "ScriptAgent"
+            category = "Script Prose Quality"
+            phases = ["Phase 3", "Phase 4"]
+        elif any(kw in q_lower for kw in ("research", "visual anchor", "citation", "tier 1", "verification")):
+            agent = "Researcher"
+            category = "Research & Anchoring"
+            phases = ["Phase 2"]
+        elif any(kw in q_lower for kw in ("music", "sonic", "transition", "palette")):
+            agent = "MusicAgent"
+            category = "Music Architecture"
+            phases = ["Phase 4"]
+        elif any(kw in q_lower for kw in ("experiment", "iteration", "challenger", "round")):
+            agent = "ExperimentLoop"
+            category = "Experiment Evaluation"
+            phases = ["Phase 5"]
+        else:
+            agent = "CrossSystem"
+            category = "Cross-Phase Pattern"
+            phases = ["Phase 2", "Phase 3", "Phase 4", "Phase 5"]
+
+        # Extract genre from query if present
+        genre_match = re.search(r"(islamic history|comparison and contrast|pakistani|current situation|economic investigation)", q_lower)
+        genre = genre_match.group(1).replace("_", " ").title() if genre_match else "cross_genre"
+
+        return {
+            "pattern_type": pattern_type,
+            "agent": agent,
+            "category": category,
+            "phases": phases,
+            "genre": genre,
+        }
+
     async def _detect_patterns_semantic(self) -> list[dict]:
         """Queries Zep for semantic patterns rather than scanning local JSONL.
         
@@ -205,13 +261,25 @@ class SynthesisEngine:
         for q in queries:
             results = await self.zep_client.search_memory(session_id=self.zep_session_id, query=q, limit=2)
             if results:
+                classification = self._classify_query(q)
+                evidence_texts = [r.get("fact", "") for r in results]
+                evidence_joined = " | ".join(evidence_texts)
+
+                # Estimate fail_rate from evidence for failure-type patterns
+                fail_rate = 0.0
+                if classification["pattern_type"] == "persistent_failure":
+                    fail_rate = min(1.0, len(evidence_texts) / 2.0)
+
                 patterns.append({
-                    "type": "persistent_failure",
-                    "category": "Semantic Pattern",
-                    "question": q[:20] + "...",
-                    "genre": "cross_genre",
-                    "fail_rate": 0.0,
-                    "evidence": " | ".join(r.get("fact", "") for r in results)
+                    "type": classification["pattern_type"],
+                    "category": classification["category"],
+                    "question": q[:80],
+                    "genre": classification["genre"],
+                    "agent": classification["agent"],
+                    "phases": classification["phases"],
+                    "fail_rate": fail_rate,
+                    "evidence_count": len(results),
+                    "evidence": evidence_joined,
                 })
                 
         return patterns
@@ -245,13 +313,92 @@ class SynthesisEngine:
                     "source": "monthly_analysis"
                 }])
 
+    @staticmethod
+    def _compute_confidence(pattern: dict) -> Literal["high", "medium", "low"]:
+        """Compute confidence level from evidence strength.
+        
+        Uses evidence_count and fail_rate to determine confidence:
+          - high: 2+ evidence items with high fail_rate, or successful mutation with 2+ items
+          - medium: 1 evidence item, or moderate fail_rate
+          - low: everything else
+        """
+        evidence_count = pattern.get("evidence_count", 0)
+        fail_rate = pattern.get("fail_rate", 0.0)
+        pattern_type = pattern.get("type", "")
+
+        if pattern_type == "successful_mutation" and evidence_count >= 2:
+            return "high"
+        if evidence_count >= 2 and fail_rate >= 0.5:
+            return "high"
+        if evidence_count >= 1 and (fail_rate > 0.0 or pattern_type == "successful_mutation"):
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _build_proposed_change(pattern: dict) -> str:
+        """Generate a proposed instruction change from the pattern evidence.
+        
+        Constructs a specific, actionable instruction change based on the
+        detected pattern type, agent, and evidence.
+        """
+        pattern_type = pattern.get("type", "unknown")
+        agent = pattern.get("agent", "unknown")
+        category = pattern.get("category", "general")
+        evidence = pattern.get("evidence", "")
+
+        if pattern_type == "persistent_failure":
+            return (
+                f"[Auto-synthesized] {agent} should avoid the {category} failure pattern "
+                f"detected in semantic analysis. Evidence: {evidence[:120]}"
+            )
+        elif pattern_type == "successful_mutation":
+            return (
+                f"[Auto-synthesized] {agent} should prefer the {category} approach "
+                f"that improved scores. Evidence: {evidence[:120]}"
+            )
+        elif pattern_type == "cross_agent_correlation":
+            return (
+                f"[Auto-synthesized] Cross-agent coordination needed for {category}. "
+                f"Evidence: {evidence[:120]}"
+            )
+        else:
+            return (
+                f"[Auto-synthesized] Review {category} for {agent} based on "
+                f"audience response pattern. Evidence: {evidence[:120]}"
+            )
+
+    @staticmethod
+    def _get_current_instruction_desc(pattern: dict) -> str:
+        """Describe the current baseline instruction for the pattern's agent/category.
+        
+        Returns a description of what instruction is currently in effect,
+        based on the agent and category context.
+        """
+        agent = pattern.get("agent", "unknown")
+        category = pattern.get("category", "general")
+        return f"Baseline {category} directives for {agent} (version prior to synthesis)"
+
+    @staticmethod
+    def _get_expected_impact(pattern: dict) -> str:
+        """Describe expected impact based on pattern type and evidence."""
+        pattern_type = pattern.get("type", "")
+        agent = pattern.get("agent", "")
+        if pattern_type == "persistent_failure":
+            return f"Reduces {agent} evaluation failures by addressing the {pattern.get('category', 'general')} pattern."
+        elif pattern_type == "successful_mutation":
+            return f"Replicates proven {agent} approach to improve scores consistently."
+        elif pattern_type == "cross_agent_correlation":
+            return f"Improves cross-agent coordination for {pattern.get('category', 'general')} workflows."
+        else:
+            return f"Aligns {agent} output with audience preferences for {pattern.get('category', 'general')}."
+
     def _generate_insights(self, patterns: list[dict]) -> list[Insight]:
         """Translates patterns to High/Medium/Low confidence Insights.
         
         Each pattern becomes an Insight with:
-          - A proposed instruction change
-          - A confidence level based on evidence strength
-          - A list of affected agents and genres
+          - A proposed instruction change (dynamically generated)
+          - A confidence level computed from evidence count and fail_rate
+          - Agent, phase, and genre fields derived from query classification
         
         Args:
           patterns: Raw pattern dicts from _detect_patterns_semantic()
@@ -262,20 +409,25 @@ class SynthesisEngine:
         logger.info("synthesis_pass_3_insight_generation")
         insights = []
         for p in patterns:
-            if p["type"] == "persistent_failure":
-                insights.append(Insight(
-                    insight_id=str(uuid.uuid4()),
-                    pattern_type="persistent_failure",
-                    phases_involved=["Phase 3", "Phase 4"],
-                    genres_affected=[p["genre"]],
-                    agents_implicated=["Various"],
-                    binary_categories_implicated=[p["category"]],
-                    evidence_summary=p["evidence"],
-                    current_instruction="Current baseline logic",
-                    proposed_instruction_change="Update instructions based on retrieved semantic pattern",
-                    expected_impact="Reduces round evaluation failures.",
-                    confidence="high"
-                ))
+            confidence = self._compute_confidence(p)
+            # Map phase list from pattern classification
+            phases_involved = p.get("phases", ["Phase 3", "Phase 4"])
+            # Map agent from pattern classification
+            agents_implicated = [p.get("agent", "ScriptAgent")]
+
+            insights.append(Insight(
+                insight_id=str(uuid.uuid4()),
+                pattern_type=p.get("type", "persistent_failure"),
+                phases_involved=phases_involved,
+                genres_affected=[p.get("genre", "cross_genre")],
+                agents_implicated=agents_implicated,
+                binary_categories_implicated=[p.get("category", "General")],
+                evidence_summary=p.get("evidence", ""),
+                current_instruction=self._get_current_instruction_desc(p),
+                proposed_instruction_change=self._build_proposed_change(p),
+                expected_impact=self._get_expected_impact(p),
+                confidence=confidence,
+            ))
         return insights
 
     def _generate_report(self, insights: list[Insight]) -> SynthesisReport:
@@ -293,12 +445,29 @@ class SynthesisEngine:
           SynthesisReport ready for storage and processing
         """
         logger.info("synthesis_pass_4_report_generation")
+
+        # Derive genre_performance_trends from insight data
+        genre_trends: dict[str, str] = {}
+        for insight in insights:
+            for genre in insight.genres_affected:
+                if genre == "cross_genre":
+                    continue
+                if genre not in genre_trends:
+                    if insight.pattern_type == "persistent_failure":
+                        genre_trends[genre] = "declining_slightly"
+                    elif insight.pattern_type == "successful_mutation":
+                        genre_trends[genre] = "improving"
+                    elif insight.pattern_type == "audience_response":
+                        genre_trends[genre] = "stable"
+                    else:
+                        genre_trends[genre] = "monitoring"
+
         return SynthesisReport(
             report_id=f"SYN-{uuid.uuid4().hex[:8].upper()}",
             executive_summary=f"Synthesized {len(insights)} material insights this cycle.",
             high_confidence_insights=[i for i in insights if i.confidence == "high"],
             medium_confidence_insights=[i for i in insights if i.confidence == "medium"],
-            genre_performance_trends={"current_situation": "declining_slightly", "islamic_history": "stable"},
+            genre_performance_trends=genre_trends,
         )
 
     def _save_report(self, report: SynthesisReport):

@@ -11,6 +11,7 @@ SQLite 'human_escalations' table while orchestrator wrote to Supabase
 
 from typing import Literal, Any
 import json
+import asyncio
 from datetime import datetime, timezone
 from packages.core.logger import get_logger
 from packages.content_factory.orchestration.master import MasterOrchestrator
@@ -29,6 +30,7 @@ class ReviewDecisions:
 class ReviewInterface:
     def __init__(self, master: MasterOrchestrator):
         self.master = master
+        self._pending_tasks: list = []
         # C3 FIX: Removed SQLite dependency (self.db_path)
         # All queries now go through Supabase (same DB as orchestrator)
         
@@ -83,18 +85,43 @@ class ReviewInterface:
             
         self._mark_resolved(escalation_id, decision)
 
+    def _fire_advance_phase(self, cycle_id: str):
+        """Bridge sync→async: queue advance_phase, log failures."""
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self.master.advance_phase(cycle_id, "completed"))
+            task.add_done_callback(
+                lambda t: logger.warning(f"advance_phase_task_failed: {t.exception()}")
+                if t.exception() else None
+            )
+            self._pending_tasks.append(task)
+            logger.info(f"advance_phase_fired: cycle={cycle_id}")
+        except RuntimeError:
+            logger.error(f"advance_phase_NO_LOOP: no running event loop, advance queued: cycle={cycle_id}")
+            self._pending_tasks.append(("queued_advance", cycle_id))
+
+    async def flush_pending_tasks(self):
+        """Flush pending async tasks. Call from an async context to guarantee execution."""
+        for item in self._pending_tasks:
+            if isinstance(item, tuple) and item[0] == "queued_advance":
+                try:
+                    await self.master.advance_phase(item[1], "completed")
+                    logger.info(f"flushed_queued_advance_phase: cycle={item[1]}")
+                except Exception as e:
+                    logger.error(f"flushed_advance_phase_failed: {e}")
+            elif isinstance(item, asyncio.Task):
+                try:
+                    await item
+                except Exception as e:
+                    logger.error(f"flushed_task_failed: {e}")
+        self._pending_tasks.clear()
+
     def resolve_hard_failure(self, escalation_id: str, cycle_id: str, decision: str):
         """Action handler for Hard Failure loops in Phase 4."""
         logger.info(f"resolving_hard_failure | cycle={cycle_id} dec={decision}")
         if decision == ReviewDecisions.CONTINUE_BASELINE:
             # Force advance phase
-            # C4 FIX: advance_phase is async, use fire-and-forget pattern
-            import asyncio
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self.master.advance_phase(cycle_id, "completed"))
-            except RuntimeError:
-                logger.warning(f"no_event_loop_for_advance_phase | cycle={cycle_id}")
+            self._fire_advance_phase(cycle_id)
         elif decision == ReviewDecisions.ABANDON:
             self._abandon_cycle(cycle_id)
         

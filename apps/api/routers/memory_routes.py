@@ -23,9 +23,11 @@ NOTE: These routes are read-only. Writes happen automatically through
 the pipeline (ZepAudienceModelStore) — never write directly via API.
 """
 from __future__ import annotations
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from apps.api.dependencies import get_memory_client
+from packages.core.logger import get_logger
 
+logger = get_logger("MemoryRoutes")
 router = APIRouter()
 
 @router.get("/sessions")
@@ -46,9 +48,12 @@ async def list_sessions():
     try:
         if hasattr(client, '_client') and not client._client:
             return {"error": "Zep API key not set", "help": "Set ZEP_API_KEY in .env", "sessions": []}
-        return {"sessions": []}
+        sessions = client._client.session.list()
+        session_ids = [s.session_id for s in sessions] if sessions else []
+        return {"sessions": session_ids}
     except Exception as e:
-        return {"error": str(e), "sessions": []}
+        logger.warning(f"list_sessions_failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list sessions: {e}")
 
 @router.get("/sessions/{session_id}")
 async def get_session_memory(session_id: str):
@@ -68,7 +73,14 @@ async def get_session_memory(session_id: str):
         return {"summary": "", "facts": [], "message_count": 0}
     memory = await client.get_memory(session_id)
     facts = await client.get_facts(session_id)
-    return {"summary": memory.get("summary", ""), "facts": facts, "message_count": 0}
+    # Fetch actual message count from Zep
+    message_count = 0
+    try:
+        messages = client._client.message.list(session_id=session_id)
+        message_count = len(messages) if messages else 0
+    except Exception as e:
+        logger.warning(f"count_messages_failed: {e}")
+    return {"summary": memory.get("summary", ""), "facts": facts, "message_count": message_count}
 
 @router.post("/search")
 async def search_memory(query: str, session_id: str = None):

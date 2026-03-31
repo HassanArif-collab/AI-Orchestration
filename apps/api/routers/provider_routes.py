@@ -44,7 +44,7 @@ async def list_providers():
             })
         return {"providers": result}
     except Exception as e:
-        return {"error": str(e), "providers": []}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{name}/key")
@@ -62,7 +62,7 @@ async def test_provider(name: str):
         ok, msg = await _fr()["check_provider_health"](name)
         return {"ok": ok, "message": msg}
     except Exception as e:
-        return {"ok": False, "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{name}/reset")
@@ -71,7 +71,7 @@ async def reset_provider_limit(name: str):
         _fr()["reset_provider"](name)
         return {"success": True}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/usage")
@@ -96,7 +96,7 @@ async def get_usage():
             pass
         return {"freerouter": result, "pipeline": pipeline}
     except Exception as e:
-        return {"error": str(e), "freerouter": {}, "pipeline": {}}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/models")
@@ -106,7 +106,7 @@ async def list_models():
         models = await get_router().list_models()
         return {"models": models}
     except Exception as e:
-        return {"error": str(e), "models": []}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/health")
@@ -193,4 +193,4 @@ async def get_live_quota():
             ]
         }
     except Exception as e:
-        return {"providers": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))

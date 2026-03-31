@@ -386,20 +386,18 @@ _cleanup_task: asyncio.Task | None = None
 
 
 def start_cleanup_task():
-    """Start the expired card cleanup background task.
-    
-    This should be called at application startup.
-    Returns True if task was started, False otherwise.
-    """
+    """Start the expired card cleanup background task."""
     global _cleanup_task
     try:
-        loop = asyncio.get_event_loop()
-        _cleanup_task = loop.create_task(cleanup_expired_cards())
-        logger.info("expired_card_cleanup_task_started")
-        return True
-    except Exception as e:
-        logger.warning(f"cleanup_task_start_failed: {e}")
-        return False
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.error(
+            "start_cleanup_task: No running event loop — cleanup not started. "
+            "Must be called within an async context (e.g., FastAPI lifespan)."
+        )
+        raise
+    _cleanup_task = loop.create_task(cleanup_expired_cards())
+    logger.info("cleanup_task_scheduled: expired card cleanup started")
 
 
 async def stop_cleanup_task():

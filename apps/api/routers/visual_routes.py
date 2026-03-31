@@ -1,8 +1,8 @@
 """visual_routes.py — Radiant shaders, Remotion templates, asset manifests."""
 from __future__ import annotations
-import glob, os, re
+import glob, os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Path as FastAPIPath
 from fastapi.responses import FileResponse
 from apps.api.dependencies import get_radiant_manager
 
@@ -35,11 +35,7 @@ async def list_shaders():
     return [{"name": s["name"], "path": s["path"], "tags": []} for s in shaders]
 
 @router.get("/radiant/preview/{shader_name}")
-async def preview_shader(shader_name: str):
-    # C1 FIX: Block any path separator or traversal attempt
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', shader_name):
-        raise HTTPException(400, "Invalid shader name")
-
+async def preview_shader(shader_name: str = FastAPIPath(..., pattern=r'^[a-zA-Z0-9_\-]+$')):
     shader_path = (SHADER_BASE_DIR / f"{shader_name}.html").resolve()
 
     # Double-check resolved path stays within base directory

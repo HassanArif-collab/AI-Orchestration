@@ -80,10 +80,16 @@ class KanbanStore:
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
             settings = get_settings()
-            db_path = str(Path(settings.DATA_DIR) / "kanban_cards.db")
+            data_dir = Path(settings.DATA_DIR)
+            if not data_dir.is_absolute():
+                # 3.6 FIX: Resolve relative DATA_DIR against project root
+                data_dir = Path(__file__).resolve().parent.parent.parent / data_dir
+            data_dir.mkdir(parents=True, exist_ok=True)
+            db_path = str(data_dir / "kanban_cards.db")
+        else:
+            db_path = str(Path(db_path).resolve())  # Ensure absolute
 
         self.db_path = db_path
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self):

@@ -142,9 +142,9 @@ async def run_production_workflow(
         # For FreeRouter we just call kickoff. In a real async environment we would use run_in_executor.
         result_text = crew.kickoff()
         
-        import re
-        json_match = re.search(r'\{.*\}', str(result_text), re.DOTALL)
-        if not json_match:
+        from packages.core.json_utils import extract_json_object
+        json_str = extract_json_object(str(result_text))
+        if not json_str:
             # Fallback to RouterClient to fix it if CrewAI output isn't clean JSON
             async with RouterClient() if not router_client else router_client as rc:
                 fixed = await rc.complete_text(
@@ -152,12 +152,12 @@ async def run_production_workflow(
                     system="You return ONLY valid JSON. No markdown blocks.",
                     model="groq/llama-3.3-70b-versatile"  # Fast model for JSON extraction
                 )
-                json_match = re.search(r'\{.*\}', fixed, re.DOTALL)
-                if not json_match:
+                json_str = extract_json_object(fixed)
+                if not json_str:
                     raise ValueError("Could not extract JSON from Script Agent output")
-                result_text = json_match.group(0)
+                result_text = json_str
         else:
-            result_text = json_match.group(0)
+            result_text = json_str
             
         data = json.loads(result_text)
         

@@ -70,6 +70,7 @@ FLOW DIAGRAM:
 
 from pydantic import BaseModel, Field
 from typing import Optional, Any
+from datetime import datetime, timezone
 from packages.core.logger import get_logger
 
 logger = get_logger("HermesMemoryArchitecture")
@@ -157,6 +158,71 @@ class HermesMemoryAdapter:
         self.skills: dict[str, HermesSkillPayload] = {}
         # In actual Hermes, we'd persist these to its vector/JSON store
         self.audience_memory = AudienceMemoryState()
+
+    async def load_state(self):
+        """Load persisted state from Supabase on startup.
+        
+        Restores skills and audience memory that were persisted in previous
+        sessions. Call this during application initialization to recover
+        state after restart.
+        """
+        await self._load_skills()
+        await self._load_audience_memory()
+        logger.info("hermes_state_loaded_from_supabase")
+
+    async def _persist_skills(self):
+        """Persist skills to Supabase for crash recovery."""
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            skills_data = {k: v.model_dump() if hasattr(v, 'model_dump') else v
+                           for k, v in self.skills.items()}
+            sb.table("hermes_memory_state").upsert(
+                {"key": "skills", "value": skills_data, "updated_at": datetime.now(timezone.utc).isoformat()},
+                on_conflict="key"
+            ).execute()
+        except Exception as e:
+            logger.warning(f"persist_skills_failed: {e}")
+
+    async def _load_skills(self):
+        """Load skills from Supabase on startup."""
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            result = sb.table("hermes_memory_state").select("value").eq("key", "skills").execute()
+            if result.data and result.data[0].get("value"):
+                for agent_id, payload in result.data[0]["value"].items():
+                    self.skills[agent_id] = HermesSkillPayload(**payload) if isinstance(payload, dict) else payload
+                logger.info(f"loaded_{len(self.skills)}_skills_from_supabase")
+        except Exception as e:
+            logger.debug(f"load_skills_failed: {e}")
+
+    async def _persist_audience_memory(self):
+        """Persist audience memory to Supabase."""
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            data = self.audience_memory.model_dump() if hasattr(self.audience_memory, 'model_dump') else {}
+            sb.table("hermes_memory_state").upsert(
+                {"key": "audience_memory", "value": data, "updated_at": datetime.now(timezone.utc).isoformat()},
+                on_conflict="key"
+            ).execute()
+        except Exception as e:
+            logger.warning(f"persist_audience_memory_failed: {e}")
+
+    async def _load_audience_memory(self):
+        """Load audience memory from Supabase on startup."""
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            result = sb.table("hermes_memory_state").select("value").eq("key", "audience_memory").execute()
+            if result.data and result.data[0].get("value"):
+                loaded_data = result.data[0]["value"]
+                if isinstance(loaded_data, dict):
+                    self.audience_memory = AudienceMemoryState(**loaded_data)
+                    logger.info(f"loaded_audience_memory_from_supabase | genres={len(self.audience_memory.genre_engagement_rankings)}")
+        except Exception as e:
+            logger.debug(f"load_audience_memory_failed: {e}")
         
     def update_agent_skill(self, agent_id: str, new_instruction: str, version_id: str):
         """Called by the Instruction Update Pipeline.
@@ -183,6 +249,14 @@ class HermesMemoryAdapter:
             version_id=version_id,
             last_updated=datetime.datetime.now(datetime.timezone.utc).isoformat()
         )
+        # Persist to Supabase for crash recovery
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_skills())
+        except RuntimeError:
+            # No event loop available — persist is deferred to next async context
+            logger.debug("persist_skills_deferred_no_event_loop")
         # Hermes API call would happen here to refresh its runtime contextual scope
 
     def update_audience_memory(self, ingestion_data: dict[str, Any]):
@@ -205,6 +279,23 @@ class HermesMemoryAdapter:
             self.audience_memory.genre_engagement_rankings[g] = ingestion_data["engagement"]
 
         # Push to Hermes representation layer
+        # Persist to Supabase for crash recovery
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._persist_audience_memory())
+        except RuntimeError:
+            # No event loop available — persist is deferred to next async context
+            logger.debug("persist_audience_memory_deferred_no_event_loop")
+
+    async def update_audience_memory_async(self, ingestion_data: dict[str, Any]):
+        """Async-safe version of update_audience_memory that persists immediately.
+        
+        Use this when calling from an async context to ensure Supabase
+        persistence completes before returning.
+        """
+        self.update_audience_memory(ingestion_data)
+        await self._persist_audience_memory()
 
     def search_cross_production_memory(self, genre: str, category: str, proposed_mutation: str) -> bool:
         """

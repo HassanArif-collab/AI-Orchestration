@@ -167,10 +167,10 @@ Output ONLY valid JSON array, no markdown."""
         
         # Parse JSON response
         import json
-        import re
-        json_match = re.search(r'\[.*\]', response, re.DOTALL)
-        if json_match:
-            topics = json.loads(json_match.group(0))
+        from packages.core.json_utils import extract_json_array
+        json_str = extract_json_array(response)
+        if json_str:
+            topics = json.loads(json_str)
         else:
             topics = []
         
@@ -595,17 +595,17 @@ Return JSON:
         
         async with RouterClient() as router:
             import json
-            import re
+            from packages.core.json_utils import extract_json_object
             response = await router.complete_text(
                 prompt,
                 system="You are a strict script evaluator. Return ONLY valid JSON.",
                 model="groq/llama-3.3-70b-versatile",
                 temperature=0.0
             )
-            
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group(0))
+
+            json_str = extract_json_object(response)
+            if json_str:
+                result = json.loads(json_str)
                 score = result.get("score", 0)
                 feedback = result.get("feedback", "")
             else:

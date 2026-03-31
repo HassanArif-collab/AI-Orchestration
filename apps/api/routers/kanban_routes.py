@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Path, Body
 from pydantic import BaseModel, Field
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
@@ -40,8 +40,11 @@ def get_kanban_stage(pipeline_stage: str) -> int:
     return PIPELINE_TO_KANBAN_STAGE.get(pipeline_stage, 1)
 
 def _run_to_kanban_dict(run) -> dict:
-    """Convert a PipelineRun to a Kanban-friendly dictionary."""
-    d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
+    """Convert a PipelineRun or run dict to a Kanban-friendly dictionary."""
+    if isinstance(run, dict):
+        d = run
+    else:
+        d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
     stage_name = d.get("current_stage", "trend_analysis")
 
     # Extract title - check 'title' first (normalized field), then 'topic_statement' (raw field)
@@ -255,29 +258,27 @@ class KanbanEventRequest(BaseModel):
 KANBAN_MAX_LIST_LIMIT = 200
 
 @router.get("/tasks")
-async def list_tasks(limit: int = 100) -> dict:
+async def list_tasks(limit: int = Query(default=100, ge=1, le=KANBAN_MAX_LIST_LIMIT)) -> dict:
     """List all pipeline runs as Kanban tasks."""
-    if limit < 1 or limit > KANBAN_MAX_LIST_LIMIT:
-        limit = 100
     store = get_run_store()
     if not store:
         return {"tasks": []}
 
-    runs = store.list_runs(limit=limit)
+    # 3.7 FIX: Use include_details=True to fetch all columns in one query,
+    # avoiding N+1 per-run load() calls
+    runs = store.list_runs(limit=limit, include_details=True)
     tasks = []
-    for summary in runs:
+    for run_data in runs:
         try:
-            run = store.load(summary["run_id"])
-            if run:
-                tasks.append(_run_to_kanban_dict(run))
+            tasks.append(_run_to_kanban_dict(run_data))
         except Exception as e:
-            print(f"Error loading task {summary.get('run_id')}: {e}")
+            print(f"Error processing task {run_data.get('run_id')}: {e}")
             continue
 
     return {"tasks": tasks}
 
 @router.get("/tasks/{task_id}")
-async def get_task(task_id: str) -> dict:
+async def get_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
     """Get a single PipelineRun as a Kanban task."""
     store = get_run_store()
     if not store:
@@ -290,7 +291,7 @@ async def get_task(task_id: str) -> dict:
     return _run_to_kanban_dict(run)
 
 @router.patch("/tasks/{task_id}")
-async def update_task(task_id: str, data: KanbanTaskUpdate, bg: BackgroundTasks) -> dict:
+async def update_task(task_id: str = Path(..., min_length=1, max_length=100), data: KanbanTaskUpdate = Body(...), bg: BackgroundTasks = BackgroundTasks()) -> dict:
     """Update a Kanban task by potentially triggering a pipeline action."""
     runner = get_pipeline_runner()
     store = get_run_store()
@@ -312,7 +313,7 @@ async def update_task(task_id: str, data: KanbanTaskUpdate, bg: BackgroundTasks)
     return _run_to_kanban_dict(run)
 
 @router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str) -> dict:
+async def delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
     """Delete the underlying pipeline run and associated thoughts."""
     store = get_run_store()
     if not store:
@@ -407,7 +408,7 @@ async def record_kanban_event(data: KanbanEventRequest) -> dict:
 # ─── Card Management Endpoints (for React frontend) ──────────────────────────────
 
 @router.post("/cards/{card_id}/save")
-async def save_card(card_id: str) -> dict:
+async def save_card(card_id: str = Path(..., min_length=1, max_length=100)) -> dict:
     """Save a suggested topic card by removing the expires_at timestamp.
     
     This prevents the 3-hour auto-delete for Column 2 cards.
@@ -426,7 +427,7 @@ class MoveCardRequest(BaseModel):
     column: int = Field(..., ge=1, le=6, description="Target column (1-6)")
 
 @router.put("/cards/{card_id}/move")
-async def move_card(card_id: str, body: MoveCardRequest) -> dict:
+async def move_card(card_id: str = Path(..., min_length=1, max_length=100), body: MoveCardRequest = Body(...)) -> dict:
     """Move a card to a different column."""
     try:
         from packages.core.supabase_client import get_supabase

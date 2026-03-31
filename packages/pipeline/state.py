@@ -296,22 +296,34 @@ class RunStore:
             error_message=row.get("error_message", ""),
         )
 
-    def list_runs(self, limit: int = 20) -> list[dict]:
+    def list_runs(self, limit: int = 20, include_details: bool = False) -> list[dict]:
         """List recent pipeline runs.
 
         Args:
             limit: Maximum number of runs to return
+            include_details: If True, select all columns (for detail views).
+                Defaults to summary-only (run_id, current_stage, status, updated_at)
+                to avoid expensive full-row fetches in list endpoints.
 
         Returns:
-            List of run summaries (run_id, current_stage, status, updated_at)
+            List of run summaries or full run records
         """
-        result = (
-            self._db()
-            .select("run_id, current_stage, status, updated_at")
-            .order("updated_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        if include_details:
+            result = (
+                self._db()
+                .select("*")
+                .order("updated_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+        else:
+            result = (
+                self._db()
+                .select("run_id, current_stage, status, updated_at")
+                .order("updated_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
         return result.data or []
 
     def delete(self, run_id: str) -> None:

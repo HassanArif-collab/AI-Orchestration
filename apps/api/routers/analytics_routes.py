@@ -25,8 +25,7 @@ class RepurposeRequest(BaseModel):
 async def get_channel_stats(channel_id: str = ""):
     client = get_youtube_client()
     if not client or not client.api_key:
-        return {"subscriber_count": 0, "total_views": 0, "video_count": 0,
-                "error": "YouTube API not configured. Set YOUTUBE_API_KEY in .env"}
+        raise HTTPException(status_code=503, detail="YouTube API not configured. Set YOUTUBE_API_KEY in .env")
     return client.get_channel_stats(channel_id) if channel_id else \
            {"subscriber_count": 0, "total_views": 0, "video_count": 0}
 
@@ -44,7 +43,7 @@ async def get_competitor_videos(limit: int = 10):
     """Fetch latest videos from competitor channels."""
     client = get_youtube_client()
     if not client or not client.api_key:
-        return {"videos": [], "error": "YouTube API not configured"}
+        raise HTTPException(status_code=503, detail="YouTube API not configured")
     
     # Hardcoded competitor channels (Johnny Harris, Cleo Abram)
     competitors = ["UCmGSJVG3mCRXVOP4yZrU1Dw", "UC3_hsOmAsodJwo5SIy6Jxng"]
@@ -99,7 +98,7 @@ async def save_snapshot(channel_id: str = ""):
         filepath = tracker.save_snapshot(data)
         return {"filepath": filepath, "status": "saved"}
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/snapshots")

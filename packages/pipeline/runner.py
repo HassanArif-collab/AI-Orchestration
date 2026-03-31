@@ -348,6 +348,9 @@ class PipelineRunner:
             - created_at: When the run was created
             - updated_at: When the run was last updated
         """
+        # 3.7 FIX: Pre-filter by status from summary to avoid loading non-resumable runs.
+        # Summary already contains run_id, current_stage, status, updated_at.
+        # Only load full run data for status-matching runs (which need error_message, created_at).
         runs = self.store.list_runs(limit=100)
         resumable = []
 
@@ -356,19 +359,23 @@ class PipelineRunner:
             if not run_id:
                 continue
 
+            # 3.7 FIX: Filter by summary status to skip N load() calls for non-resumable runs
+            status = run_summary.get("status")
+            if status not in ("error", "waiting_human"):
+                continue
+
             run = self.store.load(run_id)
             if not run:
                 continue
 
-            if run.status in ("error", "waiting_human"):
-                resumable.append({
-                    "run_id": run.run_id,
-                    "status": run.status,
-                    "current_stage": run.current_stage.value if run.current_stage else None,
-                    "error_message": run.error_message,
-                    "created_at": run.created_at.isoformat() if run.created_at else None,
-                    "updated_at": run.updated_at.isoformat() if run.updated_at else None,
-                })
+            resumable.append({
+                "run_id": run.run_id,
+                "status": run.status,
+                "current_stage": run.current_stage.value if run.current_stage else None,
+                "error_message": run.error_message,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+            })
 
         return resumable
 
