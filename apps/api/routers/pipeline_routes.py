@@ -179,7 +179,8 @@ async def _run_pipeline_bg(run_id: str) -> None:
                         return
                 
                 # Complete
-                run.status = "complete"
+                # C12 FIX: Use "completed" to match PipelineRunner.resume_run() check
+                run.status = "completed"
                 store.save(run)
                 
                 

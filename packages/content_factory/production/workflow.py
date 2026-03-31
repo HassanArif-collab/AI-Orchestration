@@ -23,6 +23,7 @@ from crewai import Crew, Process, Task
 from pydantic import BaseModel
 
 from packages.core.logger import get_logger
+from packages.core.config import get_settings
 from packages.router.client import RouterClient
 from packages.router.web_search import WebSearchClient
 from packages.pipeline.research_cache import ResearchCache

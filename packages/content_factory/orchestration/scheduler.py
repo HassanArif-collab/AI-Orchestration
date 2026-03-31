@@ -81,17 +81,40 @@ class Scheduler:
         self.register_cron_job("Maintenance_Weekly", 168, lambda: logger.info("Weekly Archive & Maintenance"), "escalate")
 
     async def simulate_tick(self):
-        """Now async."""
-        logger.info("Scheduler _simulate_tick ticked")
+        """Execute only jobs whose next_run has been reached.
+
+        C8 FIX: Previously all jobs fired every tick regardless of interval.
+        Now checks job['next_run'] against current time before executing.
+        Updates last_run/next_run after each execution (success or failure).
+        """
+        now = datetime.now(timezone.utc)
+        logger.info("scheduler_tick")
+        
         for job in self.jobs:
-            logger.info(f"Triggering {job['name']}")
+            next_run = job.get("next_run")
+            
+            # Skip if not yet time to run
+            if next_run and now < next_run:
+                logger.debug(f"cron_skip | job={job['name']} next_run={next_run}")
+                continue
+            
+            logger.info(f"cron_trigger | job={job['name']}")
             try:
                 action = job['action']
                 if asyncio.iscoroutinefunction(action):
                     await action()
                 else:
                     action()
+                
+                # Update timing after successful execution
+                job["last_run"] = now
+                job["next_run"] = now + timedelta(hours=job.get("interval_hours", 24))
+                
             except Exception as e:
                 logger.error(f"cron_failure | job={job['name']} error={str(e)}")
+                # Still update timing to prevent retry storm
+                job["last_run"] = now
+                job["next_run"] = now + timedelta(hours=1)  # Retry after 1h on failure
+                
                 if job['failure_behavior'] == "escalate":
                     await self.master.handle_escalation("SYS", "cron_failure", "high", {"job": job['name']})

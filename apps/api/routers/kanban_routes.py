@@ -57,12 +57,13 @@ def _run_to_kanban_dict(run) -> dict:
             video_title = trend[0].get("title") or trend[0].get("topic_statement") or "Untitled"
 
     # Status mapping to Kanban visual states
+    # C12 FIX: Accept both "complete" and "completed" for backward compat
     status = d.get("status", "idle")
     if status == "running":
         kanban_status = "thinking"
     elif status == "waiting_human":
         kanban_status = "waiting"
-    elif status == "complete":
+    elif status in ("complete", "completed"):
         kanban_status = "complete"
     elif status == "error":
         kanban_status = "error"
@@ -140,12 +141,13 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
         return str(data)[:500]
 
     # Handle AdaptedScript (script_writing output)
+    # C2 FIX: All user/agent data escaped before HTML insertion
     if artifact_type == "script" and "entries" in data:
         entries = data.get("entries", [])
         if not entries:
             return ""
 
-        title = data.get("adapted_title", "Untitled Script")
+        title = html_module.escape(str(data.get("adapted_title", "Untitled Script")))
         score = data.get("production_readiness_score", 0)
 
         html_parts = [
@@ -161,8 +163,8 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
 
         for i, entry in enumerate(entries[:10]):  # Limit to first 10 entries
             bg = "#141414" if i % 2 == 0 else "#1a1a1a"
-            prose = entry.get("prose", "")[:200]
-            visual = entry.get("visual_direction", "")[:100]
+            prose = html_module.escape(str(entry.get("prose", ""))[:200])
+            visual = html_module.escape(str(entry.get("visual_direction", ""))[:100])
             html_parts.append(
                 f'<tr style="background:{bg}"><td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;">{prose}</td>'
                 f'<td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;color:#888;">{visual}</td></tr>'
@@ -175,11 +177,12 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
         return ''.join(html_parts)
 
     # Handle Research output
+    # C2 FIX: All user/agent data escaped before HTML insertion
     if artifact_type == "research":
         # Check for common research fields
         if "source_video_id" in data:
             # This is an AdaptedScript from research stage
-            title = data.get("adapted_title", data.get("source_title", "Research Output"))
+            title = html_module.escape(str(data.get("adapted_title", data.get("source_title", "Research Output"))))
             entries = data.get("entries", [])
             if entries:
                 return _render_artifact_html(data, "script")
@@ -191,15 +194,17 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
             if key in data:
                 val = data[key]
                 if isinstance(val, list):
-                    val = "<br>".join(str(v)[:100] for v in val[:5])
+                    escaped = html_module.escape("<br>".join(str(v)[:100] for v in val[:5]))
+                    html_parts.append(f'<div style="margin-bottom:6px;"><strong>{html_module.escape(key)}:</strong> {escaped}</div>')
                 elif isinstance(val, str):
-                    val = val[:300]
-                html_parts.append(f'<div style="margin-bottom:6px;"><strong>{key}:</strong> {val}</div>')
+                    escaped = html_module.escape(val[:300])
+                    html_parts.append(f'<div style="margin-bottom:6px;"><strong>{html_module.escape(key)}:</strong> {escaped}</div>')
 
         if html_parts:
             return ''.join(html_parts)
 
     # Handle Visual Planning output
+    # C2 FIX: All user/agent data escaped before HTML insertion
     if artifact_type == "visual" and "section_briefs" in data:
         briefs = data.get("section_briefs", [])
         if not briefs:
@@ -207,25 +212,26 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
 
         html_parts = ['<div style="font-size:12px;">']
         for i, brief in enumerate(briefs[:6]):
-            section = brief.get("section_index", i)
-            palette = brief.get("sonic_palette", "N/A")
+            section = html_module.escape(str(brief.get("section_index", i)))
+            palette = html_module.escape(str(brief.get("sonic_palette", "N/A"))[:50])
             html_parts.append(
                 f'<div style="margin-bottom:4px;padding:4px;background:#1a1a1a;border-radius:4px;">'
-                f'<span style="color:#1D9E75;">Section {section}:</span> {palette[:50]}</div>'
+                f'<span style="color:#1D9E75;">Section {section}:</span> {palette}</div>'
             )
         if len(briefs) > 6:
             html_parts.append(f'<div style="color:#888;">... and {len(briefs) - 6} more sections</div>')
         html_parts.append('</div>')
         return ''.join(html_parts)
 
-    # Fallback: show as formatted JSON limited
+    # C2 FIX: Escape fallback JSON output
     try:
         json_str = json.dumps(data, indent=2, default=str)
-        if len(json_str) > 500:
-            return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{json_str[:500]}...</pre>'
-        return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{json_str}</pre>'
+        escaped_json = html_module.escape(json_str)
+        if len(escaped_json) > 500:
+            return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{escaped_json[:500]}...</pre>'
+        return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{escaped_json}</pre>'
     except Exception:
-        return str(data)[:500]
+        return html_module.escape(str(data)[:500])
 
 # ─── Pydantic Models ────────────────────────────────────────────────────────────
 

@@ -59,7 +59,7 @@ def is_retryable_exception(exc: Exception, retryable_types: tuple[type[Exception
     exc_name = type(exc).__name__
     retryable_names = {
         "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
-        "ConnectionError", "ConnectError", "HTTPStatusError",
+        "ConnectionError", "ConnectError",
         "RemoteProtocolError", "LocalProtocolError",
         "SSLError", "ProtocolError",
     }
