@@ -550,8 +550,9 @@ Output ONLY the script narration text. Keep it conversational, active voice, and
 @pipeline_node("scorer")
 async def score_node(state: ProductionState) -> dict:
     """
-    Evaluate the current draft against the binary checklist.
-    Returns a score (0-100) and text feedback describing weak zones.
+    Evaluate the current draft against the 56-question binary checklist.
+    Returns a score (0-100) representing percentage of questions passed,
+    and text feedback describing weak zones.
     
     Also tracks best_draft: if this score beats the previous best,
     save this draft as the new best.
@@ -573,22 +574,89 @@ async def score_node(state: ProductionState) -> dict:
     try:
         from packages.router.client import RouterClient
         
-        prompt = f"""Evaluate this documentary script draft on a 0-100 scale.
+        prompt = f"""Evaluate this documentary script draft against the 56-question binary checklist.
 
 DRAFT:
 {draft}
 
-Check these criteria (each worth 10 points):
-1. HOOK opens with a startling fact or question
-2. Active voice throughout (no passive constructions)
-3. Each sentence has a clear agent doing something
-4. Technical terms are explained or avoided
-5. Viewer can form mental images
-6. Clear progression from problem to insight
-7. Emotional moments are highlighted
-8. Ending provides closure or call to action
-9. No jargon without explanation
-10. Overall engagement and flow
+Answer YES or NO to each question. Each YES counts as 1 point (max 56 points).
+Score = (points / 56) * 100, rounded to nearest integer.
+
+=== STRUCTURE (8 questions) ===
+1. Does the hook appear in the first 15 seconds?
+2. Is there a clear narrative arc (setup → conflict → resolution)?
+3. Does each section flow logically to the next?
+4. Is the script divided into clear segments/acts?
+5. Does the ending tie back to the opening hook?
+6. Is the total length appropriate (3-10 minutes when read)?
+7. Are transitions smooth between topics?
+8. Is there a clear thesis statement?
+
+=== HOOK & OPENING (6 questions) ===
+9. Does the opening create immediate curiosity?
+10. Is the hook relevant to the main topic?
+11. Does the hook avoid clickbait tactics?
+12. Is the opening visually descriptive?
+13. Does the hook promise value to the viewer?
+14. Is the opening tone appropriate for the subject?
+
+=== CLARITY & COMPREHENSION (8 questions) ===
+15. Are technical terms explained on first use?
+16. Is jargon minimized or defined?
+17. Would a general audience understand every sentence?
+18. Are analogies used to explain complex concepts?
+19. Is there no ambiguity in key claims?
+20. Are statistics properly contextualized?
+21. Is the reading level appropriate (8th-10th grade)?
+22. Are cause-and-effect relationships clear?
+
+=== ENGAGEMENT & PACING (7 questions) ===
+23. Does the script maintain tension/interest throughout?
+24. Are there moments of surprise or revelation?
+25. Is the pacing varied (not monotonous)?
+26. Are there specific, concrete details (not abstractions)?
+27. Does the script use active voice predominantly?
+28. Are sentences varied in length?
+29. Is there a rhythm to the language when read aloud?
+
+=== CREDIBILITY & EVIDENCE (7 questions) ===
+30. Are claims supported by specific evidence?
+31. Are sources credible and relevant?
+32. Does the script acknowledge uncertainty where appropriate?
+33. Are counter-arguments addressed?
+34. Is the evidence proportionate to the claims?
+35. Are expert quotes used effectively?
+36. Is there no unsupported speculation?
+
+=== EMOTIONAL RESONANCE (6 questions) ===
+37. Does the script evoke an emotional response?
+38. Are human stories/characters present?
+39. Is the emotional tone appropriate (not manipulative)?
+40. Does the script create empathy for subjects?
+41. Are emotional moments earned (not forced)?
+42. Is there a satisfying emotional arc?
+
+=== VISUAL POTENTIAL (6 questions) ===
+43. Are scenes visually describable (B-roll friendly)?
+44. Is there variety in visual opportunities?
+45. Are locations/settings clearly established?
+46. Are characters visually distinct?
+47. Are action moments described specifically?
+48. Is there visual contrast between scenes?
+
+=== CONCLUSION & TAKEAWAY (5 questions) ===
+49. Does the ending provide closure?
+50. Is there a clear takeaway for the viewer?
+51. Does the conclusion reinforce key points?
+52. Is there a call to action or reflection prompt?
+53. Does the ending feel earned (not abrupt)?
+
+=== OVERALL IMPACT (3 questions) ===
+54. Would this script stand out from similar content?
+55. Does it offer a unique perspective or insight?
+56. Would viewers recommend this to others?
+
+Count YES answers, calculate score as (YES_count / 56) * 100.
 
 Return JSON:
 {{"score": 85, "feedback": "Brief description of strengths and what needs improvement"}}"""
@@ -719,7 +787,8 @@ async def capture_learning_node(state: ProductionState) -> dict:
     best_draft = state.get("best_draft", "")
     current_draft = state.get("current_draft", "")
     
-    updates = {}
+    # Always initialize updates with current draft to avoid empty dict return
+    updates = {"current_draft": best_draft if best_score > current_score and best_draft else current_draft}
     
     # Job 1: Ensure we're using the best draft
     if best_score > current_score and best_draft:
@@ -865,9 +934,19 @@ async def human_review_node(state: ProductionState) -> dict:
     })
     
     # When resumed, `decision` contains the human's response
+    # Handle both dict and Pydantic model objects (ResumeDecision)
+    if hasattr(decision, 'approved'):
+        # Pydantic model (ResumeDecision)
+        approved = decision.approved
+        feedback = getattr(decision, 'feedback', '')
+    else:
+        # Dict object
+        approved = decision.get("approved", False)
+        feedback = decision.get("feedback", "")
+    
     return {
-        "approved": decision.get("approved", False),
-        "human_feedback": decision.get("feedback", ""),
+        "approved": approved,
+        "human_feedback": feedback,
         "pipeline_status": "review",
     }
 
@@ -919,8 +998,11 @@ async def publish_notion_node(state: ProductionState) -> dict:
     except Exception as e:
         logger.warning(f"notion_publish_failed: {e}")
         await report_thought(card_id, "system", f"⚠️ Notion publish failed: {str(e)[:100]}")
-        # C14 FIX: Return error status instead of falling through to success
-        return {"pipeline_status": "error", "error": f"Notion publish failed: {str(e)}"}
+        # C15 FIX: Don't set error field here - let the retry policy handle retries.
+        # The PUBLISH_RETRY policy will retry up to 5 times. Only if all retries fail
+        # will LangGraph mark the node as failed and route to error_handler.
+        # Setting error here would cause immediate routing to error_handler on retry.
+        raise  # Re-raise to trigger retry policy
 
 
 # ============================================================
