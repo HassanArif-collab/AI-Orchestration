@@ -524,6 +524,17 @@ Output ONLY the script narration text. Keep it conversational, active voice, and
             "success"
         )
         
+    # C7 FIX: When human rejects, reset iteration_count so revised draft
+    # gets a fresh mutation budget. Track revision_count separately.
+    if human_feedback:
+        return {
+            "current_draft": draft,
+            "iteration_count": 0,  # Reset for fresh mutation budget
+            "revision_count": state.get("revision_count", 0) + 1,  # Track revision cycles
+            "pipeline_status": "drafting",
+            "human_feedback": None,  # Clear after using
+        }
+    else:
         return {
             "current_draft": draft,
             "iteration_count": iteration,
@@ -900,13 +911,16 @@ async def publish_notion_node(state: ProductionState) -> dict:
             "success"
         )
         
-        await update_card_stage(card_id, "complete")
+        await update_card_stage(card_id, "completed")
+
+        # C14 FIX: Return success ONLY from inside the try block
+        return {"pipeline_status": "complete"}
         
     except Exception as e:
         logger.warning(f"notion_publish_failed: {e}")
         await report_thought(card_id, "system", f"⚠️ Notion publish failed: {str(e)[:100]}")
-    
-    return {"pipeline_status": "complete"}
+        # C14 FIX: Return error status instead of falling through to success
+        return {"pipeline_status": "error", "error": f"Notion publish failed: {str(e)}"}
 
 
 # ============================================================

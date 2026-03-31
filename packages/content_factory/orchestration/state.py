@@ -109,6 +109,7 @@ class ProductionState(TypedDict):
     # ─── Human Review ─────────────────────────────────────────────────────────
     human_feedback: Optional[str]       # Feedback from human if they reject
     approved: bool                      # Whether human approved the final script
+    revision_count: int                 # Number of human revision cycles (C7)
     
     # ─── Pipeline Control ─────────────────────────────────────────────────────
     pipeline_status: str                # "researching", "drafting", "scoring", "mutating",
