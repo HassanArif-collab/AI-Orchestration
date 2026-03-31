@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import re
+import threading
 from datetime import datetime, timezone
 from typing import Any, Optional, Type, TypeVar
 from urllib.parse import urlparse
@@ -47,6 +48,9 @@ from packages.core.logger import get_logger
 
 log = get_logger(__name__)
 T = TypeVar("T")
+
+# Lock for thread-safe shared client creation
+_shared_client_lock = threading.Lock()
 
 
 # ─── Rate Limit Header Parsing ─────────────────────────────────────────────────────
@@ -220,19 +224,21 @@ class RouterClient:
     @classmethod
     def _get_shared_client(cls, base_url: str, timeout: float = 90.0) -> httpx.AsyncClient:
         """Get or create the shared HTTP client with connection pooling."""
-        if cls._shared_client is None or cls._shared_client.is_closed:
-            cls._shared_client = httpx.AsyncClient(
-                base_url=base_url,
-                timeout=httpx.Timeout(timeout, connect=10.0),
-                limits=httpx.Limits(
-                    max_connections=100,
-                    max_keepalive_connections=20,
-                    keepalive_expiry=30.0,
-                ),
-            )
-            cls._shared_client_refcount = 0
-        cls._shared_client_refcount += 1
-        return cls._shared_client
+        global _shared_client_lock
+        with _shared_client_lock:
+            if cls._shared_client is None or cls._shared_client.is_closed:
+                cls._shared_client = httpx.AsyncClient(
+                    base_url=base_url,
+                    timeout=httpx.Timeout(timeout, connect=10.0),
+                    limits=httpx.Limits(
+                        max_connections=100,
+                        max_keepalive_connections=20,
+                        keepalive_expiry=30.0,
+                    ),
+                )
+                cls._shared_client_refcount = 0
+            cls._shared_client_refcount += 1
+            return cls._shared_client
 
     @classmethod
     async def _release_shared_client(cls):
@@ -357,13 +363,17 @@ class RouterClient:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # We're in an async context - can't use run_until_complete
-                # Schedule the close for later (not ideal but prevents crash)
+                # Use a synchronous close by creating a new event loop in a thread
                 log.warning(
                     "sync_context_manager_in_async_context: "
                     "Consider using async with RouterClient() instead"
                 )
-                # Create a task to close later
-                loop.create_task(self.close())
+                # Use concurrent.futures to run async close in a separate thread
+                # with its own event loop to avoid conflicts
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self.close())
+                    future.result(timeout=30)  # Wait up to 30 seconds
             else:
                 # No running loop, we can close synchronously
                 loop.run_until_complete(self.close())
