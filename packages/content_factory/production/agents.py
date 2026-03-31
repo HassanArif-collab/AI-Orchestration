@@ -7,6 +7,7 @@ using Johnny Harris strategies, rather than adapting his videos.
 
 from crewai import Agent
 
+from packages.core.llm import freerouter_llm
 from packages.core.logger import get_logger
 from ..models import SourceVideoRecord
 
@@ -44,6 +45,7 @@ def create_researcher(architectural_references: list[SourceVideoRecord]) -> Agen
         role="Investigative Researcher",
         goal="Uncover raw facts, physical evidence, and human stories that challenge conventional wisdom.",
         backstory=system_prompt,
+        llm=freerouter_llm(),
         allow_delegation=False,
         verbose=True
     )
@@ -75,6 +77,7 @@ def create_visual_agent() -> Agent:
         role="Visual Director",
         goal="Translate raw research into a sequence of compelling, hierarchy-compliant visual anchors.",
         backstory=system_prompt,
+        llm=freerouter_llm(temperature=0.8),
         allow_delegation=False,
         verbose=True
     )
@@ -104,6 +107,7 @@ def create_script_agent() -> Agent:
         role="Lead Writer",
         goal="Write compelling, active, jargon-free narration that pairs perfectly with the visual plan.",
         backstory=system_prompt,
+        llm=freerouter_llm(),
         allow_delegation=False,
         verbose=True
     )

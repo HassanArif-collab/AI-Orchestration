@@ -20,6 +20,7 @@ from packages.core.errors import (
 )
 from packages.core.logger import get_logger
 from packages.core.cache import FileCache
+from packages.core.llm import freerouter_llm
 
 __all__ = [
     "PipelineState",
@@ -30,4 +31,5 @@ __all__ = [
     "PipelineError", "LLMClientError", "RateLimitError",
     "ZepMemoryError", "IntegrationError",
     "get_logger", "FileCache",
+    "freerouter_llm",
 ]

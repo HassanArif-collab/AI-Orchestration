@@ -65,6 +65,7 @@ langgraph-deps = [
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
     "psycopg[binary]>=3.1.0",
     "psycopg-pool>=3.2.0",
 ]

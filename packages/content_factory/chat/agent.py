@@ -98,9 +98,11 @@ async def build_chat_agent():
         logger.debug(f"Checkpointer unavailable for chat: {e}")
 
     # Use the FreeRouter proxy URL so all calls go through our rate-limit tracking
-    freerouter_url = os.getenv("FREEROUTER_URL", "http://localhost:4000")
+    from packages.core.config import get_settings
+    settings = get_settings()
+    freerouter_url = settings.FREEROUTER_URL
     chat_model = os.getenv("CHAT_MODEL", "openrouter/google/gemini-2.0-flash-001")
-    freerouter_api_key = os.getenv("FREEROUTER_API_KEY", "sk-free")
+    freerouter_api_key = settings.FREEROUTER_API_KEY
 
     llm = ChatOpenAI(
         model=chat_model,
