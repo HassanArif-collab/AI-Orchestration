@@ -38,6 +38,7 @@ from typing import Literal, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 import uuid
+import asyncio
 from packages.core.logger import get_logger
 from packages.content_factory.orchestration.synthesis import Insight
 from packages.content_factory.orchestration.master import MasterOrchestrator
@@ -98,6 +99,20 @@ class UpdatePipeline:
     def __init__(self, master: MasterOrchestrator):
         self.master = master
         self.active_versions: dict[str, InstructionVersion] = {}
+
+    def _fire_escalation(self, **kwargs):
+        """C4 FIX: Fire an escalation asynchronously, handling both sync and async contexts.
+        
+        process_insight() is synchronous but handle_escalation() is async.
+        Calling async without await returns a coroutine that never executes.
+        This helper properly schedules the escalation via the event loop.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.master.handle_escalation(**kwargs))
+        except RuntimeError:
+            # No running loop — log warning instead of crashing
+            logger.warning(f"no_event_loop_for_escalation: {kwargs}")
         
     def process_insight(self, insight: Insight):
         """Creates a Draft Version for an accepted Synthesis Insight.
@@ -230,8 +245,8 @@ class UpdatePipeline:
             # Auto-Activation
             logger.info(f"auto_activating_instruction_update | version={draft.version_id}")
             self._activate_version(draft)
-            # Notification only
-            self.master.handle_escalation(
+            # C4 FIX: Use _fire_escalation instead of bare async call
+            self._fire_escalation(
                 cycle_id="N/A", error_type="instruction_update",
                 severity="low", context={"note": "Auto-activated narrow update", "version": draft.version_id}
             )
@@ -249,8 +264,8 @@ class UpdatePipeline:
           severity: Priority level for the review queue
         """
         logger.info(f"escalating_instruction_update | reason={reason}")
-        # Passes the proposed and old instruction diff to the Esc handler
-        self.master.handle_escalation(
+        # C4 FIX: Use _fire_escalation instead of bare async call
+        self._fire_escalation(
             cycle_id="N/A", 
             error_type="instruction_update", 
             severity=severity,
