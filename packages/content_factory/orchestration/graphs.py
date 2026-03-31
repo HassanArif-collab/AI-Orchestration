@@ -22,7 +22,7 @@ import logging
 from typing import Literal
 
 from langgraph.graph import StateGraph, END, START
-from langgraph.pregel import RetryPolicy
+from langgraph.types import RetryPolicy
 
 from .state import DiscoveryState, ProductionState
 from .nodes import (

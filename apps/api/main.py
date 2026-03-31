@@ -33,6 +33,13 @@ PORT:
 
 from __future__ import annotations
 
+import os
+
+# ── MUST run before any litellm import (triggered by crewai) ────────────
+# Prevents LiteLLM from blocking startup with a remote HTTP fetch
+to GitHub for model pricing data. Uses bundled local copy instead.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 from contextlib import asynccontextmanager
 
 import uvicorn
