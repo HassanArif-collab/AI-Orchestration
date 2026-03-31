@@ -110,24 +110,65 @@ Localization Mappings: {lmap.model_dump_json(exclude={'video_id'})}
     for item in data.get("entries", []):
         entries.append(DualColumnEntry(**item))
 
-    # Perform mock self-check pre-submission (simplified for Phase 2)
+    # C10 FIX: Real structural self-check instead of mock that always passed ~90%
+    # Tests actual script properties: section count, order, content quality
     check_results = []
     passed_count = 0
-    questions = eval_suite.get("questions", [])
-    for q in questions[:10]:  # sample 10 tests
-        passed = True
-        if q["id"] == "D1" and len(entries) > 0 and entries[0].section_label == "BRIDGE":
-            passed = False  # Bridge before anchor rule
+
+    structural_checks = [
+        {
+            "id": "S1", "text": "Script has at least 3 sections",
+            "passed": len(entries) >= 3
+        },
+        {
+            "id": "S2", "text": "First section is ANCHOR or HOOK",
+            "passed": len(entries) > 0 and entries[0].section_label.value in ("ANCHOR", "HOOK")
+        },
+        {
+            "id": "S3", "text": "BRIDGE section not placed first",
+            "passed": not (len(entries) > 0 and entries[0].section_label.value == "BRIDGE")
+        },
+        {
+            "id": "S4", "text": "Script has a CONCLUSION or REVEAL section",
+            "passed": any(e.section_label.value in ("CONCLUSION", "REVEAL", "CLOSING") for e in entries)
+        },
+        {
+            "id": "S5", "text": "All entries have non-empty prose",
+            "passed": all(len(e.prose.strip()) > 0 for e in entries)
+        },
+        {
+            "id": "S6", "text": "Average prose length > 20 characters per section",
+            "passed": len(entries) > 0 and sum(len(e.prose.strip()) for e in entries) / len(entries) > 20
+        },
+        {
+            "id": "S7", "text": "At least one entry has visual direction",
+            "passed": any(len(e.visual_direction.strip()) > 0 for e in entries)
+        },
+        {
+            "id": "S8", "text": "No section exceeds 500 characters prose",
+            "passed": all(len(e.prose) <= 500 for e in entries)
+        },
+        {
+            "id": "S9", "text": "Section sequence has logical flow (not all same type)",
+            "passed": len(set(e.section_label.value for e in entries)) > 1
+        },
+        {
+            "id": "S10", "text": "Script has been adapted with new content (not empty/placeholder)",
+            "passed": len(entries) > 0 and any(len(e.prose.strip()) > 50 for e in entries)
+        },
+    ]
+
+    for check in structural_checks:
         check_results.append(SelfCheckResult(
-            question_id=q["id"],
-            question_text=q["text"],
-            passed=passed,
-            failure_reason=None if passed else "Visual rule violation"
+            question_id=check["id"],
+            question_text=check["text"],
+            passed=check["passed"],
+            failure_reason=None if check["passed"] else f"Check failed: {check['text']}"
         ))
-        if passed:
+        if check["passed"]:
             passed_count += 1
 
-    readiness = (passed_count / len(check_results) * 100) if check_results else 100.0
+    readiness = (passed_count / len(check_results) * 100) if check_results else 0.0
 
     script = AdaptedScript(
         video_id=smap.video_id,

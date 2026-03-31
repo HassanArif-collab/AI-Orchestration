@@ -111,7 +111,10 @@ class ScoringEngine:
 
         except Exception as e:
             logger.error(f"scoring_engine_failed: {e}")
-            # Mock failure evaluation
+            # C11 FIX: Return sentinel score (-1) so caller knows scoring failed
+            # and can retry instead of treating 0% as a real evaluation
+            script.production_readiness_score = -1.0
+            script.self_check_results = []
             return script
 
         # Parse and apply results
