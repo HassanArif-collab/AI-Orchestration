@@ -78,7 +78,7 @@ class OrchestrationDB:
             "updated_at": record.updated_at.isoformat(),
         }).execute()
 
-    def acquire_lock(self, cycle_id: str, owner_id: str = "default", ttl_seconds: int = 3600) -> bool:
+    def acquire_lock(self, cycle_id: str, owner_id: str = "default", ttl_seconds: int = 30) -> bool:
         """Optimistic locking for safe concurrent access.
 
         Attempts to acquire an exclusive lock on a cycle record.
