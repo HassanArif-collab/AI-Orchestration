@@ -26,6 +26,13 @@ def _find_balanced(text: str, open_char: str, close_char: str) -> Optional[str]:
 
     This is immune to the greedy-matching problem that plagues
     regex patterns like ``r'\\{.*\\}'`` with re.DOTALL.
+
+    LIMITATION: If the JSON contains unescaped braces inside string values
+    (e.g., {"key": "value with { nested"}), the balanced-brace finder may
+    incorrectly count the inner brace as nesting depth, causing json.loads()
+    to fail on a partial string. In this case, the algorithm resets and looks
+    for the next opening brace, potentially skipping valid JSON objects.
+    For most well-formed LLM output this is not an issue.
     """
     depth = 0
     in_string = False
