@@ -19,7 +19,6 @@ Tables Used:
     - research_cache: Permanent storage for research results
 """
 
-from functools import lru_cache
 from typing import Optional
 
 from packages.core.config import get_settings
@@ -27,8 +26,17 @@ from packages.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+_supabase_client = None
+_supabase_client_url = None
 
-@lru_cache(maxsize=1)
+
+def _reset_supabase_client() -> None:
+    """Invalidate the cached Supabase client. Called on connection errors."""
+    global _supabase_client, _supabase_client_url
+    _supabase_client = None
+    _supabase_client_url = None
+
+
 def get_supabase():
     """Return a cached Supabase client singleton.
 
@@ -38,6 +46,7 @@ def get_supabase():
     Returns:
         Supabase client instance ready for database operations
     """
+    global _supabase_client, _supabase_client_url
     settings = get_settings()
 
     if not settings.SUPABASE_URL:
@@ -52,6 +61,10 @@ def get_supabase():
             "Get your anon key from https://app.supabase.com/project/_/settings/api"
         )
 
+    # Return cached client if URL hasn't changed
+    if _supabase_client is not None and _supabase_client_url == settings.SUPABASE_URL:
+        return _supabase_client
+
     try:
         from supabase import create_client, Client
 
@@ -61,6 +74,8 @@ def get_supabase():
         )
 
         logger.info("supabase_client_initialized")
+        _supabase_client = client
+        _supabase_client_url = settings.SUPABASE_URL
         return client
 
     except ImportError:
@@ -87,6 +102,8 @@ def get_supabase_optional():
     try:
         return get_supabase()
     except Exception as e:
+        # Invalidate cache on error so next call retries with fresh client
+        _reset_supabase_client()
         logger.warning(f"supabase_init_failed: {e}")
         return None
 

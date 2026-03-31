@@ -70,7 +70,7 @@ async def stage2_analyze(
         return cached_record.structural_map
 
     genre_schema = load_json(GENRE_SCHEMA_PATH)
-    genre_names = [g["id"] for g in genre_schema.get("genres", [])]
+    genre_names = [g["genre_id"] for g in genre_schema.get("genres", [])]
 
     # Build prompt for LLM
     system_prompt = """

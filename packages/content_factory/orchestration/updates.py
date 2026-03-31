@@ -286,6 +286,10 @@ class UpdatePipeline:
         Args:
           draft: The instruction version to activate
         """
+        # Capture pre-update scores if not already set
+        if not draft.pre_update_scores:
+            draft.pre_update_scores = list(draft.post_update_scores)
+            draft.post_update_scores = []
         draft.active_date = datetime.now(timezone.utc)
         self.active_versions[draft.agent_id] = draft
         # This will be where we invoke Hermes memory skills update component
@@ -310,10 +314,17 @@ class UpdatePipeline:
         if not version or version.is_rollback:
             return
             
+        # Skip if we don't have baseline data
+        if not version.pre_update_scores:
+            logger.warning(
+                f"rollback_monitor_skipped: no pre_update_scores for agent={agent_id}"
+            )
+            return
+
         version.post_update_scores.append(new_score)
         if len(version.post_update_scores) >= 3:
             avg_post = sum(version.post_update_scores) / len(version.post_update_scores)
-            avg_pre = sum(version.pre_update_scores) / len(version.pre_update_scores) if version.pre_update_scores else avg_post
+            avg_pre = sum(version.pre_update_scores) / len(version.pre_update_scores)
             if avg_post < avg_pre:
                 logger.warning(f"rollback_triggered | agent={agent_id} pre={avg_pre} post={avg_post}")
                 self._rollback(agent_id)

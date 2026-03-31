@@ -311,7 +311,17 @@ class PipelineRunner:
                 run.stage_status[failed_stage.value] = "pending"
                 run.error_message = ""
             run.status = "running"
+
+            # Save and verify no concurrent resume happened
             self.store.save(run)
+            reloaded = self.store.load(run_id)
+            if reloaded and reloaded.status != "running":
+                self.logger.warning(
+                    f"resume_run_race_condition: run_id={run_id} "
+                    f"status changed to {reloaded.status} during resume"
+                )
+                return None
+
             # Continue execution
             return await self.run_until_gate(run)
 

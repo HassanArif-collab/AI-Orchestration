@@ -29,7 +29,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
     
     # Paths that don't require authentication
-    PUBLIC_PATHS = {"/health", "/api/health", "/", "/favicon.ico"}
+    PUBLIC_PATHS = {"/health", "/api/health", "/", "/favicon.ico", "/api/events"}
     
     # Path prefixes that don't require authentication
     PUBLIC_PREFIXES = ["/static/"]

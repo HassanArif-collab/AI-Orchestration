@@ -687,7 +687,9 @@ Output a JSON array of ALL sections (including HOOK and ANCHOR from the opening)
             # Simple quality check: count entries
             try:
                 entries = json.loads(result) if isinstance(result, str) else result
-                if isinstance(entries, list) and len(entries) >= 4:
+                # Use target_pass_count as minimum entry threshold
+                min_entries = max(4, target_pass_count // 8)
+                if isinstance(entries, list) and len(entries) >= min_entries:
                     break
             except Exception:
                 pass

@@ -190,6 +190,18 @@ class DeepResearchEngine:
         self._enable_fact_validation = enable_fact_validation
         self._checkpoint = ResearchCheckpoint() if enable_checkpoints else None
 
+    # Stop words that are capitalized but carry no semantic meaning
+    _AGREEMENT_STOPWORDS = frozenset({
+        "The", "This", "That", "These", "Those", "There", "Then", "Than",
+        "His", "Her", "Its", "Our", "Their", "My", "Your",
+        "He", "She", "It", "We", "They", "You", "I",
+        "In", "On", "At", "To", "For", "Of", "By", "With", "From",
+        "And", "But", "Or", "Not", "No", "Is", "Was", "Are", "Were",
+        "Has", "Had", "Have", "Be", "Been", "Being",
+        "Which", "What", "When", "Where", "How", "Who", "Why",
+        "If", "So", "As", "Do", "Did", "Can", "Will", "May",
+    })
+
     async def research(
         self,
         topic: str,
@@ -513,13 +525,16 @@ class DeepResearchEngine:
 
     def _statements_agree(self, statement1: str, statement2: str) -> bool:
         """Check if two statements support the same claim."""
-        # Simple heuristic: check for overlapping named entities and key terms
-        words1 = set(re.findall(r'\b[A-Z][a-z]+\b', statement1))  # Named entities
+        words1 = set(re.findall(r'\b[A-Z][a-z]+\b', statement1))
         words2 = set(re.findall(r'\b[A-Z][a-z]+\b', statement2))
+
+        # Remove stop words that create false positives
+        words1 -= self._AGREEMENT_STOPWORDS
+        words2 -= self._AGREEMENT_STOPWORDS
 
         if words1 and words2:
             overlap = len(words1 & words2)
-            if overlap >= 1:  # At least one common named entity
+            if overlap >= 2:
                 return True
 
         return False

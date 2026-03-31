@@ -319,7 +319,7 @@ class SourceVideoRecord(BaseModel):
 class AdaptationError(BaseModel):
     """Standard error/warning log entry for the adaptation pipeline."""
     production_cycle_id: str
-    stage_number: int = Field(ge=1, le=4)
+    stage_number: int = Field(ge=1, le=6)
     error_type: str
     content_element: str = ""
     description: str

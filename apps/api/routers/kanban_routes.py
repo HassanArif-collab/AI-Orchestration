@@ -252,9 +252,13 @@ class KanbanEventRequest(BaseModel):
 
 # ─── API Endpoints ──────────────────────────────────────────────────────────────
 
+KANBAN_MAX_LIST_LIMIT = 200
+
 @router.get("/tasks")
 async def list_tasks(limit: int = 100) -> dict:
     """List all pipeline runs as Kanban tasks."""
+    if limit < 1 or limit > KANBAN_MAX_LIST_LIMIT:
+        limit = 100
     store = get_run_store()
     if not store:
         return {"tasks": []}
@@ -417,14 +421,18 @@ async def save_card(card_id: str) -> dict:
         raise HTTPException(500, f"Failed to save card: {e}")
 
 
+class MoveCardRequest(BaseModel):
+    """Request model for moving a Kanban card to a different column."""
+    column: int = Field(..., ge=1, le=6, description="Target column (1-6)")
+
 @router.put("/cards/{card_id}/move")
-async def move_card(card_id: str, body: dict) -> dict:
+async def move_card(card_id: str, body: MoveCardRequest) -> dict:
     """Move a card to a different column."""
     try:
         from packages.core.supabase_client import get_supabase
         sb = get_supabase()
         sb.table("kanban_cards").update({
-            "column": body["column"],
+            "column": body.column,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", card_id).execute()
         return {"status": "moved"}

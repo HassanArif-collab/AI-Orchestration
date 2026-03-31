@@ -104,10 +104,17 @@ class ChallengerGenerator:
               "section_label": "HOOK",
               "prose": "spoken narration",
               "visual_direction": "visual plan details",
-              "visual_type": "talking_head"
+              "visual_type": "talking_head",
+              "duration_estimate_seconds": 15.0,
+              "anchor_hierarchy_level": 1
             }
           ]
         }
+
+        IMPORTANT: You MUST copy these fields exactly from the baseline for each entry:
+        - duration_estimate_seconds
+        - anchor_hierarchy_level
+        If the baseline entry has these fields, include them in your output unchanged.
         """
 
         user_prompt = f"""
@@ -148,8 +155,12 @@ class ChallengerGenerator:
 
         for idx, item in enumerate(raw_entries):
             try:
-                # Merge original fields that shouldn't be touched by the LLM
-                entries.append(DualColumnEntry(**item))
+                # Merge with baseline entry to preserve fields LLM might omit
+                if idx < len(baseline.entries):
+                    merged = {**baseline.entries[idx].model_dump(), **item}
+                    entries.append(DualColumnEntry(**merged))
+                else:
+                    entries.append(DualColumnEntry(**item))
             except Exception as e:
                 logger.error(f"mutation_failed_validation: Entry {idx} invalid: {e}")
                 return None # Fail whole batch on single entry failure

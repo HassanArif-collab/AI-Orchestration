@@ -224,9 +224,9 @@ class RouterClient:
 
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
 
-    def _startup_health_check(self) -> None:
+    async def _startup_health_check(self) -> None:
         """
-        Synchronous health check at initialization with SSRF prevention.
+        Async health check at initialization with SSRF prevention.
 
         Raises:
             LLMClientError: If FreeRouter is not accessible or URL is invalid
@@ -241,17 +241,15 @@ class RouterClient:
             )
 
         try:
-            response = requests.get(
-                f"{self.base_url}/health",
-                timeout=5.0,
-            )
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.base_url}/health")
             if response.status_code == 200:
                 self._healthy = True
                 log.info("freerouter_startup_check_passed", url=self.base_url)
                 return
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             pass
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             pass
         except Exception as e:
             log.warning(f"freerouter_startup_check_exception: {e}")
@@ -459,7 +457,7 @@ class RouterClient:
         # Lazy health check on first call
         if self._healthy is None and self._startup_check_enabled:
             try:
-                self._startup_health_check()
+                await self._startup_health_check()
                 self._healthy = True
             except LLMClientError:
                 self._healthy = False
@@ -489,7 +487,7 @@ class RouterClient:
         # Lazy health check on first call
         if self._healthy is None and self._startup_check_enabled:
             try:
-                self._startup_health_check()
+                await self._startup_health_check()
                 self._healthy = True
             except LLMClientError:
                 self._healthy = False
@@ -498,20 +496,46 @@ class RouterClient:
                     "Run: cd freerouter && python -m freerouter proxy"
                 )
 
-        try:
-            import instructor
-            from openai import AsyncOpenAI
+        import instructor
+        from openai import AsyncOpenAI
 
-            openai_client = AsyncOpenAI(
-                base_url=f"{self.base_url}/v1",
-                api_key="not-needed",
-            )
-            client = instructor.from_openai(openai_client)
-            return await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                response_model=response_model,
-                **kwargs,
-            )
-        except Exception as e:
-            raise LLMClientError(f"Structured completion failed: {e}") from e
+        openai_client = AsyncOpenAI(
+            base_url=f"{self.base_url}/v1",
+            api_key="not-needed",
+            timeout=self.timeout,
+        )
+        client = instructor.from_openai(openai_client)
+
+        last_error = None
+        current_model = model
+        for attempt in range(3):
+            try:
+                return await client.chat.completions.create(
+                    model=current_model,
+                    messages=messages,
+                    response_model=response_model,
+                    **kwargs,
+                )
+            except Exception as e:
+                last_error = e
+                # If model is unavailable and not already on auto, fall back
+                if "503" in str(e) and current_model != "auto":
+                    log.warning(
+                        "structured_provider_unavailable",
+                        model=current_model,
+                        retrying_with="auto",
+                    )
+                    current_model = "auto"
+                    continue
+                if attempt < 2:
+                    wait_time = (2 ** attempt) + 1
+                    log.warning(
+                        f"structured_completion_retry_{attempt+1}_in_{wait_time}s",
+                        error=str(e),
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
+        raise LLMClientError(
+            f"Structured completion failed after 3 attempts: {last_error}"
+        ) from last_error

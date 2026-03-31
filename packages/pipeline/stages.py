@@ -34,7 +34,7 @@ STAGE_DEPENDENCIES: dict[Stage, list[Stage]] = {
     Stage.RESEARCH: [Stage.HUMAN_TOPIC_APPROVAL],
     Stage.SCRIPT_WRITING: [Stage.RESEARCH],
     Stage.VISUAL_PLANNING: [Stage.SCRIPT_WRITING],
-    Stage.HUMAN_REVIEW: [Stage.VISUAL_PLANNING],
+    Stage.HUMAN_REVIEW: [Stage.VISUAL_PLANNING, Stage.SEO],
     Stage.ASSET_CREATION: [Stage.HUMAN_REVIEW],
     Stage.SEO: [Stage.SCRIPT_WRITING],
     Stage.PUBLISH: [Stage.ASSET_CREATION],

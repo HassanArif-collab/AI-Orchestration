@@ -224,30 +224,24 @@ async def get_stage_definitions():
     return STAGE_DEFINITIONS
 
 
+MAX_LIST_LIMIT = 100
+
 @router.get("/runs")
 async def list_runs(limit: int = 20):
     """List all pipeline runs, newest first."""
+    if limit < 1 or limit > MAX_LIST_LIMIT:
+        limit = 20
     store = get_run_store()
     if not store:
         return [{"run_id": "demo-001", "current_stage": "human_topic_approval",
                  "status": "waiting_human", "video_title": "Demo Run (pipeline package loading)",
                  "updated_at": datetime.now(timezone.utc).isoformat(), "stages": {}}]
     try:
-        import sqlite3 as _sql
-        from pathlib import Path as _Path
-        db = getattr(store, "db_path", "packages/data/pipeline.db")
-        if not _Path(str(db)).exists():
-            return []
-        conn = _sql.connect(str(db))
-        rows = conn.execute(
-            "SELECT run_id FROM pipeline_runs ORDER BY updated_at DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-        conn.close()
+        summaries = store.list_runs(limit=limit)
         result = []
-        for (run_id,) in rows:
+        for summary in summaries:
             try:
-                run = store.load(run_id)
+                run = store.load(summary["run_id"])
                 if run:
                     result.append(_run_to_dict(run))
             except Exception:

@@ -433,33 +433,41 @@ def get_escalation_service() -> EscalationService:
         return _service
 
     # Read configuration from environment
-    enabled = os.getenv("ESCALATION_ENABLED", "true").lower() == "true"
-    min_score = float(os.getenv("ESCALATION_MIN_SCORE", "50.0"))
-    webhook_url = os.getenv("ESCALATION_WEBHOOK_URL", "").strip()
-    webhook_type = os.getenv("ESCALATION_WEBHOOK_TYPE", "default").lower()
+    from packages.core.config import get_settings
 
-    _service = EscalationService(
+    settings = get_settings()
+
+    enabled = settings.ESCALATION_ENABLED
+    min_score = settings.ESCALATION_MIN_SCORE
+    webhook_url = settings.ESCALATION_WEBHOOK_URL.strip()
+    webhook_type = settings.ESCALATION_WEBHOOK_TYPE.lower()
+
+    service = EscalationService(
         enabled=enabled,
         min_score_for_escalation=min_score,
     )
 
     # Always add log handler
-    _service.add_handler(LogHandler())
+    service.add_handler(LogHandler())
 
     # Add webhook handler if configured
     if webhook_url:
         if webhook_type == "slack":
-            _service.add_handler(SlackHandler(webhook_url))
+            service.add_handler(SlackHandler(webhook_url))
         else:
-            _service.add_handler(WebhookHandler(webhook_url))
+            service.add_handler(WebhookHandler(webhook_url))
 
         logger.info(f"escalation_webhook_configured: type={webhook_type}")
 
     logger.info(
         f"escalation_service_initialized: enabled={enabled} "
-        f"handlers={len(_service._handlers)}"
+        f"handlers={len(service._handlers)}"
     )
 
+    # Atomic assignment — if another thread beat us, discard ours
+    if _service is not None:
+        return _service
+    _service = service
     return _service
 
 

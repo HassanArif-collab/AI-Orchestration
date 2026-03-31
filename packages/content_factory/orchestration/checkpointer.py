@@ -54,6 +54,16 @@ async def get_checkpointer():
     if _checkpointer is not None:
         return _checkpointer
     
+    # Guard against concurrent initialization
+    if _pool is not None:
+        # Pool was opened but checkpointer wasn't created yet
+        # Another coroutine is in the middle of init
+        logger.warning("checkpointer_init_race: pool exists but no checkpointer, waiting")
+        raise RuntimeError(
+            "Checkpointer initialization in progress. "
+            "Please retry after a brief delay."
+        )
+    
     db_url = os.getenv("SUPABASE_DB_URL")
     if not db_url:
         raise RuntimeError(

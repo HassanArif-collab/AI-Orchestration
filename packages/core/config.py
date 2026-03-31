@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 import re
 
-from pydantic import field_validator, ValidationInfo
+from pydantic import field_validator, model_validator, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,6 +91,12 @@ class Settings(BaseSettings):
 
     # CORS Settings
     CORS_ORIGINS: str = "http://localhost:3000"
+
+    # Escalation settings
+    ESCALATION_ENABLED: bool = True
+    ESCALATION_MIN_SCORE: float = 50.0
+    ESCALATION_WEBHOOK_URL: str = ""
+    ESCALATION_WEBHOOK_TYPE: str = "default"
 
     # Quality thresholds
     SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
@@ -198,6 +204,38 @@ class Settings(BaseSettings):
                 f"and underscores, got '{v}'"
             )
         return v
+
+    @field_validator("ESCALATION_MIN_SCORE")
+    @classmethod
+    def validate_escalation_min_score(cls, v: float) -> float:
+        """Validate escalation min score is in valid range."""
+        if not 0 <= v <= 100:
+            raise ValueError(
+                f"ESCALATION_MIN_SCORE must be between 0 and 100, got {v}"
+            )
+        return v
+
+    @field_validator("ESCALATION_WEBHOOK_TYPE")
+    @classmethod
+    def validate_escalation_webhook_type(cls, v: str) -> str:
+        """Validate webhook type is a known value."""
+        valid_types = {"default", "slack", "discord"}
+        if v.lower() not in valid_types:
+            raise ValueError(
+                f"ESCALATION_WEBHOOK_TYPE must be one of {valid_types}, got '{v}'"
+            )
+        return v.lower()
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self) -> "Settings":
+        """Ensure SCRIPT_QUALITY_THRESHOLD >= SCRIPT_QUALITY_FLOOR."""
+        if self.SCRIPT_QUALITY_THRESHOLD < self.SCRIPT_QUALITY_FLOOR:
+            raise ValueError(
+                f"SCRIPT_QUALITY_THRESHOLD ({self.SCRIPT_QUALITY_THRESHOLD}) must be "
+                f">= SCRIPT_QUALITY_FLOOR ({self.SCRIPT_QUALITY_FLOOR}). "
+                f"The target threshold cannot be lower than the minimum floor."
+            )
+        return self
 
     # ─── Existing Properties and Methods ───────────────────────────────────────
 

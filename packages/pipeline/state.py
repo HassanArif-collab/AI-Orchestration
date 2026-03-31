@@ -184,9 +184,20 @@ class PipelineRun:
         Returns:
             PipelineRun instance
         """
+        try:
+            current_stage = Stage(data["current_stage"])
+        except (ValueError, KeyError):
+            # Handle renamed or unknown stages gracefully
+            current_stage = Stage.TREND_ANALYSIS
+            import logging
+            logging.getLogger(__name__).warning(
+                f"from_dict_unknown_stage: {data['current_stage']} "
+                f"defaulting to TREND_ANALYSIS"
+            )
+
         return cls(
             run_id=data["run_id"],
-            current_stage=Stage(data["current_stage"]),
+            current_stage=current_stage,
             stage_outputs=data["stage_outputs"],
             stage_status=data["stage_status"],
             status=data["status"],
