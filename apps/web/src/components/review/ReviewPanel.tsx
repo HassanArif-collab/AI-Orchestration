@@ -27,18 +27,39 @@ export function ReviewPanel({
   const [confirmationState, setConfirmationState] = useState<'idle' | 'submitting' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [feedbackError, setFeedbackError] = useState('');
+
+  const handleFeedbackChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setFeedback(value);
+    // Clear inline error as soon as user starts typing meaningful content
+    if (feedbackError && value.trim().length >= 10) {
+      setFeedbackError('');
+    }
+  };
+
+  /** Unified validation error message — from reject validation OR API error */
+  const getFeedbackError = (): string => {
+    if (feedbackError) return feedbackError;
+    if (confirmationState === 'error' && errorMessage) return errorMessage;
+    return '';
+  };
 
   // ── Reject (no confirmation modal needed) ──
 
   const handleReject = async () => {
     if (!feedback.trim()) {
-      setConfirmationState('error');
-      setErrorMessage('Please provide feedback so the AI knows what to fix.');
+      setFeedbackError('Please provide feedback so the AI knows what to fix.');
+      return;
+    }
+    if (feedback.trim().length < 10) {
+      setFeedbackError('Feedback should be at least 10 characters to be useful.');
       return;
     }
 
     setConfirmationState('submitting');
     setErrorMessage('');
+    setFeedbackError('');
 
     try {
       await api.resume(cardId, { approved: false, feedback: feedback.trim() });
@@ -52,6 +73,7 @@ export function ReviewPanel({
       onDecision();
     } catch (err) {
       setConfirmationState('error');
+      setFeedbackError('');
       const friendlyError = mapApiError(err);
       setErrorMessage(friendlyError.message);
     }
@@ -72,6 +94,7 @@ export function ReviewPanel({
   const executeApproval = async () => {
     setConfirmationState('submitting');
     setErrorMessage('');
+    setFeedbackError('');
 
     try {
       await api.resume(cardId, { approved: true });
@@ -87,6 +110,7 @@ export function ReviewPanel({
     } catch (err) {
       setConfirmationState('error');
       setShowPublishConfirm(false);
+      setFeedbackError('');
       const friendlyError = mapApiError(err);
       setErrorMessage(friendlyError.message);
     }
@@ -103,14 +127,14 @@ export function ReviewPanel({
           or provide feedback to send back for revision.
         </p>
 
-        {/* Inline error banner (shown on failure, keeps drawer open) */}
-        {confirmationState === 'error' && (
+        {/* Inline error banner (shown on failure or validation error, keeps drawer open) */}
+        {getFeedbackError() && (
           <div className="bg-red-900/30 border border-red-500 rounded p-3 text-sm mb-4 animate-shake">
             <p className="text-red-300 font-medium flex items-center gap-2">
               <span>⚠</span>
               <span>Could not submit your decision</span>
             </p>
-            <p className="text-red-200/70 mt-1">{errorMessage}</p>
+            <p className="text-red-200/70 mt-1">{getFeedbackError()}</p>
             <p className="text-red-200/50 mt-1 text-xs">
               Your decision was not saved. Please try again.
             </p>
@@ -119,10 +143,17 @@ export function ReviewPanel({
 
         <textarea
           value={feedback}
-          onChange={(e) => setFeedback(e.target.value)}
-          placeholder="Feedback for revision (required if rejecting)..."
-          className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm text-white placeholder-gray-500 resize-none h-20 focus:outline-none focus:border-amber-500"
+          onChange={handleFeedbackChange}
+          placeholder="What should be improved? Be specific..."
+          className={`w-full bg-gray-800 border rounded p-2 text-sm text-white placeholder-gray-500 resize-none h-20 transition-colors ${
+            getFeedbackError()
+              ? 'border-red-500 focus:border-red-400'
+              : 'border-gray-700 focus:border-amber-500'
+          }`}
         />
+        <p className="text-gray-500 text-xs mt-1 text-right">
+          {feedback.length} characters
+        </p>
 
         <div className="flex gap-3 mt-3">
           <button

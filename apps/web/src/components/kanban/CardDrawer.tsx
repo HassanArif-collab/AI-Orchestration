@@ -13,7 +13,7 @@ interface Props {
 }
 
 export function CardDrawer({ card, onClose }: Props) {
-  const { thoughts, isConnected, bottomRef } = useAgentStream(card?.id ?? null);
+  const { thoughts, isConnected, reconnectAttempt, connectionError, bottomRef, forceReconnect } = useAgentStream(card?.id ?? null);
   const { state, isWaitingForReview } = usePipelineState(card?.id ?? null);
   const drawerRef = useRef<HTMLDivElement>(null);
 
@@ -71,9 +71,24 @@ export function CardDrawer({ card, onClose }: Props) {
               </>
             )}
             {/* WebSocket connection indicator */}
-            <span className={`text-xs ${isConnected ? 'text-green-400' : 'text-red-400'}`}>
-              {isConnected ? '● Live' : '○ Disconnected'}
-            </span>
+            {isConnected ? (
+              <span className="text-xs text-green-400">● Live</span>
+            ) : connectionError ? (
+              <span className="flex items-center gap-1.5 text-xs text-yellow-400">
+                <span className="animate-spin">⟳</span>
+                <span>{connectionError}</span>
+                {connectionError.includes('Click Retry') && (
+                  <button
+                    onClick={forceReconnect}
+                    className="ml-1 text-xs text-blue-400 hover:text-blue-300 underline"
+                  >
+                    Retry
+                  </button>
+                )}
+              </span>
+            ) : (
+              <span className="text-xs text-red-400">○ Disconnected</span>
+            )}
           </div>
         </div>
 

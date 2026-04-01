@@ -130,12 +130,36 @@ export function ChatPanel() {
         {messages.length === 0 && (
           <div className="text-center text-gray-600 text-sm mt-8">
             <p className="text-2xl mb-2">🤖</p>
-            <p>Ask me anything about your content pipeline.</p>
-            <div className="mt-4 space-y-1 text-xs text-gray-700">
-              <p>Try: "What cards are in the pipeline?"</p>
-              <p>Try: "What did we learn from past scripts?"</p>
-              <p>Try: "How are competitor channels doing?"</p>
-              <p>Try: "Search for Pakistan AI regulation news"</p>
+            <p className="mb-4">Ask me anything about your content pipeline.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => { setInput('What cards are in the pipeline?'); }}
+                className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
+              >
+                <p className="text-white text-xs font-medium group-hover:text-blue-400">📋 Pipeline Status</p>
+                <p className="text-gray-500 text-xs mt-0.5">"What cards are in the pipeline?"</p>
+              </button>
+              <button
+                onClick={() => { setInput('Show my published scripts'); }}
+                className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
+              >
+                <p className="text-white text-xs font-medium group-hover:text-blue-400">📄 Published Scripts</p>
+                <p className="text-gray-500 text-xs mt-0.5">"Show my published scripts"</p>
+              </button>
+              <button
+                onClick={() => { setInput('Search for AI regulation news'); }}
+                className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
+              >
+                <p className="text-white text-xs font-medium group-hover:text-blue-400">🔍 Web Search</p>
+                <p className="text-gray-500 text-xs mt-0.5">"Search for AI regulation news"</p>
+              </button>
+              <button
+                onClick={() => { setInput('How are competitor channels doing?'); }}
+                className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
+              >
+                <p className="text-white text-xs font-medium group-hover:text-blue-400">📊 YouTube Analytics</p>
+                <p className="text-gray-500 text-xs mt-0.5">"How are competitor channels doing?"</p>
+              </button>
             </div>
           </div>
         )}

@@ -28,6 +28,13 @@ export function Column({
     data: { columnNumber },
   });
 
+  // Separate expired cards from active ones for accurate badge count
+  const activeCards = cards.filter((card) => {
+    if (!card.expires_at) return true;
+    return new Date(card.expires_at) > new Date();
+  });
+  const expiredCount = cards.length - activeCards.length;
+
   return (
     <div
       ref={setNodeRef}
@@ -45,8 +52,15 @@ export function Column({
           <h3 className="text-sm font-semibold text-white">
             {definition.name}
           </h3>
-          <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
-            {cards.length}
+          <span className={`text-xs px-2 py-0.5 rounded-full ${
+            expiredCount > 0
+              ? 'bg-yellow-900/50 text-yellow-300'
+              : 'bg-gray-800 text-gray-500'
+          }`}>
+            {activeCards.length}
+            {expiredCount > 0 && (
+              <span className="text-yellow-500">+{expiredCount}</span>
+            )}
           </span>
         </div>
         <p className="text-xs text-gray-500 mt-0.5">
