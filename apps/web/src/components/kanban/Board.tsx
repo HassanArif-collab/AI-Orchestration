@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { DndContext, closestCenter } from '@dnd-kit/core';
-import type { DragEndEvent } from '@dnd-kit/core';
+import { DndContext, closestCenter, DragOverlay } from '@dnd-kit/core';
+import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { Column } from './Column';
 import { CardDrawer } from './CardDrawer';
 import { useCards, groupByColumn } from '../../hooks/useCards';
@@ -52,7 +52,15 @@ function getColumnName(colNum: number): string {
   return COLUMNS[colNum]?.name ?? `Column ${colNum}`;
 }
 
-// ── Board Component ──
+// ── Drag Overlay Component ──
+function CardOverlay({ card }: { card: KanbanCard }) {
+  return (
+    <div className="bg-gray-800 rounded-lg p-3 shadow-2xl border border-blue-500 w-[260px] rotate-2">
+      <h4 className="text-sm font-medium text-white truncate">{card.topic_brief?.title ?? 'Untitled Topic'}</h4>
+      <p className="text-xs text-gray-400 mt-1 line-clamp-2">{card.topic_brief?.description ?? ''}</p>
+    </div>
+  );
+}
 
 export function Board() {
   const { cards, isLoading, error, mutate } = useCards();
@@ -60,6 +68,7 @@ export function Board() {
   const [optimisticMoves, setOptimisticMoves] = useState<Record<string, number>>({});
   const [dragError, setDragError] = useState<{ cardId: string; message: string } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const pendingTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // Clean up pending timers on unmount to prevent stale state updates
@@ -90,10 +99,19 @@ export function Board() {
     })),
   );
 
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      setActiveId(event.active.id as string);
+      setIsDragging(true);
+    },
+    [],
+  );
+
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       const { active, over } = event;
       setIsDragging(false);
+      setActiveId(null);
 
       if (!over) return;
 
@@ -203,8 +221,8 @@ export function Board() {
     <>
       <DndContext
         collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
-        onDragStart={() => setIsDragging(true)}
       >
         <div className="flex gap-4 overflow-x-auto p-4 h-full relative">
           {[1, 2, 3, 4, 5, 6].map((colNum) => (
@@ -241,6 +259,10 @@ export function Board() {
             </div>
           )}
         </div>
+
+        <DragOverlay>
+          {activeId ? <CardOverlay card={cards.find((c) => c.id === activeId)!} /> : null}
+        </DragOverlay>
       </DndContext>
 
       {/* Slide-out drawer for card details */}

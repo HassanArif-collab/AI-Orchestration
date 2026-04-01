@@ -141,7 +141,7 @@ export function PublishConfirmModal({
             {scriptPreview.title}
           </h3>
           <div className="flex items-center gap-4 text-sm text-gray-400 mb-3">
-            <span>Score: {scriptPreview.score.toFixed(1)}/10</span>
+            <span>Score: {scriptPreview.score.toFixed(1)}%</span>
             <span>•</span>
             <span>Iteration {scriptPreview.iterationCount}</span>
           </div>

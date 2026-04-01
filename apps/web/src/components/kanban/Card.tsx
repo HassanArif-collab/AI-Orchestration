@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDraggable } from '@dnd-kit/core';
 import type { KanbanCard } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { useCardTimer } from '../../hooks/useCardTimer';
@@ -16,6 +17,11 @@ export function Card({ card, onClick }: Props) {
   const timer = useCardTimer(card.column === 2 ? card.expires_at : null);
   const actionInfo = getCardAction(card);
   const [actionLoading, setActionLoading] = useState(false);
+
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: card.id,
+    data: { columnNumber: card.column },
+  });
 
   const handleSave = async (e: React.MouseEvent) => {
     e.stopPropagation(); // Don't trigger onClick (drawer open)
@@ -125,15 +131,32 @@ export function Card({ card, onClick }: Props) {
 
   return (
     <div
+      ref={setNodeRef}
       onClick={onClick}
+      {...attributes}
+      {...listeners}
+      style={transform
+        ? {
+            transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+            opacity: isDragging ? 0.5 : 1,
+          }
+        : undefined
+      }
       className={`
         bg-gray-800 rounded-lg p-3 cursor-pointer
         transition-all duration-200 hover:shadow-lg
-        ${card.status === 'error' ? 'border border-red-500/50' : ''}
-        ${timer.isExpired ? 'border border-red-500/50 opacity-60' : ''}
-        ${timer.isCritical && !timer.isExpired ? 'border border-orange-500 animate-pulse-border' : ''}
-        ${timer.isWarning && !timer.isExpired && !timer.isCritical ? 'border border-yellow-600' : ''}
-        ${!card.status?.startsWith('error') && !timer.isExpired && !timer.isCritical && !timer.isWarning ? 'border border-gray-700 hover:border-gray-500' : ''}
+        ${isDragging ? 'opacity-50 scale-95 ring-2 ring-blue-500/50' : ''}
+        ${
+          card.status === 'error'
+            ? 'border border-red-500/50'
+            : timer.isExpired
+              ? 'border border-red-500/50 opacity-60'
+              : timer.isCritical
+                ? 'border border-orange-500 animate-pulse-border'
+                : timer.isWarning
+                  ? 'border border-yellow-600'
+                  : 'border border-gray-700 hover:border-gray-500'
+        }
       `}
     >
       {/* Title */}

@@ -89,6 +89,14 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
 
   // Column 5: Review + Visuals
   if (card.column === 5) {
+    if (card.status === 'review') {
+      return {
+        action: 'review',
+        reason: 'Script is ready for your review and approval.',
+        label: '👀 Review Script',
+        variant: 'primary',
+      };
+    }
     if (card.status === 'error') {
       return {
         action: 'resubmit',

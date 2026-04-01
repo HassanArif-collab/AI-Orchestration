@@ -79,7 +79,7 @@ export function useAgentStream(cardId: string | null) {
         setConnectionError(null);
       }
 
-      // Step 1: Load history
+      // Step 1: Load history FIRST
       const loadHistory = async () => {
         if (cancelled) return;
         const id = cardIdRef.current;
@@ -91,10 +91,11 @@ export function useAgentStream(cardId: string | null) {
           .eq('card_id', id)
           .order('created_at', { ascending: true });
 
-        if (!cancelled && data) {
+        if (cancelled) return;
+
+        if (data) {
           const thoughts = data as AgentThought[];
           setThoughts(thoughts);
-          // Initialize seen IDs from history to prevent duplicates
           seenIdsRef.current = new Set(thoughts.map((t) => t.id));
         }
         if (error) {
@@ -102,62 +103,61 @@ export function useAgentStream(cardId: string | null) {
         }
       };
 
-      loadHistory();
+      // Step 2: Subscribe to new thoughts (called AFTER history loads)
+      const subscribe = () => {
+        if (cancelled) return;
 
-      // Step 2: Subscribe to new thoughts
-      const channel = supabase
-        .channel(channelName)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'agent_thoughts',
-            filter: `card_id=eq.${currentCardId}`,
-          },
-          (payload) => {
+        const channel = supabase
+          .channel(channelName)
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'agent_thoughts',
+              filter: `card_id=eq.${currentCardId}`,
+            },
+            (payload) => {
+              if (cancelled) return;
+              const thought = payload.new as AgentThought;
+              if (seenIdsRef.current.has(thought.id)) return;
+              seenIdsRef.current.add(thought.id);
+              setIsConnected(true);
+              setReconnectAttempt(0);
+              setConnectionError(null);
+              setThoughts((prev) => [...prev, thought]);
+            },
+          )
+          .subscribe((status, _err) => {
             if (cancelled) return;
-
-            const thought = payload.new as AgentThought;
-
-            // Deduplicate: skip if we already have this thought from history
-            if (seenIdsRef.current.has(thought.id)) return;
-            seenIdsRef.current.add(thought.id);
-
-            setIsConnected(true);
-            setReconnectAttempt(0);
-            setConnectionError(null);
-            setThoughts((prev) => [...prev, thought]);
-          },
-        )
-        .subscribe((status, _err) => {
-          if (cancelled) return;
-
-          if (status === 'SUBSCRIBED') {
-            setIsConnected(true);
-            setReconnectAttempt(0);
-            setConnectionError(null);
-          } else {
-            setIsConnected(false);
-
-            if (attempt < MAX_RECONNECTS) {
-              const delay = BASE_DELAY * Math.pow(2, attempt);
-              console.warn(
-                `[useAgentStream] Lost connection for card ${currentCardId}. ` +
-                `Retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RECONNECTS})...`
-              );
-              setConnectionError(`Reconnecting... (${attempt + 1}/${MAX_RECONNECTS})`);
-
-              reconnectTimerRef.current = setTimeout(() => {
-                connect(attempt + 1);
-              }, delay);
+            if (status === 'SUBSCRIBED') {
+              setIsConnected(true);
+              setReconnectAttempt(0);
+              setConnectionError(null);
             } else {
-              setConnectionError(
-                'Connection lost after multiple attempts. Click Retry to reconnect.'
-              );
+              setIsConnected(false);
+              if (attempt < MAX_RECONNECTS) {
+                const delay = BASE_DELAY * Math.pow(2, attempt);
+                console.warn(
+                  `[useAgentStream] Lost connection for card ${currentCardId}. ` +
+                  `Retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_RECONNECTS})...`
+                );
+                setConnectionError(`Reconnecting... (${attempt + 1}/${MAX_RECONNECTS})`);
+                reconnectTimerRef.current = setTimeout(() => {
+                  connect(attempt + 1);
+                }, delay);
+              } else {
+                setConnectionError(
+                  'Connection lost after multiple attempts. Click Retry to reconnect.'
+                );
+              }
             }
-          }
-        });
+          });
+      };
+
+      // Load history first, THEN subscribe (prevents race condition where
+      // a new INSERT arrives between subscription and history load)
+      loadHistory().then(() => subscribe());
     };
 
     connect(0);

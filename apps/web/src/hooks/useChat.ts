@@ -71,6 +71,13 @@ export function useChat(): UseChatReturn {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // SSE timeout: abort after 120 seconds to prevent hanging connections
+    const sseTimedOut = { current: false };
+    const sseTimeoutId = setTimeout(() => {
+      sseTimedOut.current = true;
+      controller.abort();
+    }, 120_000);
+
     try {
       const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
@@ -84,7 +91,7 @@ export function useChat(): UseChatReturn {
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
-        throw new Error(`Chat API returned ${response.status}: ${errorBody}`);
+        throw new Error(`API ${response.status}: ${errorBody}`);
       }
       if (!response.body) throw new Error('No response body');
 
@@ -117,14 +124,6 @@ export function useChat(): UseChatReturn {
                 accumulatedText += event.content;
                 setStreamingText(accumulatedText);
                 setCurrentStage('streaming');
-
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: accumulatedText }
-                      : m
-                  )
-                );
                 break;
               }
 
@@ -154,6 +153,14 @@ export function useChat(): UseChatReturn {
                 if (event.session_id) {
                   sessionRef.current = event.session_id;
                 }
+                // Finalize: write accumulated text into the assistant message
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, content: accumulatedText || m.content }
+                      : m
+                  )
+                );
                 setCurrentStage('done');
                 break;
               }
@@ -177,7 +184,22 @@ export function useChat(): UseChatReturn {
         }
       }
     } catch (err) {
-      if (controller.signal.aborted) return; // Clear was called — skip error state
+      if (controller.signal.aborted) {
+        if (sseTimedOut.current) {
+          const timeoutErr = new Error('API 408: SSE stream timed out');
+          const friendlyError = mapApiError(timeoutErr);
+          setError(friendlyError.message);
+          setCurrentStage('error');
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: `${friendlyError.title}: ${friendlyError.message}` }
+                : m
+            )
+          );
+        }
+        return;
+      }
       const friendlyError = mapApiError(err);
       setError(friendlyError.message);
       setCurrentStage('error');
@@ -189,6 +211,7 @@ export function useChat(): UseChatReturn {
         )
       );
     } finally {
+      clearTimeout(sseTimeoutId);
       abortRef.current = null;
       if (!controller.signal.aborted) {
         setIsLoading(false);

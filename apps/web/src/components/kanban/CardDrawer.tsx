@@ -19,12 +19,13 @@ export function CardDrawer({ card, onClose }: Props) {
 
   // Close on Escape key
   useEffect(() => {
+    if (!card) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [onClose]);
+  }, [card, onClose]);
 
   // Focus trap + auto-focus when drawer opens
   useEffect(() => {

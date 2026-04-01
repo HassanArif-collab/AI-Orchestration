@@ -151,14 +151,6 @@ export const api = {
       body: JSON.stringify({ stage: toColumn }),
     }),
 
-  // Get all kanban tasks
-  getTasks: () =>
-    request<{ tasks: unknown[] }>('/api/kanban/tasks'),
-
-  // Get kanban stats
-  getStats: () =>
-    request<{ total_tasks: number; by_stage: Record<number, number>; by_status: Record<string, number> }>('/api/kanban/stats'),
-
   // ── YouTube Analytics ──
 
   getCompetitorVideos: () =>
