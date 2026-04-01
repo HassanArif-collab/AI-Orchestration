@@ -904,19 +904,48 @@ async def human_review_node(state: ProductionState) -> dict:
     
     Uses LangGraph's interrupt() — this saves the checkpoint and stops execution.
     The graph stays frozen until the human calls the /resume endpoint.
+    
+    Includes risk tier classification and SLA tracking (Issue 6):
+    - Classifies the evaluation score into risk tiers (low/medium/high)
+    - Computes a review SLA deadline based on risk tier
+    - Passes risk_tier and sla_deadline to the frontend via interrupt data
     """
     from langgraph.types import interrupt
+    from packages.core.config import get_settings
     
     card_id = state.get("card_id", "unknown")
+    evaluation_score = state.get("evaluation_score", 0)
+    settings = get_settings()
+    
+    # ── Risk tier classification (Issue 6) ──
+    if evaluation_score >= settings.RISK_TIER_LOW_SCORE:
+        risk_tier = "low"
+    elif evaluation_score >= settings.RISK_TIER_HIGH_SCORE:
+        risk_tier = "medium"
+    else:
+        risk_tier = "high"
+    
+    # ── SLA deadline based on risk tier ──
+    sla_hours_map = {
+        "low": settings.RISK_TIER_LOW_SLA_HOURS,
+        "medium": settings.RISK_TIER_MEDIUM_SLA_HOURS,
+        "high": settings.RISK_TIER_HIGH_SLA_HOURS,
+    }
+    sla_hours = sla_hours_map.get(risk_tier, settings.HUMAN_REVIEW_TIMEOUT_HOURS)
+    review_requested_at = datetime.now(timezone.utc)
+    sla_deadline = review_requested_at + timedelta(hours=sla_hours)
     
     await report_thought(
         card_id, "system",
-        "⏸️ Waiting for human review...",
+        f"⏸️ Waiting for human review... [risk={risk_tier}, SLA={sla_hours}h]",
         "milestone",
         metadata={
-            "score": state.get("evaluation_score", 0),
+            "score": evaluation_score,
             "iterations": state.get("iteration_count", 0),
             "draft_words": len(state.get("current_draft", "").split()),
+            "risk_tier": risk_tier,
+            "sla_hours": sla_hours,
+            "sla_deadline": sla_deadline.isoformat(),
         }
     )
     
@@ -929,8 +958,11 @@ async def human_review_node(state: ProductionState) -> dict:
         "message": "Please review the script with visual annotations",
         "draft": state.get("current_draft", ""),
         "visual_plan": state.get("visual_plan", ""),
-        "score": state.get("evaluation_score", 0),
+        "score": evaluation_score,
         "iterations": state.get("iteration_count", 0),
+        "risk_tier": risk_tier,
+        "sla_deadline": sla_deadline.isoformat(),
+        "review_requested_at": review_requested_at.isoformat(),
     })
     
     # When resumed, `decision` contains the human's response
@@ -948,6 +980,9 @@ async def human_review_node(state: ProductionState) -> dict:
         "approved": approved,
         "human_feedback": feedback,
         "pipeline_status": "review",
+        "risk_tier": risk_tier,
+        "review_requested_at": review_requested_at.isoformat(),
+        "sla_deadline": sla_deadline.isoformat(),
     }
 
 

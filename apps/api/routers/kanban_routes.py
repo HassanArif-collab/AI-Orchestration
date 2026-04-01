@@ -9,7 +9,7 @@ Pipeline runs stored in Supabase pipeline_runs table.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Path, Body
@@ -104,7 +104,8 @@ def _run_to_kanban_dict(run) -> dict:
         "research": research_html,
         "script": script_html,
         "visual_cues": visual_html,
-        "thoughts": json.dumps(thoughts)  # JSON string for frontend parsing
+        "thoughts": json.dumps(thoughts),  # JSON string for frontend parsing
+        "expires_at": d.get("expires_at"),
     }
 
 
@@ -241,6 +242,7 @@ def _render_artifact_html(data: Any, artifact_type: str) -> str:
 class KanbanTaskUpdate(BaseModel):
     """Request model for updating a Kanban task."""
     stage: Optional[int] = Field(default=None, ge=1, le=6)
+    extend_expiration: Optional[bool] = Field(default=False, description="If true, extend card expiration by 3 hours")
 
 class TopicFinderRequest(BaseModel):
     """Request model for triggering Topic Finder."""
@@ -292,7 +294,7 @@ async def get_task(task_id: str = Path(..., min_length=1, max_length=100)) -> di
 
 @router.patch("/tasks/{task_id}")
 async def update_task(task_id: str = Path(..., min_length=1, max_length=100), data: KanbanTaskUpdate = Body(...), bg: BackgroundTasks = BackgroundTasks()) -> dict:
-    """Update a Kanban task by potentially triggering a pipeline action."""
+    """Update a Kanban task — supports moving cards between stages and extending expiration."""
     runner = get_pipeline_runner()
     store = get_run_store()
     if not runner or not store:
@@ -309,6 +311,19 @@ async def update_task(task_id: str = Path(..., min_length=1, max_length=100), da
                 from apps.api.routers.pipeline_routes import _run_pipeline_bg
                 bg.add_task(_run_pipeline_bg, task_id)
                 return {"message": "Resuming pipeline run...", "id": task_id}
+
+    # Handle expiration extension
+    if data.extend_expiration:
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            new_expiration = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+            sb.table("kanban_cards").update({
+                "expires_at": new_expiration,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", task_id).execute()
+        except Exception as e:
+            raise HTTPException(500, f"Failed to extend expiration: {e}")
 
     return _run_to_kanban_dict(run)
 
@@ -420,6 +435,36 @@ async def save_card(card_id: str = Path(..., min_length=1, max_length=100)) -> d
         return {"status": "saved"}
     except Exception as e:
         raise HTTPException(500, f"Failed to save card: {e}")
+
+
+@router.post("/tasks/{task_id}/extend")
+async def extend_card_expiration(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
+    """Extend a card's expiration by 3 hours."""
+    try:
+        from packages.core.supabase_client import get_supabase
+        sb = get_supabase()
+
+        # Verify card exists
+        result = sb.table("kanban_cards").select("id,expires_at").eq("id", task_id).execute()
+        if not result.data:
+            raise HTTPException(404, f"Card {task_id} not found")
+
+        new_expiration = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+        sb.table("kanban_cards").update({
+            "expires_at": new_expiration,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", task_id).execute()
+
+        return {
+            "status": "extended",
+            "id": task_id,
+            "expires_at": new_expiration,
+            "extended_by_hours": 3,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to extend expiration: {e}")
 
 
 class MoveCardRequest(BaseModel):

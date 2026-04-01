@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
 from apps.api.events import (
@@ -39,14 +39,28 @@ router = APIRouter()
 class StartPipelineRequest(BaseModel):
     topic: str = ""
 
+    @field_validator('topic')
+    @classmethod
+    def validate_topic(cls, v: str) -> str:
+        """Validate that topic is non-empty, meaningful text."""
+        if not v or not v.strip():
+            raise ValueError("Topic is required and cannot be empty or whitespace.")
+        stripped = v.strip()
+        if len(stripped) < 5:
+            raise ValueError(
+                f"Topic is too short ({len(stripped)} chars). "
+                f"Please provide at least 5 characters describing your video idea."
+            )
+        if len(stripped) > 200:
+            raise ValueError(
+                f"Topic is too long ({len(stripped)} chars). "
+                f"Please keep it under 200 characters."
+            )
+        return stripped
+
 class ApproveGateRequest(BaseModel):
     selection: dict | None = None
     feedback: str = ""
-
-class FeedbackRequest(BaseModel):
-    from_stage: str
-    to_stage: str
-    feedback: str
 
 # ─── Stage definitions (hardcoded for when pipeline package unavailable) ──────
 
@@ -68,6 +82,36 @@ STAGE_DEFINITIONS = {
     ],
     "parallel_stages": [["seo", "visual_planning"]],
 }
+
+# Valid pipeline stage names for validation (derived from STAGE_DEFINITIONS)
+VALID_STAGE_NAMES = [s["name"] for s in STAGE_DEFINITIONS["stages"]]
+
+
+class FeedbackRequest(BaseModel):
+    from_stage: str
+    to_stage: str
+    feedback: str = ""
+
+    @field_validator('from_stage', 'to_stage')
+    @classmethod
+    def validate_stage(cls, v: str) -> str:
+        """Validate that stage names are valid pipeline stages."""
+        if v not in VALID_STAGE_NAMES:
+            raise ValueError(
+                f"Invalid stage '{v}'. Must be one of: {', '.join(VALID_STAGE_NAMES)}"
+            )
+        return v
+
+    @field_validator('feedback')
+    @classmethod
+    def validate_feedback(cls, v: str) -> str:
+        """Validate feedback is meaningful if provided."""
+        if v and len(v.strip()) < 10:
+            raise ValueError(
+                f"Feedback is too short ({len(v.strip())} chars). "
+                f"Please provide at least 10 characters of feedback."
+            )
+        return v
 
 
 def _run_to_dict(run) -> dict:
@@ -255,6 +299,8 @@ async def list_runs(limit: int = Query(default=20, ge=1, le=MAX_LIST_LIMIT)):
 @router.post("/runs")
 async def start_run(req: StartPipelineRequest, bg: BackgroundTasks):
     """Start a new pipeline run. Returns run_id immediately."""
+    # Input validation is handled by Pydantic field_validator on StartPipelineRequest.
+    # FastAPI automatically returns 422 with user-friendly messages on validation failure.
     runner = get_pipeline_runner()
     store = get_run_store()
 
@@ -669,10 +715,14 @@ async def get_langgraph_state(card_id: str):
     
     try:
         state = await _production_graph.aget_state(config)
+        values = state.values if hasattr(state, 'values') else {}
         return {
             "card_id": card_id,
-            "values": state.values,
+            "values": values,
             "next": list(state.next) if state.next else [],
+            "risk_tier": values.get("risk_tier"),
+            "sla_deadline": values.get("sla_deadline"),
+            "review_requested_at": values.get("review_requested_at"),
         }
     except Exception as e:
         raise HTTPException(404, f"No pipeline state found for {card_id}: {e}")

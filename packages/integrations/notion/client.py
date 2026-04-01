@@ -2,12 +2,16 @@
 
 Provides methods for creating and managing script pages in Notion
 with visual type color coding and formatting.
+
+All methods now return OperationResult[T] instead of raw types,
+providing structured error context for the frontend.
 """
 
 from packages.core.config import get_settings
 from packages.core.logger import get_logger
 from packages.core.retry import retry_with_backoff
 from packages.core.dead_letter import queue_for_retry
+from packages.core.operation_result import OperationResult, ErrorSeverity
 from packages.integrations.notion.colors import get_color, get_emoji
 
 logger = get_logger(__name__)
@@ -27,8 +31,9 @@ def _get_notion_exceptions():
 class NotionScriptClient:
     """Client for Notion script page operations with graceful degradation.
 
-    All methods return None/empty on failure, ensuring the pipeline
-    never crashes due to Notion API issues.
+    All methods return OperationResult[T] on failure, ensuring the pipeline
+    never crashes due to Notion API issues and the frontend receives
+    structured error context.
     """
 
     def __init__(
@@ -58,16 +63,22 @@ class NotionScriptClient:
         else:
             logger.debug("Notion API key not configured, operating in degraded mode")
 
-    def _check_client(self) -> bool:
+    def _check_client(self) -> OperationResult[None]:
         """Check if the Notion client is available.
 
         Returns:
-            True if client is available, False otherwise.
+            OperationResult.ok(None) if client is available,
+            OperationResult.fail(...) otherwise.
         """
         if not self._client:
             logger.warning("notion_unavailable")
-            return False
-        return True
+            return OperationResult.fail(
+                message="Notion client is not initialized. Check NOTION_API_KEY.",
+                code="NOTION_NOT_CONFIGURED",
+                severity=ErrorSeverity.critical,
+                user_message="Notion is not configured. Publishing features are unavailable.",
+            )
+        return OperationResult.ok(None)
 
     @retry_with_backoff(max_attempts=3, base_delay=2.0, max_delay=30.0)
     async def create_script_page(
@@ -76,7 +87,7 @@ class NotionScriptClient:
         script_data: dict, 
         seo_data: dict = None,
         run_id: str | None = None
-    ) -> str | None:
+    ) -> OperationResult[str]:
         """Create a Notion page for a video script.
         
         Args:
@@ -84,13 +95,27 @@ class NotionScriptClient:
             script_data: Full AdaptedScript dictionary (contains entries)
             seo_data: Optional SEO metadata dictionary
             run_id: Optional pipeline run ID
+
+        Returns:
+            OperationResult[str] — success contains the page URL.
         """
-        if not self._check_client():
-            return None
+        client_check = self._check_client()
+        if not client_check.success:
+            return OperationResult.fail(
+                message=client_check.error_message or "Notion client unavailable",
+                code="NOTION_NOT_CONFIGURED",
+                severity=ErrorSeverity.critical,
+                user_message="Notion is not configured. Publishing features are unavailable.",
+            )
 
         if not self.database_id:
             logger.warning("notion_no_database_id")
-            return None
+            return OperationResult.fail(
+                message="Notion database ID not configured. Set NOTION_DATABASE_ID.",
+                code="NOTION_NOT_CONFIGURED",
+                severity=ErrorSeverity.critical,
+                user_message="Notion database is not configured. Publishing features are unavailable.",
+            )
 
         try:
             # Extract sections from script_data
@@ -140,7 +165,12 @@ class NotionScriptClient:
 
             # Create the page
             if not self._client:
-                 return None
+                 return OperationResult.fail(
+                    message="Notion client became unavailable during operation.",
+                    code="NOTION_NOT_CONFIGURED",
+                    severity=ErrorSeverity.critical,
+                    user_message="Notion connection lost during publishing.",
+                 )
             
             response = self._client.pages.create(
                 parent={"database_id": self.database_id},
@@ -157,12 +187,29 @@ class NotionScriptClient:
 
             logger.info(f"notion_page_created: title={title}, page_id={page_id}")
 
-            return page_url
+            return OperationResult.ok(page_url, message="Script page published to Notion successfully.")
 
         except Exception as e:
             # Queue for dead letter queue after all retries exhausted
             error_msg = str(e)
             logger.error(f"notion_publish_failed_after_retries: title={title} error={error_msg}")
+
+            # Determine error code based on exception type
+            error_code = "NOTION_PUBLISH_FAILED"
+            severity = ErrorSeverity.critical
+            retryable = True
+            user_message = f"Failed to publish script to Notion: {error_msg}"
+            
+            # Check for specific error types
+            if "authentication" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                error_code = "NOTION_AUTH_FAILED"
+                retryable = False
+                user_message = "Notion authentication failed. Please check your API key."
+            elif "rate" in error_msg.lower() or "429" in error_msg:
+                error_code = "NOTION_RATE_LIMIT"
+                severity = ErrorSeverity.warning
+                retryable = True
+                user_message = "Notion rate limit exceeded. Please try again in a moment."
 
             queue_for_retry(
                 operation="notion_publish",
@@ -173,11 +220,20 @@ class NotionScriptClient:
                 },
                 error_message=error_msg,
                 run_id=run_id,
+                error_code=error_code,
+                severity=severity.value,
             )
-            return None
+
+            return OperationResult.fail(
+                message=error_msg,
+                code=error_code,
+                severity=severity,
+                user_message=user_message,
+                retryable=retryable,
+            )
 
     @retry_with_backoff(max_attempts=3, base_delay=2.0, max_delay=30.0)
-    async def update_script_page(self, page_id: str, sections: list[dict], run_id: str | None = None) -> None:
+    async def update_script_page(self, page_id: str, sections: list[dict], run_id: str | None = None) -> OperationResult[None]:
         """Update an existing Notion script page.
 
         Appends new sections to an existing page.
@@ -191,11 +247,17 @@ class NotionScriptClient:
             sections: List of section dictionaries to append.
             run_id: Optional pipeline run ID for dead letter queue tracking.
 
-        Note:
-            Does nothing on failure - never crashes the pipeline.
+        Returns:
+            OperationResult[None] — success on completion, fail on error.
         """
-        if not self._check_client():
-            return
+        client_check = self._check_client()
+        if not client_check.success:
+            return OperationResult.fail(
+                message=client_check.error_message or "Notion client unavailable",
+                code="NOTION_NOT_CONFIGURED",
+                severity=ErrorSeverity.critical,
+                user_message="Notion is not configured. Publishing features are unavailable.",
+            )
 
         try:
             # Build the content blocks
@@ -248,10 +310,26 @@ class NotionScriptClient:
                 )
 
             logger.info(f"notion_page_updated: page_id={page_id}")
+            return OperationResult.ok(None, message="Script page updated in Notion successfully.")
 
         except Exception as e:
             error_msg = str(e)
             logger.error(f"notion_update_failed_after_retries: page_id={page_id} error={error_msg}")
+
+            error_code = "NOTION_PUBLISH_FAILED"
+            severity = ErrorSeverity.critical
+            retryable = True
+            user_message = f"Failed to update Notion page: {error_msg}"
+
+            if "authentication" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                error_code = "NOTION_AUTH_FAILED"
+                retryable = False
+                user_message = "Notion authentication failed. Please check your API key."
+            elif "rate" in error_msg.lower() or "429" in error_msg:
+                error_code = "NOTION_RATE_LIMIT"
+                severity = ErrorSeverity.warning
+                retryable = True
+                user_message = "Notion rate limit exceeded. Please try again in a moment."
 
             queue_for_retry(
                 operation="notion_update",
@@ -261,19 +339,36 @@ class NotionScriptClient:
                 },
                 error_message=error_msg,
                 run_id=run_id,
+                error_code=error_code,
+                severity=severity.value,
             )
 
-    async def get_script(self, page_id: str) -> dict:
+            return OperationResult.fail(
+                message=error_msg,
+                code=error_code,
+                severity=severity,
+                user_message=user_message,
+                retryable=retryable,
+            )
+
+    async def get_script(self, page_id: str) -> OperationResult[dict]:
         """Retrieve a script page from Notion.
 
         Args:
             page_id: The Notion page ID.
 
         Returns:
-            Dictionary containing page content, or empty dict on failure.
+            OperationResult[dict] — success contains page content dict,
+            fail on error.
         """
-        if not self._check_client():
-            return {}
+        client_check = self._check_client()
+        if not client_check.success:
+            return OperationResult.fail(
+                message=client_check.error_message or "Notion client unavailable",
+                code="NOTION_NOT_CONFIGURED",
+                severity=ErrorSeverity.critical,
+                user_message="Notion is not configured. Cannot retrieve script.",
+            )
 
         try:
             # Get page properties
@@ -330,11 +425,17 @@ class NotionScriptClient:
             if current_section:
                 result["sections"].append(current_section)
 
-            return result
+            return OperationResult.ok(result, message="Script retrieved from Notion successfully.")
 
         except Exception as e:
             logger.warning(f"notion_error in get_script: {e}")
-            return {}
+            return OperationResult.fail(
+                message=f"Failed to retrieve script from Notion: {e}",
+                code="NOTION_PUBLISH_FAILED",
+                severity=ErrorSeverity.warning,
+                user_message="Could not load script from Notion.",
+                retryable=True,
+            )
 
     def _extract_text(self, block: dict, block_type: str) -> str:
         """Extract plain text from a Notion block.

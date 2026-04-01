@@ -37,7 +37,7 @@ import os
 
 # ── MUST run before any litellm import (triggered by crewai) ────────────
 # Prevents LiteLLM from blocking startup with a remote HTTP fetch
-to GitHub for model pricing data. Uses bundled local copy instead.
+# to GitHub for model pricing data. Uses bundled local copy instead.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from contextlib import asynccontextmanager
@@ -61,6 +61,7 @@ from apps.api.routers import (
     topic_routes,
     health_routes,
     kanban_routes,
+    dlq_routes,
 )
 from packages.core.config import get_settings
 
@@ -102,6 +103,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Chat agent startup failed (non-fatal): {e}")
     
+    # Startup health validation — check all services and log warnings
+    try:
+        from packages.core.config import get_settings as _get_settings
+        _settings = _get_settings()
+        service_status = _settings.get_service_status()
+        unavailable = [svc for svc, status in service_status.items() if status != "available"]
+        if unavailable:
+            print(f"Warning: {len(unavailable)} service(s) not available at startup: {', '.join(unavailable)}")
+            for svc in unavailable:
+                print(f"  - {svc}: {service_status[svc]}")
+        # Store initial health status for dashboard consumption
+        app.state.initial_health = service_status
+    except Exception as e:
+        print(f"Warning: Startup health validation failed (non-fatal): {e}")
+        app.state.initial_health = {}
+
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
@@ -141,6 +158,7 @@ app.include_router(visual_routes,   prefix="/api/visual",    tags=["visual"])
 app.include_router(settings_routes, prefix="/api/settings",  tags=["settings"])
 app.include_router(topic_routes,    prefix="/api/topics",    tags=["topics"])
 app.include_router(kanban_routes, prefix="/api/kanban", tags=["kanban"])
+app.include_router(dlq_routes.router, prefix="/api", tags=["dlq"])
 
 # SSE endpoint
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])

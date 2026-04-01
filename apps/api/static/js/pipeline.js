@@ -223,9 +223,48 @@ async function loadRunDetail(runId) {
   }
 }
 
+function _buildErrorBanner(run) {
+  if (run.status !== 'error' || !run.error_message) return '';
+
+  // Try to extract a user-friendly message from error_message
+  let userMsg = run.error_message;
+  try {
+    // If it looks like JSON, try to parse it
+    if (userMsg.startsWith('{')) {
+      const parsed = JSON.parse(userMsg);
+      userMsg = parsed.user_message || parsed.message || parsed.detail || userMsg;
+    }
+  } catch {}
+
+  // Truncate very long messages
+  if (userMsg.length > 300) {
+    userMsg = userMsg.substring(0, 300) + '…';
+  }
+
+  // Build action buttons
+  let actions = '';
+  if (run.current_stage) {
+    actions = `<button class="error-banner-action" onclick="resumePipeline('${run.run_id}')">↻ Resume from ${escHtml(run.current_stage.replace(/_/g, ' '))}</button>`;
+    actions += `<button class="error-banner-action" style="background:var(--bg-tertiary);color:var(--text-primary);margin-left:6px" onclick="deleteRun('${run.run_id}')">🗑 Delete</button>`;
+  }
+
+  return `
+    <div class="error-banner">
+      <div class="error-banner-header">
+        <span>⚠</span>
+        <span>Pipeline Error</span>
+      </div>
+      <div class="error-banner-message">${escHtml(userMsg)}</div>
+      ${actions}
+    </div>`;
+}
+
 function showRunDetail(run, iterations = []) {
   const stages = run.stages || {};
   const isWaiting = run.status === 'waiting_human';
+
+  // Error banner for failed runs
+  const errorBannerHtml = _buildErrorBanner(run);
 
   // Approval UI
   let approvalHtml = '';
@@ -394,6 +433,7 @@ function showRunDetail(run, iterations = []) {
       </div>
     </div>
     <div class="pipeline-graph" style="margin-bottom:16px">${renderMiniGraph(run.stages)}</div>
+    ${errorBannerHtml}
     ${approvalHtml}
     ${outputsHtml}
     ${graphHtml}
@@ -407,16 +447,69 @@ async function startNewPipeline() {
     <div class="form-group">
       <label class="form-label">Topic (optional — leave blank for trend analysis)</label>
       <input type="text" id="new-topic" class="form-input"
-             placeholder="e.g. Why Pakistan's AI policy matters">
+             placeholder="e.g. Why Pakistan's AI policy matters"
+             maxlength="200">
+      <div id="topic-validation-error" class="inline-error" style="display:none"></div>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-outline" onclick="hideModal()">Cancel</button>
       <button class="btn btn-primary" onclick="confirmStart()">Start</button>
     </div>`);
+
+  // Attach blur validation (validate on blur, not on every keystroke)
+  const topicInput = document.getElementById('new-topic');
+  if (topicInput) {
+    topicInput.addEventListener('blur', () => _validateTopicInput());
+  }
+}
+
+function _validateTopicInput() {
+  const input = document.getElementById('new-topic');
+  const errorEl = document.getElementById('topic-validation-error');
+  if (!input || !errorEl) return true;
+
+  const val = input.value.trim();
+
+  // If empty, it's valid (topic is optional)
+  if (!val) {
+    input.classList.remove('error', 'valid');
+    errorEl.style.display = 'none';
+    return true;
+  }
+
+  // Validate min/max length
+  if (val.length < 5) {
+    input.classList.add('error');
+    input.classList.remove('valid');
+    errorEl.textContent = 'Topic must be at least 5 characters';
+    errorEl.style.display = 'block';
+    return false;
+  }
+
+  if (val.length > 200) {
+    input.classList.add('error');
+    input.classList.remove('valid');
+    errorEl.textContent = 'Topic must be less than 200 characters';
+    errorEl.style.display = 'block';
+    return false;
+  }
+
+  input.classList.remove('error');
+  input.classList.add('valid');
+  errorEl.style.display = 'none';
+  return true;
 }
 
 async function confirmStart() {
-  const topic = document.getElementById('new-topic').value;
+  // Run client-side validation before submitting
+  if (!_validateTopicInput()) {
+    // Focus the input to draw attention to the error
+    const input = document.getElementById('new-topic');
+    if (input) input.focus();
+    return;
+  }
+
+  const topic = document.getElementById('new-topic').value.trim();
   hideModal();
   try {
     const r = await api('/api/pipeline/runs', { method: 'POST', body: { topic } });
@@ -424,6 +517,17 @@ async function confirmStart() {
     await refreshPipeline();
   } catch (e) {
     showToast(`Failed: ${e.message}`, 'error');
+  }
+}
+
+async function resumePipeline(runId) {
+  try {
+    const r = await api(`/api/pipeline/runs/${runId}/resume`, { method: 'POST' });
+    hideModal();
+    showToast(`Pipeline resumed from stage: ${r.current_stage || 'previous'}`, 'success');
+    await refreshPipeline();
+  } catch (e) {
+    showToast(`Resume failed: ${e.message}`, 'error');
   }
 }
 

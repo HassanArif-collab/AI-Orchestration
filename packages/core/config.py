@@ -115,6 +115,15 @@ class Settings(BaseSettings):
     SCRIPT_MAX_ITERATIONS: int = 20
     SCRIPT_TARGET_PASS_COUNT: int = 32      # Minimum score threshold entries for full script
 
+    # ─── Review/Approval SLA Configuration (Issue 6) ─────────────────────────
+    HUMAN_REVIEW_TIMEOUT_HOURS: int = 24
+    HUMAN_REVIEW_ESCALATION_EMAIL: str = ""
+    RISK_TIER_LOW_SCORE: float = 85.0       # Auto-approve threshold
+    RISK_TIER_HIGH_SCORE: float = 65.0      # High-risk threshold
+    RISK_TIER_LOW_SLA_HOURS: int = 48
+    RISK_TIER_MEDIUM_SLA_HOURS: int = 24
+    RISK_TIER_HIGH_SLA_HOURS: int = 12
+
     # ─── P2-04: Field Validators ───────────────────────────────────────────────
 
     @field_validator("LOG_LEVEL")

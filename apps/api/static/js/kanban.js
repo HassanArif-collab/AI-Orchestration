@@ -28,7 +28,8 @@ const Kanban = {
     tasks: [],
     activeTaskId: null,
     initialized: false,
-    
+    _expiryInterval: null,
+
     async init() {
         if (this.initialized) {
             await this.refresh();
@@ -50,6 +51,7 @@ const Kanban = {
         await this.refresh();
         this._setupEventListeners();
         this._setupDragAndDrop();
+        this._startExpiryCountdown();
         this.initialized = true;
     },
     
@@ -144,7 +146,18 @@ const Kanban = {
             const countEl = document.getElementById(`count-${stage}`);
             if (!list) continue;
             
-            const stageTasks = this.tasks.filter(t => t.stage == stage);
+            let stageTasks = this.tasks.filter(t => t.stage == stage);
+
+            // Auto-sort stage 2 (Suggested Topics) by expires_at — most urgent first
+            if (stage === 2) {
+                stageTasks.sort((a, b) => {
+                    if (!a.expires_at && !b.expires_at) return 0;
+                    if (!a.expires_at) return 1;  // no expiration goes to bottom
+                    if (!b.expires_at) return -1;
+                    return new Date(a.expires_at) - new Date(b.expires_at);
+                });
+            }
+
             list.innerHTML = '';
             stageTasks.forEach(task => {
                 list.appendChild(this._createTaskCard(task));
@@ -153,15 +166,67 @@ const Kanban = {
         }
     },
     
+    _getExpiryInfo(task) {
+        if (!task.expires_at) return null;
+
+        const now = Date.now();
+        const expires = new Date(task.expires_at).getTime();
+        const remaining = expires - now;
+
+        if (remaining <= 0) {
+            return { level: 'expired', label: 'EXPIRED', remaining: 0, cssClass: 'expired' };
+        }
+
+        const mins = Math.floor(remaining / 60000);
+        const hrs = Math.floor(mins / 60);
+        const leftoverMins = mins % 60;
+
+        if (mins < 30) {
+            return { level: 'danger', label: `EXPIRING SOON`, remaining, cssClass: 'danger', mins };
+        } else if (mins < 60) {
+            return { level: 'danger', label: `Expires in ${mins}m`, remaining, cssClass: 'danger', mins };
+        } else if (mins < 120) {
+            const timeStr = `${leftoverMins}m`;
+            return { level: 'warning', label: `⏱ ${timeStr}`, remaining, cssClass: 'warning', mins };
+        } else {
+            const hStr = String(hrs).padStart(2, '0');
+            const mStr = String(leftoverMins).padStart(2, '0');
+            return { level: 'normal', label: `Due: ${hStr}:${mStr}`, remaining, cssClass: 'normal', mins };
+        }
+    },
+
     _createTaskCard(task) {
         const card = document.createElement('div');
-        card.className = `kanban-task-card ${task.status === 'thinking' ? 'thinking' : ''}`;
+        const expiryInfo = this._getExpiryInfo(task);
+        const urgencyClass = expiryInfo ? `urgency-${expiryInfo.level}` : '';
+        card.className = `kanban-task-card ${task.status === 'thinking' ? 'thinking' : ''} ${urgencyClass}`.trim();
         card.dataset.id = task.id;
         card.draggable = true;
-        card.style.borderLeftColor = task.color || '#555';
+
+        // Set border-left color based on urgency or task color
+        if (expiryInfo) {
+            // urgency CSS classes handle border-left-color
+        } else {
+            card.style.borderLeftColor = task.color || '#555';
+        }
+
+        // Set data-expires-at attribute for countdown updates
+        if (task.expires_at) {
+            card.dataset.expiresAt = task.expires_at;
+        }
         
         const safeTitle = escHtml(task.title || 'Untitled');
         const safeStatus = escHtml(task.status || 'idle');
+        
+        let expiryHtml = '';
+        if (expiryInfo) {
+            expiryHtml = `<div class="expiry-badge ${expiryInfo.cssClass}" data-expiry-badge="${task.id}">${expiryInfo.label}</div>`;
+        }
+
+        let extendHtml = '';
+        if (expiryInfo && (expiryInfo.level === 'danger' || expiryInfo.level === 'expired')) {
+            extendHtml = `<button class="extend-btn" onclick="event.stopPropagation();Kanban.extendCardExpiry('${task.id}')">Extend 3h</button>`;
+        }
         
         card.innerHTML = `
             <div class="task-card-header">
@@ -169,8 +234,10 @@ const Kanban = {
             </div>
             <div class="task-card-body">
                 <span class="task-status ${STATUS_STYLES[task.status] || ''}">${safeStatus}</span>
+                ${expiryHtml}
                 <span class="task-time">${fmtTime(task.updated_at)}</span>
             </div>
+            ${extendHtml}
         `;
         
         card.onclick = () => this.openDrawer(task.id);
@@ -181,6 +248,19 @@ const Kanban = {
         card.ondragend = () => card.classList.remove('dragging');
         
         return card;
+    },
+
+    async extendCardExpiry(taskId) {
+        try {
+            await api(`/api/kanban/tasks/${taskId}`, {
+                method: 'PATCH',
+                body: { extend_expiration: true }
+            });
+            showToast('Expiration extended by 3 hours', 'success');
+            await this.refresh();
+        } catch (err) {
+            showToast('Failed to extend: ' + err.message, 'error');
+        }
     },
     
     _setupEventListeners() {
@@ -350,6 +430,61 @@ const Kanban = {
         item.innerHTML = `<span class="thought-time">${time}</span><span class="thought-text">${text}</span>`;
         thoughtLog.appendChild(item);
         thoughtLog.scrollTop = thoughtLog.scrollHeight;
+    },
+
+    // ─── Expiration Countdown Timer ───────────────────────────────────────────
+
+    _startExpiryCountdown() {
+        // Update every 30 seconds
+        this._expiryInterval = setInterval(() => {
+            // Only run if kanban tab is active
+            if (typeof _activeTab !== 'undefined' && _activeTab !== 'kanban') return;
+            this._updateExpiryBadges();
+        }, 30000);
+    },
+
+    _updateExpiryBadges() {
+        // Find all cards with expiration data and update their badges
+        const cards = document.querySelectorAll('.kanban-task-card[data-expires-at]');
+        cards.forEach(card => {
+            const expiresAt = card.dataset.expiresAt;
+            if (!expiresAt) return;
+
+            const taskId = card.dataset.id;
+            const task = this.tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            const expiryInfo = this._getExpiryInfo(task);
+            if (!expiryInfo) return;
+
+            // Update badge text
+            const badge = card.querySelector(`[data-expiry-badge="${taskId}"]`);
+            if (badge) {
+                badge.textContent = expiryInfo.label;
+                badge.className = `expiry-badge ${expiryInfo.cssClass}`;
+            }
+
+            // Update urgency class on card
+            card.classList.remove('urgency-normal', 'urgency-warning', 'urgency-danger', 'urgency-expired');
+            card.classList.add(`urgency-${expiryInfo.level}`);
+
+            // Show/hide extend button
+            const existingExtend = card.querySelector('.extend-btn');
+            if (expiryInfo.level === 'danger' || expiryInfo.level === 'expired') {
+                if (!existingExtend) {
+                    const btn = document.createElement('button');
+                    btn.className = 'extend-btn';
+                    btn.textContent = 'Extend 3h';
+                    btn.onclick = (e) => {
+                        e.stopPropagation();
+                        this.extendCardExpiry(taskId);
+                    };
+                    card.appendChild(btn);
+                }
+            } else if (existingExtend) {
+                existingExtend.remove();
+            }
+        });
     }
 };
 

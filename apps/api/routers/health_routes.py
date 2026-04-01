@@ -7,9 +7,11 @@ These endpoints are publicly accessible without authentication.
 Endpoints:
     GET /health       - Basic health check
     GET /api/health   - Detailed health status
+    GET /api/health/services       - Comprehensive service health check
+    GET /api/health/circuit-breakers - Circuit breaker statuses
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -24,7 +26,7 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "service": "youtube-pipeline-dashboard"
     }
 
@@ -38,7 +40,7 @@ async def api_health_check():
     """
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "service": "youtube-pipeline-dashboard",
         "version": "1.0.0",
         "components": {
@@ -70,3 +72,235 @@ async def freerouter_health():
         pass
     
     return {"healthy": False, "url": url}
+
+
+@router.get("/api/health/services")
+async def service_health_check():
+    """Comprehensive health check for all external services.
+
+    Checks configuration availability and, where possible, performs
+    lightweight connectivity tests for each service.
+
+    Returns:
+        Dict with service names as keys, each containing:
+        - name: Service display name
+        - config_status: "available" | "not_configured" | "misconfigured"
+        - operational_status: "operational" | "degraded" | "unavailable" | "unknown"
+        - message: Human-readable status description
+        - last_checked: ISO timestamp
+    """
+    from packages.core.config import get_settings, ServiceStatus
+
+    settings = get_settings()
+    now = datetime.now(timezone.utc).isoformat()
+    services = {}
+
+    # ─── Zep Memory ───────────────────────────────────────────────────────
+    config_status = settings.validate_service("zep")
+    zep_info = {
+        "name": "Zep Memory",
+        "config_status": config_status.value,
+        "operational_status": "unknown",
+        "message": "",
+        "last_checked": now,
+    }
+
+    if config_status == ServiceStatus.NOT_CONFIGURED:
+        zep_info["operational_status"] = "unavailable"
+        zep_info["message"] = "ZEP_API_KEY not set. Memory features operate in degraded mode."
+    elif config_status == ServiceStatus.AVAILABLE:
+        # Attempt a quick connectivity test
+        try:
+            client = AsyncZepMemoryClient()
+            # Just checking if the client initialized successfully
+            if client._client is not None:
+                zep_info["operational_status"] = "operational"
+                zep_info["message"] = "Zep client initialized successfully."
+            else:
+                zep_info["operational_status"] = "degraded"
+                zep_info["message"] = "Zep API key configured but client failed to initialize."
+        except Exception as e:
+            zep_info["operational_status"] = "degraded"
+            zep_info["message"] = f"Zep initialization error: {e}"
+
+    services["zep"] = zep_info
+
+    # ─── Notion ───────────────────────────────────────────────────────────
+    config_status = settings.validate_service("notion")
+    notion_info = {
+        "name": "Notion",
+        "config_status": config_status.value,
+        "operational_status": "unknown",
+        "message": "",
+        "last_checked": now,
+    }
+
+    if config_status == ServiceStatus.NOT_CONFIGURED:
+        notion_info["operational_status"] = "unavailable"
+        notion_info["message"] = "NOTION_API_KEY not set. Publishing features are unavailable."
+    elif config_status == ServiceStatus.MISCONFIGURED:
+        notion_info["operational_status"] = "degraded"
+        notion_info["message"] = "NOTION_API_KEY format invalid (expected 'secret_...' prefix)."
+    elif config_status == ServiceStatus.AVAILABLE:
+        # Check if client can be initialized
+        try:
+            from packages.integrations.notion.client import NotionScriptClient
+            client = NotionScriptClient()
+            if client._client is not None:
+                notion_info["operational_status"] = "operational"
+                notion_info["message"] = "Notion client initialized successfully."
+                if not client.database_id:
+                    notion_info["operational_status"] = "degraded"
+                    notion_info["message"] = "Notion API key valid but NOTION_DATABASE_ID not set."
+            else:
+                notion_info["operational_status"] = "degraded"
+                notion_info["message"] = "Notion API key configured but client failed to initialize."
+        except Exception as e:
+            notion_info["operational_status"] = "degraded"
+            notion_info["message"] = f"Notion initialization error: {e}"
+
+    services["notion"] = notion_info
+
+    # ─── FreeRouter ───────────────────────────────────────────────────────
+    config_status = settings.validate_service("freerouter")
+    freerouter_info = {
+        "name": "FreeRouter",
+        "config_status": config_status.value,
+        "operational_status": "unknown",
+        "message": "",
+        "last_checked": now,
+    }
+
+    if config_status == ServiceStatus.NOT_CONFIGURED:
+        freerouter_info["operational_status"] = "unavailable"
+        freerouter_info["message"] = "FREEROUTER_URL not configured."
+    elif config_status == ServiceStatus.AVAILABLE:
+        # Reuse existing health check logic
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as http_client:
+                response = await http_client.get(f"{settings.FREEROUTER_URL}/health")
+                if response.status_code == 200:
+                    freerouter_info["operational_status"] = "operational"
+                    freerouter_info["message"] = "FreeRouter proxy is running."
+                else:
+                    freerouter_info["operational_status"] = "degraded"
+                    freerouter_info["message"] = f"FreeRouter returned HTTP {response.status_code}."
+        except Exception as e:
+            freerouter_info["operational_status"] = "unavailable"
+            freerouter_info["message"] = f"FreeRouter not reachable: {e}"
+
+    services["freerouter"] = freerouter_info
+
+    # ─── Supabase ─────────────────────────────────────────────────────────
+    config_status = settings.validate_service("supabase")
+    supabase_info = {
+        "name": "Supabase",
+        "config_status": config_status.value,
+        "operational_status": "unknown",
+        "message": "",
+        "last_checked": now,
+    }
+
+    if config_status == ServiceStatus.NOT_CONFIGURED:
+        supabase_info["operational_status"] = "unavailable"
+        supabase_info["message"] = "Supabase credentials not configured."
+    elif config_status == ServiceStatus.MISCONFIGURED:
+        supabase_info["operational_status"] = "degraded"
+        supabase_info["message"] = "Supabase URL or key format invalid."
+    elif config_status == ServiceStatus.AVAILABLE:
+        supabase_info["operational_status"] = "operational"
+        supabase_info["message"] = "Supabase configured. Connectivity check skipped (config-only)."
+
+    services["supabase"] = supabase_info
+
+    # ─── Exa ──────────────────────────────────────────────────────────────
+    config_status = settings.validate_service("exa")
+    exa_info = {
+        "name": "Exa Search",
+        "config_status": config_status.value,
+        "operational_status": "unknown",
+        "message": "",
+        "last_checked": now,
+    }
+
+    if config_status == ServiceStatus.NOT_CONFIGURED:
+        exa_info["operational_status"] = "unavailable"
+        exa_info["message"] = "EXA_API_KEY not set. Topic discovery uses fallback mode."
+    elif config_status == ServiceStatus.MISCONFIGURED:
+        exa_info["operational_status"] = "degraded"
+        exa_info["message"] = "EXA_API_KEY appears too short (may be invalid)."
+    elif config_status == ServiceStatus.AVAILABLE:
+        exa_info["operational_status"] = "operational"
+        exa_info["message"] = "Exa configured. Connectivity check skipped (config-only)."
+
+    services["exa"] = exa_info
+
+    # ─── YouTube ──────────────────────────────────────────────────────────
+    config_status = settings.validate_service("youtube")
+    youtube_info = {
+        "name": "YouTube",
+        "config_status": config_status.value,
+        "operational_status": "unknown",
+        "message": "",
+        "last_checked": now,
+    }
+
+    if config_status == ServiceStatus.NOT_CONFIGURED:
+        youtube_info["operational_status"] = "unavailable"
+        youtube_info["message"] = "YouTube API key not configured."
+    elif config_status == ServiceStatus.MISCONFIGURED:
+        youtube_info["operational_status"] = "degraded"
+        youtube_info["message"] = "YouTube API key appears invalid (too short)."
+    elif config_status == ServiceStatus.AVAILABLE:
+        youtube_info["operational_status"] = "operational"
+        youtube_info["message"] = "YouTube configured. Connectivity check skipped (config-only)."
+
+    services["youtube"] = youtube_info
+
+    return {
+        "timestamp": now,
+        "services": services,
+        "summary": {
+            "total": len(services),
+            "operational": sum(1 for s in services.values() if s["operational_status"] == "operational"),
+            "degraded": sum(1 for s in services.values() if s["operational_status"] == "degraded"),
+            "unavailable": sum(1 for s in services.values() if s["operational_status"] == "unavailable"),
+        },
+    }
+
+
+@router.get("/api/health/circuit-breakers")
+async def circuit_breaker_status():
+    """Get status of all registered circuit breakers.
+
+    Returns:
+        Dict with circuit breaker names as keys, each containing:
+        - name: Circuit breaker identifier
+        - state: "closed" | "open" | "half_open"
+        - failure_count: Current consecutive failure count
+        - failure_threshold: Failures before opening
+        - recovery_timeout: Seconds before transitioning to half_open
+        - last_failure_time: ISO timestamp of last failure (if any)
+    """
+    try:
+        from packages.core.circuit_breaker import get_all_circuit_breaker_statuses
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "circuit_breakers": get_all_circuit_breaker_statuses(),
+        }
+    except ImportError:
+        # Graceful fallback if get_all_circuit_breaker_statuses is not yet available
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "circuit_breakers": {},
+            "message": "Circuit breaker status module not yet available.",
+        }
+
+
+# ─── Helper: Lazy import for Zep connectivity test ────────────────────────
+
+def AsyncZepMemoryClient():
+    """Lazy helper to import AsyncZepMemoryClient for health checks."""
+    from packages.memory.client import AsyncZepMemoryClient as _AZMC
+    return _AZMC()

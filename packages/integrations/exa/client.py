@@ -8,21 +8,28 @@ Usage:
     from packages.integrations.exa.client import ExaResearchClient
 
     client = ExaResearchClient()
-    results = client.search_trending("Pakistan AI regulation", num_results=5)
-    # results is a list of dicts: [{"title": ..., "url": ..., "snippet": ..., "date": ...}]
+    result = client.search_trending("Pakistan AI regulation", num_results=5)
+    if result.success:
+        for item in result.data:
+            print(item["title"])
 
-    context_str = client.build_discovery_context("Pakistan economic crisis")
-    # context_str is a formatted string ready to inject into an LLM prompt
+    context_result = client.build_discovery_context("Pakistan economic crisis")
+    if context_result[0]:  # context_str is non-empty
+        # Use context_str in LLM prompt
 
 Rate Limits:
     Exa free tier: 1000 searches/month
     Each call to search_trending uses 1 search
     build_discovery_context uses 3 searches (different query angles)
+
+All methods return OperationResult[T] for structured error handling.
 """
 
 from typing import Optional
 from packages.core.config import get_settings
 from packages.core.logger import get_logger
+from packages.core.operation_result import OperationResult, ErrorSeverity
+from packages.core.dead_letter import queue_for_retry
 
 logger = get_logger(__name__)
 
@@ -32,6 +39,9 @@ class ExaResearchClient:
 
     Provides methods for discovering trending Pakistani topics
     by searching across news, social media, and web content.
+
+    All methods return OperationResult[T] instead of raw types,
+    providing structured error context for the frontend.
     """
 
     def __init__(self) -> None:
@@ -40,13 +50,15 @@ class ExaResearchClient:
         self._client = None
 
     def _get_client(self):
-        """Lazy-initialize the Exa client."""
+        """Lazy-initialize the Exa client.
+
+        Returns:
+            Exa client instance, or None if API key is not configured.
+        """
         if self._client is None:
             if not self._api_key:
-                raise RuntimeError(
-                    "EXA_API_KEY is not set. Add it to your .env file. "
-                    "Get a free key from https://dashboard.exa.ai/api-keys"
-                )
+                logger.warning("exa_not_configured: EXA_API_KEY is not set")
+                return None
             from exa_py import Exa
             self._client = Exa(api_key=self._api_key)
         return self._client
@@ -56,7 +68,7 @@ class ExaResearchClient:
         query: str,
         num_results: int = 5,
         days_back: int = 7,
-    ) -> list[dict]:
+    ) -> OperationResult[list[dict]]:
         """Search for recent web content matching query.
 
         Args:
@@ -65,14 +77,24 @@ class ExaResearchClient:
             days_back: Only include content from last N days
 
         Returns:
-            List of dicts with keys: title, url, snippet, published_date
-            Returns empty list on any failure (never crashes pipeline)
+            OperationResult[list[dict]] — success contains list of dicts
+            with keys: title, url, snippet, published_date.
+            Returns fail with EXA_NOT_CONFIGURED or EXA_SEARCH_FAILED.
         """
+        client = self._get_client()
+        if client is None:
+            return OperationResult.fail(
+                message="EXA_API_KEY is not set. Add it to your .env file. "
+                        "Get a free key from https://dashboard.exa.ai/api-keys",
+                code="EXA_NOT_CONFIGURED",
+                severity=ErrorSeverity.warning,
+                user_message="Web search service (Exa) is not configured. Topic discovery will use fallback mode.",
+            )
+
         try:
             from datetime import datetime, timedelta
             start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
-            client = self._get_client()
             response = client.search_and_contents(
                 query=query,
                 type="neural",
@@ -94,11 +116,30 @@ class ExaResearchClient:
                     })
 
             logger.info(f"exa_search_completed: query='{query[:50]}', results={len(results)}")
-            return results
+            return OperationResult.ok(results, message=f"Found {len(results)} web results.")
 
         except Exception as e:
-            logger.warning(f"exa_search_failed_non_blocking: {e}")
-            return []
+            error_msg = str(e)
+            logger.warning(f"exa_search_failed_non_blocking: {error_msg}")
+            queue_for_retry(
+                operation="exa_search_failed",
+                payload={
+                    "query": query,
+                    "num_results": num_results,
+                    "days_back": days_back,
+                },
+                error_message=error_msg,
+                error_code="EXA_SEARCH_FAILED",
+                severity="warning",
+            )
+            return OperationResult.fail(
+                message=f"Exa search failed: {error_msg}",
+                code="EXA_SEARCH_FAILED",
+                severity=ErrorSeverity.warning,
+                user_message="Web search encountered an error. Topic discovery will use fallback mode.",
+                retryable=True,
+                details={"query": query[:100]},
+            )
 
     def build_discovery_context(
         self,
@@ -140,18 +181,26 @@ class ExaResearchClient:
                     content=f"🔍 Exa search [{i}/3]: \"{query[:60]}\"...",
                 )
 
-            results = self.search_trending(query, num_results=5, days_back=14)
+            result = self.search_trending(query, num_results=5, days_back=14)
 
-            if card_id and results:
-                titles = [r["title"][:50] for r in results[:3]]
+            if result.success and result.data:
+                results = result.data
+                if card_id:
+                    titles = [r["title"][:50] for r in results[:3]]
+                    report_thought(
+                        card_id=card_id,
+                        agent_name="topic_finder",
+                        thought_type="search",
+                        content=f"Found {len(results)} results. Top: {', '.join(titles)}",
+                    )
+                all_results.extend(results)
+            elif card_id and not result.success:
                 report_thought(
                     card_id=card_id,
                     agent_name="topic_finder",
-                    thought_type="search",
-                    content=f"Found {len(results)} results. Top: {', '.join(titles)}",
+                    thought_type="warning",
+                    content=f"Exa search [{i}/3] returned: {result.user_message}",
                 )
-
-            all_results.extend(results)
 
         if not all_results:
             if card_id:

@@ -2,7 +2,7 @@
 Zep memory client for AI Orchestration system.
 
 This client provides a graceful degradation pattern - all methods return
-empty/default values when Zep is unavailable, ensuring the pipeline never
+OperationResult[T] when Zep is unavailable, ensuring the pipeline never
 crashes due to external service failures.
 
 Zep Cloud is a long-term memory service for AI agents. It stores facts,
@@ -28,7 +28,7 @@ SESSION NAMING CONVENTION (never deviate from these):
   Learning session:  f"{settings.ZEP_LEARNING_USER_ID}_session"
 
 GRACEFUL DEGRADATION:
-  All methods return None/empty when:
+  All methods return OperationResult with failure context when:
     - ZEP_API_KEY is not set (operating in degraded mode)
     - zep-cloud package is not installed
     - Network call fails (after 3 retries with 1s/3s/9s backoff)
@@ -50,8 +50,15 @@ from functools import wraps
 
 from packages.core.config import get_settings
 from packages.core.logger import get_logger
+from packages.core.operation_result import OperationResult, ErrorSeverity
+from packages.core.dead_letter import queue_for_retry
 
 logger = get_logger(__name__)
+
+
+class ZepRetryExhaustedError(Exception):
+    """Raised when all Zep API retries are exhausted."""
+    pass
 
 
 def with_retry_async(func):
@@ -60,24 +67,27 @@ def with_retry_async(func):
     Wraps any Zep API call with automatic retry logic. The delays
     follow an exponential pattern: 1s → 3s → 9s.
 
-    After all retries exhausted, logs a warning and returns None.
-    The calling code must handle None gracefully.
+    After all retries exhausted, raises ZepRetryExhaustedError so the
+    calling method can catch it and wrap in an OperationResult.
     """
     @wraps(func)
     async def wrapper(*args, **kwargs):
         delays = [1, 3, 9]
+        last_error = None
         for delay in delays:
             try:
                 return await func(*args, **kwargs)
             except Exception as e:
+                last_error = e
                 logger.warning(f"zep_api_retry_async: Error '{e}' in {func.__name__}. Retrying in {delay}s...")
                 await asyncio.sleep(delay)
         # Last attempt
         try:
             return await func(*args, **kwargs)
         except Exception as e:
+            last_error = e
             logger.warning(f"zep_api_exhausted_async: All retries failed for {func.__name__}. Error: {e}")
-            return None
+            raise ZepRetryExhaustedError(f"All retries exhausted for {func.__name__}: {e}") from e
     return wrapper
 
 
@@ -90,9 +100,11 @@ class AsyncZepMemoryClient:
 
     Example:
         async with AsyncZepMemoryClient() as client:
-            results = await client.search_memory("session_id", "query")
+            result = await client.search_memory("session_id", "query")
+            if result.success:
+                facts = result.data
 
-    All methods return None/empty when Zep is unavailable, ensuring
+    All methods return OperationResult[T] when Zep is unavailable, ensuring
     the pipeline never crashes due to external service failures.
     """
 
@@ -189,7 +201,7 @@ class AsyncZepMemoryClient:
             await self._client.thread.add_messages(thread_id=session_id, messages=chunk)
         logger.debug(f"zep_facts_added_batch: {len(facts)} facts to {session_id}")
 
-    async def search_memory(self, session_id: str, query: str, limit: int = 5) -> list[dict]:
+    async def search_memory(self, session_id: str, query: str, limit: int = 5) -> OperationResult[list[dict]]:
         """Search memory for relevant information (async).
 
         Args:
@@ -198,14 +210,20 @@ class AsyncZepMemoryClient:
             limit: Maximum results to return
 
         Returns:
-            List of dicts with 'fact' and 'score' keys, or empty list on error
+            OperationResult[list[dict]] — success contains list of dicts
+            with 'fact' and 'score' keys, fail on error.
         """
         if not self._client:
-            return []
+            return OperationResult.fail(
+                message="Zep API key not configured. Memory search is unavailable.",
+                code="ZEP_UNAVAILABLE",
+                severity=ErrorSeverity.warning,
+                user_message="Memory service is not configured. Topic discovery will use fallback mode.",
+            )
 
         cache_key = (session_id, query, limit)
         if cache_key in self._query_cache:
-            return self._query_cache[cache_key]
+            return OperationResult.ok(self._query_cache[cache_key])
 
         try:
             results = await self._client.graph.search(
@@ -225,10 +243,49 @@ class AsyncZepMemoryClient:
                 ]
 
             self._query_cache[cache_key] = output
-            return output
+            return OperationResult.ok(output, message=f"Found {len(output)} memory results.")
+        except ZepRetryExhaustedError as e:
+            logger.error(f"zep_search_failed_all_retries: session={session_id} query={query[:50]} error={e}")
+            queue_for_retry(
+                operation="zep_search_failed",
+                payload={
+                    "session_id": session_id,
+                    "query": query,
+                    "limit": limit,
+                },
+                error_message=str(e),
+                error_code="ZEP_UNAVAILABLE",
+                severity="warning",
+            )
+            return OperationResult.fail(
+                message=f"Zep memory search failed after all retries: {e}",
+                code="ZEP_UNAVAILABLE",
+                severity=ErrorSeverity.warning,
+                user_message="Memory service is temporarily unavailable. Using fallback discovery mode.",
+                retryable=True,
+                details={"session_id": session_id, "query": query[:100]},
+            )
         except Exception as e:
             logger.warning(f"zep_error in search_memory_async: {e}")
-            return []
+            queue_for_retry(
+                operation="zep_search_failed",
+                payload={
+                    "session_id": session_id,
+                    "query": query,
+                    "limit": limit,
+                },
+                error_message=str(e),
+                error_code="ZEP_UNAVAILABLE",
+                severity="warning",
+            )
+            return OperationResult.fail(
+                message=f"Zep memory search failed: {e}",
+                code="ZEP_UNAVAILABLE",
+                severity=ErrorSeverity.warning,
+                user_message="Memory search encountered an error. Using fallback mode.",
+                retryable=True,
+                details={"session_id": session_id, "query": query[:100]},
+            )
 
     def clear_cache(self):
         """Clear the query result cache."""
