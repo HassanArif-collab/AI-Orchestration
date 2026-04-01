@@ -199,7 +199,8 @@ const Kanban = {
         const card = document.createElement('div');
         const expiryInfo = this._getExpiryInfo(task);
         const urgencyClass = expiryInfo ? `urgency-${expiryInfo.level}` : '';
-        card.className = `kanban-task-card ${task.status === 'thinking' ? 'thinking' : ''} ${urgencyClass}`.trim();
+        const isThinking = task.status === 'thinking';
+        card.className = `kanban-task-card ${isThinking ? 'thinking' : ''} ${urgencyClass}`.trim();
         card.dataset.id = task.id;
         card.draggable = true;
 
@@ -227,6 +228,19 @@ const Kanban = {
         if (expiryInfo && (expiryInfo.level === 'danger' || expiryInfo.level === 'expired')) {
             extendHtml = `<button class="extend-btn" onclick="event.stopPropagation();Kanban.extendCardExpiry('${task.id}')">Extend 3h</button>`;
         }
+
+        // Thinking progress indicator with estimated time
+        let thinkingHtml = '';
+        if (isThinking) {
+            const elapsed = task.thinking_started_at ? Math.floor((Date.now() - new Date(task.thinking_started_at).getTime()) / 1000) : null;
+            let timeText = '';
+            if (elapsed && elapsed > 10) {
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                timeText = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+            }
+            thinkingHtml = `<div class="thinking-progress">${timeText ? `⏳ ${timeText}` : '⏳ Processing...'}</div>`;
+        }
         
         card.innerHTML = `
             <div class="task-card-header">
@@ -237,6 +251,7 @@ const Kanban = {
                 ${expiryHtml}
                 <span class="task-time">${fmtTime(task.updated_at)}</span>
             </div>
+            ${thinkingHtml}
             ${extendHtml}
         `;
         
@@ -316,11 +331,18 @@ const Kanban = {
     },
     
     async deleteTask(taskId) {
-        if (!confirm('Are you sure you want to delete this pipeline run?')) return;
         try {
-            await api(`/api/kanban/tasks/${taskId}`, { method: 'DELETE' });
-            showToast('Deleted', 'success');
+            await api(`/api/kanban/tasks/${taskId}/soft-delete`, { method: 'POST' });
             this.closeDrawer();
+            showUndoToast('Pipeline run deleted', async () => {
+                try {
+                    await api(`/api/kanban/tasks/${taskId}/undo-delete`, { method: 'POST' });
+                    showToast('Run restored', 'success');
+                    await this.refresh();
+                } catch (err) {
+                    showToast('Restore failed: ' + err.message, 'error');
+                }
+            });
             await this.refresh();
         } catch (err) {
             showToast('Delete failed', 'error');

@@ -210,14 +210,30 @@ function connectSSE() {
       if (!runId) return;
       const bar = document.getElementById(`progress-bar-${runId}`);
       const label = document.getElementById(`progress-label-${runId}`);
+      const batchLabel = document.getElementById(`batch-progress-label-${runId}`);
       if (bar && d.progress_percent != null) {
         bar.style.width = `${Math.min(100, d.progress_percent)}%`;
       }
       if (label && d.stage) {
         label.textContent = d.stage;
       }
+      // Batch progress: show "Processing 3/8 topics..." when total_items is present
+      if (batchLabel && d.total_items && d.current_item) {
+        batchLabel.textContent = `Processing ${d.current_item}/${d.total_items} ${d.item_label || 'items'}...`;
+        batchLabel.style.display = '';
+      }
     } catch (err) {
       // Silently ignore progress parse errors
+    }
+  });
+
+  // Rate limit notification
+  _es.addEventListener('rate_limit', e => {
+    try {
+      const d = JSON.parse(e.data).data;
+      showToast(`⏳ Rate limited — retrying in ${d.wait_seconds}s...`, 'warning', 3000);
+    } catch (err) {
+      // Silently ignore rate limit parse errors
     }
   });
 

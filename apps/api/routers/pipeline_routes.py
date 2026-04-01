@@ -20,6 +20,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path, Body
+import logging
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, field_validator
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
@@ -274,8 +277,15 @@ async def get_stage_definitions():
 MAX_LIST_LIMIT = 100
 
 @router.get("/runs")
-async def list_runs(limit: int = Query(default=20, ge=1, le=MAX_LIST_LIMIT)):
-    """List all pipeline runs, newest first."""
+async def list_runs(
+    limit: int = Query(default=20, ge=1, le=MAX_LIST_LIMIT),
+    include_deleted: bool = Query(default=False, description="Include soft-deleted runs"),
+):
+    """List all pipeline runs, newest first.
+
+    By default, soft-deleted runs are excluded. Pass include_deleted=true
+    to show them (e.g. for a trash bin view).
+    """
     store = get_run_store()
     if not store:
         return [{"run_id": "demo-001", "current_stage": "human_topic_approval",
@@ -288,7 +298,11 @@ async def list_runs(limit: int = Query(default=20, ge=1, le=MAX_LIST_LIMIT)):
         result = []
         for run_data in runs:
             try:
-                result.append(_run_to_dict(run_data))
+                d = _run_to_dict(run_data)
+                # Filter out soft-deleted runs unless explicitly requested
+                if not include_deleted and run_data.get("deleted_at"):
+                    continue
+                result.append(d)
             except Exception:
                 pass
         return result
@@ -327,12 +341,88 @@ async def get_run(run_id: str):
 
 @router.delete("/runs/{run_id}")
 async def delete_run(run_id: str):
-    """Delete a pipeline run."""
+    """Soft-delete a pipeline run by setting deleted_at timestamp.
+
+    The run is hidden from default list views but can be restored via
+    undo-delete. For permanent hard delete, use /hard-delete endpoint.
+    """
     store = get_run_store()
     if not store:
         raise HTTPException(503, "Pipeline package not available")
+    run = store.load(run_id)
+    if not run:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    # Set deleted_at on the run object and save
+    if hasattr(run, "deleted_at"):
+        run.deleted_at = deleted_at
+    if hasattr(run, "stage_status"):
+        run.stage_status["_deleted"] = True
+    store.save(run)
+
+    logger.info(f"run_soft_deleted: run_id={run_id} deleted_at={deleted_at}")
+    return {"deleted": run_id, "deleted_at": deleted_at, "mode": "soft"}
+
+
+@router.post("/runs/{run_id}/soft-delete")
+async def soft_delete_run(run_id: str):
+    """Explicitly soft-delete a pipeline run (same as DELETE but more descriptive).
+
+    Marks the run as deleted without permanently removing it.
+    The run can be restored via /undo-delete/{run_id}.
+    """
+    return await delete_run(run_id)
+
+
+@router.post("/runs/undo-delete/{run_id}")
+async def undo_delete_run(run_id: str):
+    """Restore a soft-deleted pipeline run.
+
+    Clears the deleted_at timestamp, making the run visible again
+    in default list views.
+    """
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Pipeline package not available")
+
+    run = store.load(run_id)
+    if not run:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    # Check if actually soft-deleted
+    deleted_at = None
+    if hasattr(run, "deleted_at"):
+        deleted_at = run.deleted_at
+    if not deleted_at:
+        raise HTTPException(400, f"Run {run_id} is not soft-deleted")
+
+    # Restore: clear deleted_at
+    run.deleted_at = None
+    if hasattr(run, "stage_status") and "_deleted" in run.stage_status:
+        del run.stage_status["_deleted"]
+    store.save(run)
+
+    logger.info(f"run_undeleted: run_id={run_id}")
+    return {"restored": run_id, "previously_deleted_at": deleted_at}
+
+
+@router.post("/runs/{run_id}/hard-delete")
+async def hard_delete_run(run_id: str):
+    """Permanently delete a pipeline run (irreversible).
+
+    Unlike the default DELETE (soft-delete), this permanently removes
+    the run from storage. Use with caution.
+    """
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Pipeline package not available")
+    run = store.load(run_id)
+    if not run:
+        raise HTTPException(404, f"Run {run_id} not found")
     store.delete(run_id)
-    return {"deleted": run_id}
+    logger.info(f"run_hard_deleted: run_id={run_id}")
+    return {"deleted": run_id, "mode": "hard"}
 
 
 @router.post("/runs/{run_id}/approve")
@@ -464,7 +554,8 @@ async def resume_pipeline_run(run_id: str, bg: BackgroundTasks):
     - 'error' state: Resets failed stage and continues execution
     - 'waiting_human' state: Returns the gate stage for approval
 
-    Returns the current stage after resume attempt.
+    Returns explanation data including which stages are complete,
+    which will be retried, and whether expensive operations re-run.
     """
     runner = get_pipeline_runner()
     store = get_run_store()
@@ -474,6 +565,44 @@ async def resume_pipeline_run(run_id: str, bg: BackgroundTasks):
     run = store.load(run_id)
     if not run:
         raise HTTPException(404, f"Run {run_id} not found")
+
+    # Build resume explanation
+    stage_status = getattr(run, "stage_status", {})
+    completed_stages = [s for s, st in stage_status.items() if st in ("complete", "completed") and not s.startswith("_")]
+    failed_stages = [s for s, st in stage_status.items() if st == "error"]
+    pending_stages = [s for s, st in stage_status.items() if st == "pending"]
+    current_stage = getattr(run, "current_stage", "")
+    run_status = getattr(run, "status", "")
+
+    # Expensive stages that should ideally not be re-run
+    expensive_stages = {"research", "script_writing", "visual_planning", "asset_creation"}
+    will_rerun_expensive = bool(set(failed_stages) & expensive_stages)
+
+    # Estimate remaining time based on pending stages
+    stage_time_estimates = {
+        "trend_analysis": 10, "human_topic_approval": 0, "research": 30,
+        "script_writing": 45, "visual_planning": 20, "seo": 15,
+        "human_review": 0, "asset_creation": 120, "publish": 30,
+    }
+    estimated_seconds = sum(
+        stage_time_estimates.get(s, 30)
+        for s in pending_stages
+        if s in stage_time_estimates
+    )
+    if current_stage and current_stage in stage_time_estimates:
+        estimated_seconds = max(estimated_seconds, stage_time_estimates[current_stage])
+
+    resume_explanation = {
+        "explanation": {
+            "completed_stages": completed_stages,
+            "failed_stages": failed_stages,
+            "pending_stages": pending_stages,
+            "stage_to_retry": current_stage if run_status == "error" else None,
+            "will_rerun_expensive_operations": will_rerun_expensive,
+            "estimated_remaining_seconds": estimated_seconds,
+            "run_status_before_resume": run_status,
+        }
+    }
 
     try:
         result = await runner.resume_run(run_id)
@@ -492,6 +621,7 @@ async def resume_pipeline_run(run_id: str, bg: BackgroundTasks):
             "run_id": run_id,
             "current_stage": result.value if result else None,
             "run_status": run.status,
+            **resume_explanation,
         }
     except HTTPException:
         raise
@@ -687,14 +817,45 @@ async def resume_langgraph_pipeline(
     from langgraph.types import Command
     
     config = {"configurable": {"thread_id": card_id}}
-    
+
+    # Build resume explanation from current state
+    resume_explanation = {}
+    try:
+        current_state = await _production_graph.aget_state(config)
+        values = current_state.values if hasattr(current_state, "values") else {}
+        pipeline_status = values.get("pipeline_status", "unknown")
+        evaluation_score = values.get("evaluation_score", 0)
+        iteration_count = values.get("iteration_count", 0)
+
+        # Determine what will happen on resume
+        if decision.approved:
+            next_action = "Publish approved script to Notion"
+            will_rerun_expensive = False
+        else:
+            next_action = "Return to drafting stage with human feedback"
+            will_rerun_expensive = True
+
+        resume_explanation = {
+            "explanation": {
+                "current_pipeline_status": pipeline_status,
+                "evaluation_score": evaluation_score,
+                "iterations_completed": iteration_count,
+                "decision": "approved" if decision.approved else "rejected_with_feedback",
+                "next_action": next_action,
+                "will_rerun_expensive_operations": will_rerun_expensive,
+                "estimated_remaining_seconds": 30 if not decision.approved else 30,
+            }
+        }
+    except Exception:
+        pass  # Non-critical: explanation is best-effort
+
     background_tasks.add_task(
         _production_graph.ainvoke,
         Command(resume=decision),
         config,
     )
     
-    return {"status": "resumed", "card_id": card_id, "decision": decision}
+    return {"status": "resumed", "card_id": card_id, "decision": decision, **resume_explanation}
 
 
 @router.get("/langgraph/state/{card_id}")
@@ -723,6 +884,105 @@ async def get_langgraph_state(card_id: str):
             "risk_tier": values.get("risk_tier"),
             "sla_deadline": values.get("sla_deadline"),
             "review_requested_at": values.get("review_requested_at"),
+            "score_categories": values.get("score_categories"),
+        }
+    except Exception as e:
+        raise HTTPException(404, f"No pipeline state found for {card_id}: {e}")
+
+
+# ─── Preview Before Publish (Issue 13) ─────────────────────────────────────────
+
+@router.get("/runs/{run_id}/preview")
+async def preview_run(run_id: str):
+    """Preview how a pipeline run would appear when published to Notion.
+
+    Returns the formatted script, visual plan, score, and feedback
+    in a structured preview format. Does NOT publish to Notion.
+    This is a read-only preview for the frontend to display before
+    the user confirms publishing.
+    """
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Pipeline package not available")
+    run = store.load(run_id)
+    if not run:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    outputs = run.stage_outputs if hasattr(run, "stage_outputs") else {}
+    current_draft = outputs.get("script_writing", "")
+    visual_plan = outputs.get("visual_planning", "")
+    evaluation_score = outputs.get("_evaluation_score", 0)
+    evaluation_feedback = outputs.get("_evaluation_feedback", "")
+
+    # Extract title
+    title = "Untitled"
+    approval = outputs.get("human_topic_approval")
+    if isinstance(approval, dict):
+        title = approval.get("title", "Untitled")
+
+    # Build the preview response
+    preview = {
+        "run_id": run_id,
+        "title": title,
+        "draft": current_draft if isinstance(current_draft, str) else str(current_draft),
+        "visual_plan": visual_plan if isinstance(visual_plan, str) else str(visual_plan),
+        "score": evaluation_score,
+        "feedback": evaluation_feedback,
+        "status": getattr(run, "status", "unknown"),
+        "current_stage": getattr(run, "current_stage", ""),
+        "publishable": isinstance(current_draft, str) and len(current_draft.strip()) > 0,
+    }
+
+    return preview
+
+
+# ─── Preview LangGraph Pipeline Before Publish ────────────────────────────────
+
+@router.get("/langgraph/preview/{card_id}")
+async def preview_langgraph_run(card_id: str):
+    """Preview how a LangGraph production run would appear when published.
+
+    Fetches the current checkpointed state and returns the draft,
+    visual plan, score breakdown, and feedback in a structured preview.
+    Does NOT publish to Notion.
+    """
+    global _production_graph
+
+    if _production_graph is None:
+        await _init_graphs()
+
+    if _production_graph is None:
+        raise HTTPException(503, "LangGraph not initialized")
+
+    config = {"configurable": {"thread_id": card_id}}
+
+    try:
+        state = await _production_graph.aget_state(config)
+        values = state.values if hasattr(state, "values") else {}
+
+        draft = values.get("current_draft", "") or values.get("best_draft", "")
+        visual_plan = values.get("visual_plan", "")
+        evaluation_score = values.get("evaluation_score", 0)
+        evaluation_feedback = values.get("evaluation_feedback", "")
+        score_categories = values.get("score_categories", {})
+        topic_brief = values.get("topic_brief", {})
+
+        title = "Untitled"
+        if isinstance(topic_brief, dict):
+            title = topic_brief.get("title", "Untitled")
+
+        return {
+            "card_id": card_id,
+            "title": title,
+            "draft": draft,
+            "visual_plan": visual_plan,
+            "score": evaluation_score,
+            "score_categories": score_categories,
+            "feedback": evaluation_feedback,
+            "iteration_count": values.get("iteration_count", 0),
+            "best_score": values.get("best_score", 0),
+            "pipeline_status": values.get("pipeline_status", ""),
+            "publishable": isinstance(draft, str) and len(draft.strip()) > 0,
         }
     except Exception as e:
         raise HTTPException(404, f"No pipeline state found for {card_id}: {e}")

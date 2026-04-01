@@ -1196,6 +1196,190 @@ a:hover { text-decoration: underline; }
   gap: 6px;
 }
 
+/* ─── Score Breakdown (horizontal bar chart) ─────────────────────────────── */
+
+.score-breakdown {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.score-breakdown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.score-breakdown-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.score-breakdown-overall {
+  font-size: 20px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.score-breakdown-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.score-breakdown-row:last-child {
+  margin-bottom: 0;
+}
+
+.score-breakdown-label {
+  flex: 0 0 120px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.score-breakdown-bar-track {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.score-breakdown-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+
+.score-breakdown-bar.score-high { background: var(--accent-success); }
+.score-breakdown-bar.score-medium { background: var(--accent-warning); }
+.score-breakdown-bar.score-low { background: var(--accent-error); }
+
+.score-breakdown-pct {
+  flex: 0 0 40px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+/* ─── Preview Modal (two-column layout) ──────────────────────────────────── */
+
+.preview-modal {
+  display: grid;
+  grid-template-columns: 60% 40%;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.preview-script {
+  min-width: 0;
+}
+
+.preview-metadata {
+  min-width: 0;
+}
+
+/* ─── Resume Explanation Dialog ──────────────────────────────────────────── */
+
+.resume-explanation {
+  padding: 0;
+}
+
+.resume-explanation-header {
+  margin-bottom: 16px;
+}
+
+.resume-explanation-info {
+  background: rgba(24, 95, 165, 0.08);
+  border-left: 3px solid var(--accent-blue);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.resume-explanation-info strong {
+  color: var(--text-primary);
+}
+
+.resume-stage-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resume-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+}
+
+.resume-stage.completed {
+  color: var(--accent-success);
+}
+
+.resume-stage.rerun {
+  color: var(--accent-warning);
+  background: rgba(186, 117, 23, 0.08);
+}
+
+.resume-check {
+  font-weight: 700;
+  font-size: 11px;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.resume-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+/* ─── Thinking Progress Indicator ────────────────────────────────────────── */
+
+.thinking-progress {
+  font-size: 10px;
+  color: var(--accent-blue);
+  margin-top: 6px;
+  animation: thinking-fade 2s ease-in-out infinite;
+}
+
+@keyframes thinking-fade {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ─── Batch Progress Label ───────────────────────────────────────────────── */
+
+.batch-progress-label {
+  display: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  text-align: center;
+}
+
 /* ─── Inline Input Validation ────────────────────────────────────────────── */
 
 .form-input.error { border-color: var(--accent-error); }

@@ -9,10 +9,11 @@ Endpoints:
     GET /api/health   - Detailed health status
     GET /api/health/services       - Comprehensive service health check
     GET /api/health/circuit-breakers - Circuit breaker statuses
+    GET /api/health/config          - Configuration completeness check
 """
 
 from datetime import datetime, timezone
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 router = APIRouter()
 
@@ -296,6 +297,73 @@ async def circuit_breaker_status():
             "circuit_breakers": {},
             "message": "Circuit breaker status module not yet available.",
         }
+
+
+@router.get("/api/health/config")
+async def config_health_check(request: Request):
+    """Check which optional services are configured vs missing.
+
+    Returns configuration completeness status, showing which critical
+    and optional config keys are set. Useful for setup wizards and
+    configuration dashboards.
+
+    Returns:
+        Dict with:
+        - timestamp: ISO timestamp
+        - critical: Dict mapping critical key names to configured (bool)
+        - optional: Dict mapping optional key names to configured (bool)
+        - missing_critical: List of missing critical keys
+        - missing_optional: List of missing optional keys
+        - summary: Dict with configured/missing counts
+    """
+    from fastapi import Request as _Request
+
+    # Try to get pre-computed config status from app.state
+    try:
+        config_status = getattr(request.app.state, "config_status", None)
+        if config_status:
+            critical = config_status.get("critical", {})
+            optional = config_status.get("optional", {})
+            missing_critical = config_status.get("missing_critical", [])
+            missing_optional = config_status.get("missing_optional", [])
+        else:
+            # Compute on-the-fly if not pre-computed
+            from packages.core.config import get_settings as _get_settings
+            _settings = _get_settings()
+            critical = {
+                "FREEROUTER_URL": bool(_settings.FREEROUTER_URL),
+            }
+            optional = {
+                "NOTION_API_KEY": bool(_settings.NOTION_API_KEY),
+                "ZEP_API_KEY": bool(_settings.ZEP_API_KEY),
+                "EXA_API_KEY": bool(_settings.EXA_API_KEY),
+                "SUPABASE_URL": bool(_settings.SUPABASE_URL),
+                "YOUTUBE_API_KEY": bool(_settings.YOUTUBE_API_KEY),
+            }
+            missing_critical = [k for k, v in critical.items() if not v]
+            missing_optional = [k for k, v in optional.items() if not v]
+    except Exception:
+        critical = {}
+        optional = {}
+        missing_critical = []
+        missing_optional = []
+
+    total = len(critical) + len(optional)
+    configured_count = sum(1 for v in critical.values() if v) + sum(1 for v in optional.values() if v)
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "critical": critical,
+        "optional": optional,
+        "missing_critical": missing_critical,
+        "missing_optional": missing_optional,
+        "summary": {
+            "total_keys": total,
+            "configured": configured_count,
+            "missing": total - configured_count,
+            "all_critical_configured": len(missing_critical) == 0,
+        },
+    }
 
 
 # ─── Helper: Lazy import for Zep connectivity test ────────────────────────

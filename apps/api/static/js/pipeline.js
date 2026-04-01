@@ -17,6 +17,41 @@ const STAGE_ORDER = ['trend_analysis', 'human_topic_approval', 'research', 'scri
 const STATUS_CLASS = { complete: 'complete', running: 'running', waiting_human: 'waiting', error: 'error', pending: 'pending' };
 
 /**
+ * Build a horizontal bar chart showing score category breakdowns.
+ * @param {object} categories - Map of category name to percentage (0-100)
+ * @param {number} overallScore - The overall score to display prominently
+ * @returns {string} HTML string for the score breakdown visualization
+ */
+function _buildScoreBreakdown(categories, overallScore) {
+  if (!categories || typeof categories !== 'object' || Object.keys(categories).length === 0) return '';
+
+  const overallColor = overallScore >= 85 ? 'var(--accent-success)' : overallScore >= 65 ? 'var(--accent-warning)' : 'var(--accent-error)';
+
+  let rows = '';
+  for (const [name, value] of Object.entries(categories)) {
+    const pct = typeof value === 'number' ? Math.round(value) : 0;
+    const colorClass = pct >= 80 ? 'score-high' : pct >= 60 ? 'score-medium' : 'score-low';
+    rows += `
+      <div class="score-breakdown-row">
+        <span class="score-breakdown-label">${escHtml(name)}</span>
+        <div class="score-breakdown-bar-track">
+          <div class="score-breakdown-bar ${colorClass}" style="width:${pct}%"></div>
+        </div>
+        <span class="score-breakdown-pct">${pct}%</span>
+      </div>`;
+  }
+
+  return `
+    <div class="score-breakdown">
+      <div class="score-breakdown-header">
+        <span class="score-breakdown-title">Score Breakdown</span>
+        <span class="score-breakdown-overall" style="color:${overallColor}">${typeof overallScore === 'number' ? overallScore.toFixed(1) : '—'}%</span>
+      </div>
+      ${rows}
+    </div>`;
+}
+
+/**
  * Render artifact data as readable HTML instead of raw JSON.
  * Handles AdaptedScript, Research, Visual Planning, and Trend Analysis outputs.
  */
@@ -338,12 +373,16 @@ function showRunDetail(run, iterations = []) {
         scriptContentHtml = `<pre style="font-size:12px;color:var(--text-secondary);max-height:400px;overflow-y:auto">${escHtml(JSON.stringify(scriptOutput, null, 2))}</pre>`;
       }
 
+      // Score breakdown visualization
+      const scoreBreakdownHtml = _buildScoreBreakdown(scriptOutput.score_categories, scriptScore);
+
       approvalHtml = `
         <div class="card" style="border-color:var(--accent-warning);margin-bottom:12px">
           <div class="card-header">
             <h3 style="color:var(--accent-warning)">👁️ Review script & visual plan</h3>
             ${scriptScore ? `<span style="font-size:13px;font-weight:700;color:${scriptScore >= 85 ? 'var(--accent-success)' : 'var(--accent-warning)'}">${scriptScore.toFixed(1)}%</span>` : ''}
           </div>
+          ${scoreBreakdownHtml}
           <div style="margin-bottom:12px">
             <div style="font-size:15px;font-weight:700;margin-bottom:8px">${escHtml(scriptTitle)}</div>
             <div style="max-height:500px;overflow-y:auto;padding:12px;background:var(--bg-tertiary);border-radius:var(--radius)">
@@ -355,6 +394,7 @@ function showRunDetail(run, iterations = []) {
             <textarea id="review-feedback" class="form-input" placeholder="Any changes needed?"></textarea>
           </div>
           <div style="display:flex;gap:8px">
+            <button class="btn btn-info btn-sm" onclick="showPreviewModal('${run.run_id}')">👁 Preview</button>
             <button class="btn btn-success" onclick="approveReview('${run.run_id}')">✓ Approve</button>
             <button class="btn btn-danger"  onclick="rejectReview('${run.run_id}')">✗ Reject & Revise</button>
           </div>
@@ -520,17 +560,6 @@ async function confirmStart() {
   }
 }
 
-async function resumePipeline(runId) {
-  try {
-    const r = await api(`/api/pipeline/runs/${runId}/resume`, { method: 'POST' });
-    hideModal();
-    showToast(`Pipeline resumed from stage: ${r.current_stage || 'previous'}`, 'success');
-    await refreshPipeline();
-  } catch (e) {
-    showToast(`Resume failed: ${e.message}`, 'error');
-  }
-}
-
 async function approveTopicSelection(runId, i, idea) {
   try {
     await api(`/api/pipeline/runs/${runId}/approve`, { method: 'POST', body: { selection: idea } });
@@ -578,13 +607,174 @@ async function sendFeedback(runId) {
 }
 
 async function deleteRun(runId) {
-  if (!confirm('Delete this pipeline run?')) return;
   try {
-    await api(`/api/pipeline/runs/${runId}`, { method: 'DELETE' });
+    await api(`/api/pipeline/runs/${runId}/soft-delete`, { method: 'POST' });
     hideModal();
-    showToast('Run deleted', 'info');
+    showUndoToast('Pipeline run deleted', async () => {
+      try {
+        await api(`/api/pipeline/runs/${runId}/undo-delete`, { method: 'POST' });
+        showToast('Run restored', 'success');
+        await refreshPipeline();
+      } catch (e) { showToast(`Restore failed: ${e.message}`, 'error'); }
+    });
     await refreshPipeline();
   } catch (e) { showToast(`Delete failed: ${e.message}`, 'error'); }
+}
+
+/**
+ * Show a preview modal for a pipeline run before publishing.
+ * Fetches preview data and displays script, visual plan, and score in a two-column layout.
+ */
+async function showPreviewModal(runId) {
+  try {
+    const data = await api(`/api/pipeline/runs/${runId}/preview`);
+    const script = data.script || data.output || {};
+    const visualPlan = data.visual_plan || data.visualPlan || {};
+    const score = data.production_readiness_score || data.score;
+
+    // Build score breakdown
+    const scoreBreakdownHtml = _buildScoreBreakdown(script.score_categories, score);
+    const overallColor = score >= 85 ? 'var(--accent-success)' : score >= 65 ? 'var(--accent-warning)' : 'var(--accent-error)';
+
+    // Build script content from entries
+    let scriptHtml = '';
+    const entries = Array.isArray(script.entries) ? script.entries : [];
+    if (entries.length > 0) {
+      scriptHtml = entries.map(entry => {
+        const prose = entry.prose || '';
+        const visual = entry.visual_direction || '';
+        const section = entry.section_label || '';
+        const isAnchor = section === 'ANCHOR';
+        const isHook = section === 'HOOK';
+        const headerStyle = isAnchor ? 'color:var(--accent-warning);font-weight:700' :
+                            isHook ? 'color:var(--accent-primary);font-weight:700' :
+                            'color:var(--text-muted);font-weight:600';
+        return `
+          <div style="margin-bottom:12px;padding:8px 0;${isAnchor || isHook ? 'border-left:3px solid ' + (isAnchor ? 'var(--accent-warning)' : 'var(--accent-primary)') + ';padding-left:12px' : ''}">
+            ${section ? `<div style="font-size:11px;text-transform:uppercase;${headerStyle};margin-bottom:4px">${escHtml(section)}</div>` : ''}
+            <div style="font-size:13px;line-height:1.6;color:var(--text-primary)">${escHtml(prose)}</div>
+            ${visual ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-style:italic">📹 ${escHtml(visual)}</div>` : ''}
+          </div>`;
+      }).join('');
+    } else {
+      scriptHtml = `<div style="color:var(--text-muted);padding:12px">No script content available</div>`;
+    }
+
+    // Build visual plan content
+    let visualHtml = '';
+    if (visualPlan.section_briefs && Array.isArray(visualPlan.section_briefs)) {
+      visualHtml = visualPlan.section_briefs.map((brief, i) => `
+        <div style="padding:8px;border-bottom:1px solid var(--border)">
+          <span style="color:var(--accent-primary);font-weight:600">Section ${brief.section_index || (i + 1)}:</span>
+          <span style="color:var(--text-secondary);font-size:12px">${escHtml((brief.sonic_palette || '').slice(0, 100))}</span>
+        </div>`).join('');
+    } else if (typeof visualPlan === 'object' && Object.keys(visualPlan).length > 0) {
+      visualHtml = `<pre style="font-size:11px;max-height:200px;overflow:auto;color:var(--text-secondary)">${escHtml(JSON.stringify(visualPlan, null, 2).slice(0, 600))}</pre>`;
+    } else {
+      visualHtml = `<div style="color:var(--text-muted);padding:12px">No visual plan available</div>`;
+    }
+
+    showModal(`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h2 style="font-size:16px;color:var(--text-primary)">Preview: ${escHtml(script.adapted_title || data.title || 'Pipeline Run')}</h2>
+        <button class="btn btn-outline btn-sm" onclick="hideModal()">✕</button>
+      </div>
+      ${scoreBreakdownHtml}
+      <div class="preview-modal">
+        <div class="preview-script">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">📝 Script</div>
+          <div style="max-height:400px;overflow-y:auto;padding:12px;background:var(--bg-tertiary);border-radius:var(--radius)">
+            ${scriptHtml}
+          </div>
+        </div>
+        <div class="preview-metadata">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-secondary)">🎨 Visual Plan</div>
+          <div style="padding:12px;background:var(--bg-tertiary);border-radius:var(--radius);margin-bottom:12px">
+            ${visualHtml}
+          </div>
+          ${score ? `
+            <div style="padding:12px;background:var(--bg-tertiary);border-radius:var(--radius);text-align:center">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Overall Score</div>
+              <div style="font-size:28px;font-weight:700;color:${overallColor}">${score.toFixed(1)}%</div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-outline" onclick="hideModal()">Edit</button>
+        <button class="btn btn-success" onclick="approveReview('${runId}');hideModal()">✓ Publish</button>
+      </div>
+    `);
+  } catch (e) {
+    showToast(`Preview failed: ${e.message}`, 'error');
+  }
+}
+
+/**
+ * Show a resume explanation dialog before resuming a failed pipeline.
+ * Fetches current run state, explains what will happen, and asks for confirmation.
+ */
+async function resumePipeline(runId) {
+  try {
+    const run = await api(`/api/pipeline/runs/${runId}`);
+    const stages = run.stages || {};
+    const failedStage = run.current_stage || 'unknown';
+    const failedLabel = STAGE_LABELS[failedStage] || failedStage.replace(/_/g, ' ');
+
+    // Determine which stages are completed vs. pending/error
+    const failedIdx = STAGE_ORDER.indexOf(failedStage);
+    const completedStages = STAGE_ORDER.slice(0, failedIdx).filter(s => {
+      const st = stages[s];
+      return st && st.status === 'complete';
+    });
+    const rerunStages = STAGE_ORDER.slice(failedIdx);
+
+    const completedHtml = completedStages.length > 0
+      ? completedStages.map(s => `<li class="resume-stage completed"><span class="resume-check">✓</span> ${escHtml(STAGE_LABELS[s] || s)}</li>`).join('')
+      : '<li class="resume-stage"><span class="resume-check">·</span> No prior completed stages</li>';
+
+    const rerunHtml = rerunStages.map(s => `<li class="resume-stage rerun"><span class="resume-icon">↻</span> ${escHtml(STAGE_LABELS[s] || s)}</li>`).join('');
+
+    showModal(`
+      <div class="resume-explanation">
+        <div class="resume-explanation-header">
+          <h3 style="font-size:16px;color:var(--text-primary);margin-bottom:4px">Resume Pipeline?</h3>
+          <div style="font-size:12px;color:var(--text-muted)">Review what will happen before proceeding</div>
+        </div>
+        <div class="resume-explanation-info">
+          This will resume the pipeline from the failed stage: <strong style="color:var(--accent-error)">${escHtml(failedLabel)}</strong>.
+          The following stages will be re-executed. Any completed stages before the failure will be skipped.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--accent-success);margin-bottom:8px">Completed (skipped)</div>
+            <ul class="resume-stage-list">${completedHtml}</ul>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--accent-warning);margin-bottom:8px">Will be re-executed</div>
+            <ul class="resume-stage-list">${rerunHtml}</ul>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline" onclick="hideModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="_confirmResume('${runId}')">↻ Resume Pipeline</button>
+        </div>
+      </div>
+    `);
+  } catch (e) {
+    showToast(`Failed to load run state: ${e.message}`, 'error');
+  }
+}
+
+async function _confirmResume(runId) {
+  try {
+    const r = await api(`/api/pipeline/runs/${runId}/resume`, { method: 'POST' });
+    hideModal();
+    showToast(`Pipeline resumed from stage: ${r.current_stage || 'previous'}`, 'success');
+    await refreshPipeline();
+  } catch (e) {
+    showToast(`Resume failed: ${e.message}`, 'error');
+  }
 }
 
 /**

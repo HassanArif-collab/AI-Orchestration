@@ -115,9 +115,40 @@ async def lifespan(app: FastAPI):
                 print(f"  - {svc}: {service_status[svc]}")
         # Store initial health status for dashboard consumption
         app.state.initial_health = service_status
+
+        # ── Configuration completeness validation (Issue 18) ──
+        # Check critical vs optional config keys and log warnings for missing optional ones
+        critical_keys = {
+            "FREEROUTER_URL": _settings.FREEROUTER_URL,
+        }
+        optional_keys = {
+            "NOTION_API_KEY": _settings.NOTION_API_KEY,
+            "ZEP_API_KEY": _settings.ZEP_API_KEY,
+            "EXA_API_KEY": _settings.EXA_API_KEY,
+            "SUPABASE_URL": _settings.SUPABASE_URL,
+            "YOUTUBE_API_KEY": _settings.YOUTUBE_API_KEY,
+        }
+
+        missing_critical = [k for k, v in critical_keys.items() if not v]
+        missing_optional = [k for k, v in optional_keys.items() if not v]
+
+        if missing_critical:
+            print(f"ERROR: {len(missing_critical)} critical config key(s) missing: {', '.join(missing_critical)}")
+        if missing_optional:
+            print(f"Info: {len(missing_optional)} optional service(s) not configured: {', '.join(missing_optional)}")
+            print("  These services will operate in degraded mode. Set the corresponding env vars to enable them.")
+
+        # Store config status for the /api/health/config endpoint
+        app.state.config_status = {
+            "critical": {k: bool(v) for k, v in critical_keys.items()},
+            "optional": {k: bool(v) for k, v in optional_keys.items()},
+            "missing_critical": missing_critical,
+            "missing_optional": missing_optional,
+        }
     except Exception as e:
         print(f"Warning: Startup health validation failed (non-fatal): {e}")
         app.state.initial_health = {}
+        app.state.config_status = {}
 
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")

@@ -138,3 +138,28 @@ async def emit_iteration_complete(
 async def emit_task_created(task_data: dict) -> None:
     """Emit a 'task_created' event for the Kanban board."""
     await event_bus.publish("task_created", task_data)
+
+
+async def emit_rate_limit(
+    wait_time: int,
+    attempt: int = 1,
+    max_retries: int = 3,
+    model: str = "auto",
+) -> None:
+    """Emit a 'rate_limit' SSE event when an LLM provider rate-limits us.
+
+    The frontend can use this to show a progress indicator or toast
+    telling the user the system is waiting before retrying.
+
+    Args:
+        wait_time: Seconds until the next retry
+        attempt: Current retry attempt number (1-indexed)
+        max_retries: Maximum number of retries configured
+        model: The model that was being called
+    """
+    await event_bus.publish("rate_limit", {
+        "wait_time": wait_time,
+        "attempt": attempt,
+        "max_retries": max_retries,
+        "model": model,
+    })

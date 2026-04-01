@@ -256,6 +256,32 @@ async def grade_viability_node(state: DiscoveryState) -> dict:
                         card_id, "topic_finder",
                         f"❌ '{title[:40]}...' failed ({score}%)"
                     )
+
+                # CHECKPOINT: Save graded topic to kanban_cards immediately (Issue 14)
+                # This ensures that if the node fails partway through grading,
+                # the already-graded topics are preserved in the database.
+                # Without this checkpoint, a crash after grading topic 3 of 5
+                # would lose all grading progress.
+                try:
+                    from packages.core.supabase_client import get_supabase
+                    sb = get_supabase()
+                    sb.table("kanban_cards").insert({
+                        "title": title,
+                        "topic_brief": {
+                            **topic,
+                            "viability_score": score,
+                            "score_breakdown": scores,
+                            "passed": score >= 60,
+                        },
+                        "column": 2,  # Suggested Topics
+                        "status": "suggested",
+                        "viability_score": score,
+                        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }).execute()
+                except Exception as checkpoint_err:
+                    # Checkpoint failure is non-fatal — topic is still in graded list
+                    logger.warning(f"topic_checkpoint_save_failed: {title} - {checkpoint_err}")
                     
         except Exception as e:
             logger.warning(f"topic_grading_failed: {title} - {e}")
@@ -404,7 +430,7 @@ async def research_node(state: ProductionState) -> dict:
                 "pipeline_status": "researching",
             }
     except Exception as e:
-        logger.debug(f"cache_check_failed: {e}")
+        logger.warning(f"cache_check_failed: {e}")
     
     # Step 2: Execute research
     await report_thought(card_id, "researcher", f"🔍 Researching: {topic_title}")
@@ -658,8 +684,13 @@ Score = (points / 56) * 100, rounded to nearest integer.
 
 Count YES answers, calculate score as (YES_count / 56) * 100.
 
-Return JSON:
-{{"score": 85, "feedback": "Brief description of strengths and what needs improvement"}}"""
+For each category, calculate the percentage of YES answers within that category.
+
+Return JSON with this EXACT structure:
+{{"score": 85, "feedback": "Brief description of strengths and what needs improvement", "score_categories": {{"structure": 88, "hook": 83, "clarity": 75, "engagement": 86, "credibility": 71, "emotional": 67, "visual": 83, "conclusion": 80, "impact": 67}}}}
+
+Where each category value is: (YES_in_category / total_in_category) * 100, rounded to nearest integer.
+Category question counts: structure=8, hook=6, clarity=8, engagement=7, credibility=7, emotional=6, visual=6, conclusion=5, impact=3."""
         
         async with RouterClient() as router:
             import json
@@ -676,13 +707,16 @@ Return JSON:
                 result = json.loads(json_str)
                 score = result.get("score", 0)
                 feedback = result.get("feedback", "")
+                score_categories = result.get("score_categories", {})
             else:
                 score = 50
                 feedback = "Could not parse evaluation"
+                score_categories = {}
         
         updates = {
             "evaluation_score": score,
             "evaluation_feedback": feedback,
+            "score_categories": score_categories,
             "pipeline_status": "scoring",
         }
         
@@ -1068,6 +1102,6 @@ async def error_handler_node(state) -> dict:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", card_id).execute()
     except Exception as e:
-        logger.debug(f"card_error_update_failed: {e}")
+        logger.warning(f"card_error_update_failed: {e}")
     
     return {"pipeline_status": "error"}

@@ -121,7 +121,7 @@ class AsyncZepMemoryClient:
                 logger.warning(f"zep_init_failed: {e}")
                 self._client = None
         else:
-            logger.debug("Zep API key not configured, operating in degraded mode")
+            logger.warning("Zep API key not configured, operating in degraded mode")
 
     async def __aenter__(self) -> "AsyncZepMemoryClient":
         """Async context manager entry."""

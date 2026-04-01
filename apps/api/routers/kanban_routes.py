@@ -14,6 +14,9 @@ from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Path, Body
 from pydantic import BaseModel, Field
+import logging
+
+logger = logging.getLogger(__name__)
 
 from apps.api.dependencies import get_pipeline_runner, get_run_store
 from apps.api.events import emit_task_created
@@ -329,10 +332,77 @@ async def update_task(task_id: str = Path(..., min_length=1, max_length=100), da
 
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
-    """Delete the underlying pipeline run and associated thoughts."""
+    """Soft-delete the underlying pipeline run and associated thoughts.
+
+    Marks the task as deleted without permanently removing it.
+    Use /hard-delete/{task_id} for permanent removal, or /undo-delete/{task_id} to restore.
+    """
     store = get_run_store()
     if not store:
         raise HTTPException(503, "Store not available")
+
+    run = store.load(task_id)
+    if not run:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    if hasattr(run, "deleted_at"):
+        run.deleted_at = deleted_at
+    store.save(run)
+
+    logger.info(f"kanban_task_soft_deleted: task_id={task_id} deleted_at={deleted_at}")
+    return {"success": True, "deleted_id": task_id, "deleted_at": deleted_at, "mode": "soft"}
+
+
+@router.post("/tasks/{task_id}/soft-delete")
+async def soft_delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
+    """Explicitly soft-delete a kanban task.
+
+    Marks the task as deleted without permanently removing it.
+    The task can be restored via /undo-delete/{task_id}.
+    """
+    return await delete_task(task_id)
+
+
+@router.post("/tasks/undo-delete/{task_id}")
+async def undo_delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
+    """Restore a soft-deleted kanban task.
+
+    Clears the deleted_at timestamp, making the task visible again.
+    """
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Store not available")
+
+    run = store.load(task_id)
+    if not run:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    deleted_at = getattr(run, "deleted_at", None)
+    if not deleted_at:
+        raise HTTPException(400, f"Task {task_id} is not soft-deleted")
+
+    run.deleted_at = None
+    store.save(run)
+
+    logger.info(f"kanban_task_undeleted: task_id={task_id}")
+    return {"success": True, "restored_id": task_id, "previously_deleted_at": deleted_at}
+
+
+@router.post("/tasks/{task_id}/hard-delete")
+async def hard_delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
+    """Permanently delete a kanban task and associated thoughts (irreversible).
+
+    Unlike the default DELETE (soft-delete), this permanently removes
+    the task from storage. Use with caution.
+    """
+    store = get_run_store()
+    if not store:
+        raise HTTPException(503, "Store not available")
+
+    run = store.load(task_id)
+    if not run:
+        raise HTTPException(404, f"Task {task_id} not found")
 
     store.delete(task_id)
 
@@ -341,9 +411,10 @@ async def delete_task(task_id: str = Path(..., min_length=1, max_length=100)) ->
         from packages.core.thoughts import delete_thoughts_for_card
         delete_thoughts_for_card(str(task_id))
     except Exception as e:
-        print(f"Warning: Could not delete thoughts for {task_id}: {e}")
+        logger.warning(f"kanban_hard_delete_thoughts_failed: {task_id}: {e}")
 
-    return {"success": True, "deleted_id": task_id}
+    logger.info(f"kanban_task_hard_deleted: task_id={task_id}")
+    return {"success": True, "deleted_id": task_id, "mode": "hard"}
 
 @router.post("/topic-finder")
 async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) -> dict:

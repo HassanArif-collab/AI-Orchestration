@@ -183,11 +183,11 @@ def validate_health_check_url(url: str, allowed_hosts: set[str] | None = None) -
             if is_private_ip(ip_str):
                 return False, f"Hostname '{hostname}' resolves to private IP '{ip_str}'"
     except socket.gaierror as e:
-        log.debug(f"DNS resolution failed for health check URL: {hostname}: {e}")
+        log.warning(f"DNS resolution failed for health check URL: {hostname}: {e}")
         # Don't block on DNS failure - let the request proceed and fail naturally
         pass
     except Exception as e:
-        log.debug(f"Error checking DNS for health check URL: {e}")
+        log.warning(f"Error checking DNS for health check URL: {e}")
 
     return True, ""
 
@@ -325,7 +325,7 @@ class RouterClient:
                 self._healthy = True
                 return {"healthy": True, "latency_ms": latency}
         except Exception as e:
-            log.debug(f"health_check_failed: {e}")
+            log.warning(f"health_check_failed: {e}")
 
         self._healthy = False
         return {"healthy": False, "latency_ms": None}
@@ -381,7 +381,7 @@ class RouterClient:
             # No event loop exists - create one to close
             asyncio.run(self.close())
         except Exception as e:
-            log.debug(f"context_manager_close_error: {e}")
+            log.warning(f"context_manager_close_error: {e}")
 
     async def close(self) -> None:
         """Release the shared HTTP client (closes when last user releases)."""
@@ -433,6 +433,18 @@ class RouterClient:
                 if resp.status_code == 429:
                     wait_time = (2**attempt) + 1
                     log.warning(f"rate_limit_hit_waiting_{wait_time}s")
+                    # Emit rate_limit SSE event for frontend awareness (Issue 15)
+                    try:
+                        from apps.api.events import event_bus as _event_bus
+                        import asyncio
+                        asyncio.ensure_future(_event_bus.publish("rate_limit", {
+                            "wait_time": wait_time,
+                            "attempt": attempt + 1,
+                            "max_retries": retries,
+                            "model": body.get("model", "auto"),
+                        }))
+                    except Exception:
+                        pass  # Non-critical: SSE emission must not break the retry loop
                     await asyncio.sleep(wait_time)
                     continue
 
