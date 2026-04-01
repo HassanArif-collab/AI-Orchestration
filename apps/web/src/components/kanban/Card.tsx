@@ -127,10 +127,12 @@ export function Card({ card, onClick }: Props) {
       onClick={onClick}
       className={`
         bg-gray-800 rounded-lg p-3 cursor-pointer
-        border border-gray-700 hover:border-gray-500
         transition-all duration-200 hover:shadow-lg
-        ${card.status === 'error' ? 'border-red-500/50' : ''}
-        ${timer.isExpired ? 'opacity-40 pointer-events-none' : ''}
+        ${card.status === 'error' ? 'border border-red-500/50' : ''}
+        ${timer.isExpired ? 'border border-red-500/50 opacity-60' : ''}
+        ${timer.isCritical && !timer.isExpired ? 'border border-orange-500 animate-pulse-border' : ''}
+        ${timer.isWarning && !timer.isExpired && !timer.isCritical ? 'border border-yellow-600' : ''}
+        ${!card.status?.startsWith('error') && !timer.isExpired && !timer.isCritical && !timer.isWarning ? 'border border-gray-700 hover:border-gray-500' : ''}
       `}
     >
       {/* Title */}
@@ -153,19 +155,41 @@ export function Card({ card, onClick }: Props) {
         )}
       </div>
 
-      {/* Column 2 specific: Timer countdown (only for expiring cards) */}
-      {card.column === 2 && card.expires_at && !timer.isExpired && (
-        <div className="mt-2 space-y-2">
-          {/* Countdown bar */}
+      {/* Column 2: Timer countdown with progressive urgency */}
+      {card.column === 2 && card.expires_at && (
+        <div className="mt-2 space-y-1.5">
+          {/* Progress bar — color changes with urgency */}
           <div className="w-full bg-gray-700 rounded-full h-1">
             <div
-              className="bg-yellow-500 h-1 rounded-full transition-all duration-1000"
+              className={`h-1 rounded-full transition-all duration-1000 ${
+                timer.isCritical ? 'bg-orange-500' : timer.isWarning ? 'bg-yellow-500' : 'bg-green-500'
+              }`}
               style={{ width: `${100 - timer.percentage}%` }}
             />
           </div>
-          <div className="flex items-center justify-between text-xs text-gray-500">
-            <span>⏱ {timer.remainingMinutes}m left</span>
-          </div>
+
+          {/* Time remaining display */}
+          {timer.isExpired ? (
+            <div className="flex items-center gap-1.5 text-xs text-red-400 font-medium">
+              <span>⚠</span>
+              <span>Expired — will be removed soon</span>
+            </div>
+          ) : timer.isCritical ? (
+            <div className="flex items-center gap-1.5 text-xs text-orange-400 font-medium animate-pulse">
+              <span>⏱</span>
+              <span>Hurry! {timer.timeString} left</span>
+            </div>
+          ) : timer.isWarning ? (
+            <div className="flex items-center gap-1.5 text-xs text-yellow-400">
+              <span>⏱</span>
+              <span>{timer.timeString} left — save to keep</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+              <span>⏱</span>
+              <span>{timer.timeString} left</span>
+            </div>
+          )}
         </div>
       )}
 

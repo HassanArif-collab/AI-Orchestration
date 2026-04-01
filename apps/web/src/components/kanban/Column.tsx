@@ -8,9 +8,20 @@ interface Props {
   definition: ColumnDef;
   cards: KanbanCard[];
   onCardClick: (card: KanbanCard) => void;
+  isDragging: boolean;
+  dragErrorCardId: string | null;
+  dragErrorMessage: string | null;
 }
 
-export function Column({ columnNumber, definition, cards, onCardClick }: Props) {
+export function Column({
+  columnNumber,
+  definition,
+  cards,
+  onCardClick,
+  isDragging,
+  dragErrorCardId,
+  dragErrorMessage,
+}: Props) {
   // Make this column a valid drop target for drag-and-drop
   const { setNodeRef, isOver } = useDroppable({
     id: `column-${columnNumber}`,
@@ -24,6 +35,7 @@ export function Column({ columnNumber, definition, cards, onCardClick }: Props) 
         flex flex-col w-kanban-col min-w-[260px] shrink-0
         bg-gray-900 rounded-xl border
         ${isOver ? 'border-blue-500 bg-gray-800/50' : 'border-gray-800'}
+        ${isDragging ? 'ring-1 ring-blue-500/30' : ''}
         transition-colors duration-200
       `}
     >
@@ -48,11 +60,22 @@ export function Column({ columnNumber, definition, cards, onCardClick }: Props) 
           <EmptyState message="No cards" icon="📋" />
         ) : (
           cards.map((card) => (
-            <Card
-              key={card.id}
-              card={card}
-              onClick={() => onCardClick(card)}
-            />
+            <div key={card.id} className="relative">
+              <Card
+                card={card}
+                onClick={() => onCardClick(card)}
+              />
+
+              {/* Drag error overlay on the specific card */}
+              {dragErrorCardId === card.id && dragErrorMessage && (
+                <div className="absolute inset-0 bg-red-900/30 border-2 border-red-500 rounded-lg flex items-center justify-center animate-shake pointer-events-none">
+                  <div className="bg-red-900 border border-red-500 rounded px-2 py-1.5 text-xs text-red-200 max-w-[90%] text-center">
+                    <p className="font-medium">⚠ Move failed</p>
+                    <p className="mt-0.5 text-red-200/70">{dragErrorMessage}</p>
+                  </div>
+                </div>
+              )}
+            </div>
           ))
         )}
       </div>

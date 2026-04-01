@@ -1,6 +1,21 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useChat } from '../../hooks/useChat';
 import { ChatMessage } from './ChatMessage';
+
+/**
+ * Simple debounce hook for values that change rapidly
+ * (e.g., activeTools list that adds/removes items in quick succession).
+ */
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debounced;
+}
 
 export function ChatPanel() {
   const {
@@ -17,7 +32,10 @@ export function ChatPanel() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [workingTime, setWorkingTime] = useState(0);
 
-  // Auto-scroll on new messages
+  // Debounce activeTools to prevent rapid add/remove flickering
+  const debouncedTools = useDebouncedValue(activeTools, 200);
+
+  // Auto-scroll on new messages or streaming updates
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
@@ -47,8 +65,8 @@ export function ChatPanel() {
     if (!isLoading) return 'Send';
 
     if (currentStage === 'sending') return 'Sending...';
-    if (currentStage === 'tools' && activeTools.length > 0) {
-      return `Using: ${activeTools[0]}...`;
+    if (currentStage === 'tools' && debouncedTools.length > 0) {
+      return `Using: ${debouncedTools[0]}...`;
     }
     if (currentStage === 'streaming') return 'Generating...';
     if (currentStage === 'error') return 'Send';
@@ -56,41 +74,40 @@ export function ChatPanel() {
     return 'Thinking...';
   };
 
-  const getStatusDisplay = () => {
+  // Single unified status — replaces multiple scattered indicators
+  const status = useMemo(() => {
     if (error) {
       return {
-        icon: '⚠',
+        icon: '⚠' as const,
         text: error,
-        className: 'text-red-400 border-red-500/50 bg-red-900/20',
+        className: 'text-red-300 border-red-500/50 bg-red-900/30',
       };
     }
 
     if (!isLoading) return null;
 
-    if (activeTools.length > 0) {
+    if (debouncedTools.length > 0) {
       return {
-        icon: '🔧',
-        text: `Using tools: ${activeTools.join(', ')}`,
-        className: 'text-blue-400 border-blue-500/50 bg-blue-900/20',
+        icon: '🔧' as const,
+        text: `Using tools: ${debouncedTools.join(', ')}`,
+        className: 'text-blue-300 border-blue-500/50 bg-blue-900/30',
       };
     }
 
     if (currentStage === 'streaming' && streamingText) {
       return {
-        icon: '✍️',
+        icon: '✍️' as const,
         text: `Writing response (${streamingText.length} chars)...`,
-        className: 'text-green-400 border-green-500/50 bg-green-900/20',
+        className: 'text-green-300 border-green-500/50 bg-green-900/30',
       };
     }
 
     return {
-      icon: '🤖',
+      icon: '🤖' as const,
       text: 'Thinking...',
       className: 'text-gray-400 border-gray-700 bg-gray-900/50 animate-pulse',
     };
-  };
-
-  const statusDisplay = getStatusDisplay();
+  }, [error, isLoading, debouncedTools, currentStage, streamingText]);
 
   return (
     <div className="flex flex-col h-full">
@@ -144,36 +161,17 @@ export function ChatPanel() {
           </div>
         )}
 
-        {/* Active tool indicators */}
-        {activeTools.length > 0 && !streamingText && (
-          <div className="flex justify-start mb-2">
-            <div className="bg-gray-800 rounded-lg px-4 py-2 text-xs text-gray-400">
-              <span className="animate-pulse">Using:</span>{' '}
-              {activeTools.join(', ')}
-            </div>
-          </div>
-        )}
-
-        {/* Loading indicator (only when not streaming and not using tools) */}
-        {isLoading && activeTools.length === 0 && !streamingText && (
-          <div className="flex justify-start mb-2">
-            <div className="bg-gray-800 rounded-lg px-4 py-2">
-              <span className="animate-pulse text-gray-400 text-sm">Thinking...</span>
-            </div>
-          </div>
-        )}
-
         <div ref={bottomRef} />
       </div>
 
-      {/* Status Indicator */}
-      {statusDisplay && (
+      {/* Unified Status Indicator (single source of truth — no duplicate inline indicators) */}
+      {status && (
         <div
-          className={`px-3 py-2 border-t transition-all duration-300 ${statusDisplay.className}`}
+          className={`px-3 py-2 border-t transition-all duration-300 ease-in-out ${status.className}`}
         >
           <div className="flex items-center gap-2">
-            <span className="text-lg">{statusDisplay.icon}</span>
-            <span className="text-xs truncate">{statusDisplay.text}</span>
+            <span className="text-lg transition-all duration-300">{status.icon}</span>
+            <span className="text-xs truncate transition-opacity duration-300">{status.text}</span>
             {isLoading && workingTime > 3 && (
               <span className="text-xs text-gray-500 ml-auto shrink-0">
                 ({workingTime}s)

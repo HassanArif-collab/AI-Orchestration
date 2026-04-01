@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useSyncExternalStore } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import { mapApiError } from '../lib/errorMapper';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -171,13 +172,13 @@ export function useChat(): UseChatReturn {
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
+      const friendlyError = mapApiError(err);
+      setError(friendlyError.message);
       setCurrentStage('error');
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, content: `Failed to connect: ${msg}` }
+            ? { ...m, content: `${friendlyError.title}: ${friendlyError.message}` }
             : m
         )
       );
