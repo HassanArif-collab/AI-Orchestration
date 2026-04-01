@@ -69,7 +69,7 @@ export function Column({
       </div>
 
       {/* Card List */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2 max-h-[calc(100vh-180px)]">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-2 space-y-2">
         {cards.length === 0 ? (
           <EmptyState message="No cards" icon="📋" />
         ) : (

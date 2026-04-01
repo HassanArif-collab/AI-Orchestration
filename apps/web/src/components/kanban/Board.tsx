@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { DndContext, closestCenter } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { Column } from './Column';
@@ -60,6 +60,22 @@ export function Board() {
   const [optimisticMoves, setOptimisticMoves] = useState<Record<string, number>>({});
   const [dragError, setDragError] = useState<{ cardId: string; message: string } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const pendingTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // Clean up pending timers on unmount to prevent stale state updates
+  useEffect(() => {
+    return () => {
+      pendingTimersRef.current.forEach(clearTimeout);
+      pendingTimersRef.current = [];
+    };
+  }, []);
+
+  /** Schedule a timer that is cleaned up on unmount */
+  const scheduleTimer = useCallback((fn: () => void, delay: number) => {
+    const id = setTimeout(fn, delay);
+    pendingTimersRef.current.push(id);
+    return id;
+  }, []);
 
   // Compute effective card groupings (optimistic moves override real columns)
   const getEffectiveColumn = useCallback(
@@ -104,7 +120,7 @@ export function Board() {
 
         // Brief visual shake indicator
         setDragError({ cardId, message: errorMsg });
-        setTimeout(() => setDragError(null), 3000);
+        scheduleTimer(() => setDragError(null), 3000);
 
         return;
       }
@@ -144,7 +160,7 @@ export function Board() {
         });
 
         // Revert optimistic move after 3 seconds
-        setTimeout(() => {
+        scheduleTimer(() => {
           setOptimisticMoves((prev) => {
             const next = { ...prev };
             delete next[cardId];

@@ -17,7 +17,11 @@ export function ToastContainer() {
           key={toast.id}
           className={`
             min-w-[300px] max-w-md p-4 rounded-lg shadow-lg
-            border animate-slide-in-right
+            border
+            ${toast.status === 'dismissing'
+              ? 'animate-slide-out-right'
+              : 'animate-slide-in-right'
+            }
             ${toast.type === 'success' ? 'bg-green-900/90 border-green-500' : ''}
             ${toast.type === 'error' ? 'bg-red-900/90 border-red-500' : ''}
             ${toast.type === 'info' ? 'bg-blue-900/90 border-blue-500' : ''}

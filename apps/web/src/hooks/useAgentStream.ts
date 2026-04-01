@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { AgentThought } from '../types';
 
 /**
@@ -11,6 +11,8 @@ import type { AgentThought } from '../types';
  * - Automatic reconnection with exponential backoff (max 5 retries)
  * - Manual reconnect button exposed via forceReconnect()
  * - Shows reconnection state (connecting/reconnecting/failed)
+ * - Deduplicates thoughts by ID to prevent duplicates on reconnect
+ * - Properly cleans up channels before reconnecting
  */
 export function useAgentStream(cardId: string | null) {
   const [thoughts, setThoughts] = useState<AgentThought[]>([]);
@@ -23,6 +25,8 @@ export function useAgentStream(cardId: string | null) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cardIdRef = useRef<string | null>(cardId);
   const channelNameRef = useRef<string | null>(null);
+  /** Track IDs we've already seen to prevent duplicates on reconnect */
+  const seenIdsRef = useRef<Set<string>>(new Set());
 
   // Keep cardIdRef in sync
   useEffect(() => {
@@ -39,6 +43,7 @@ export function useAgentStream(cardId: string | null) {
   useEffect(() => {
     if (!cardIdRef.current) {
       setThoughts([]);
+      seenIdsRef.current = new Set();
       setIsConnected(false);
       setReconnectAttempt(0);
       setConnectionError(null);
@@ -52,9 +57,15 @@ export function useAgentStream(cardId: string | null) {
 
     const connect = (attempt: number) => {
       if (cancelled) return;
+      if (!isSupabaseConfigured() || !supabase) return;
 
       const currentCardId = cardIdRef.current;
       if (!currentCardId) return;
+
+      // Remove old channel before creating a new one (prevents channel leaks)
+      if (channelNameRef.current) {
+        supabase.removeChannel(channelNameRef.current);
+      }
 
       const channelName = `thoughts-${currentCardId}`;
       channelNameRef.current = channelName;
@@ -81,7 +92,10 @@ export function useAgentStream(cardId: string | null) {
           .order('created_at', { ascending: true });
 
         if (!cancelled && data) {
-          setThoughts(data as AgentThought[]);
+          const thoughts = data as AgentThought[];
+          setThoughts(thoughts);
+          // Initialize seen IDs from history to prevent duplicates
+          seenIdsRef.current = new Set(thoughts.map((t) => t.id));
         }
         if (error) {
           console.warn('Failed to load thought history:', error);
@@ -102,12 +116,18 @@ export function useAgentStream(cardId: string | null) {
             filter: `card_id=eq.${currentCardId}`,
           },
           (payload) => {
-            if (!cancelled) {
-              setIsConnected(true);
-              setReconnectAttempt(0);
-              setConnectionError(null);
-              setThoughts((prev) => [...prev, payload.new as AgentThought]);
-            }
+            if (cancelled) return;
+
+            const thought = payload.new as AgentThought;
+
+            // Deduplicate: skip if we already have this thought from history
+            if (seenIdsRef.current.has(thought.id)) return;
+            seenIdsRef.current.add(thought.id);
+
+            setIsConnected(true);
+            setReconnectAttempt(0);
+            setConnectionError(null);
+            setThoughts((prev) => [...prev, thought]);
           },
         )
         .subscribe((status, _err) => {
@@ -145,7 +165,7 @@ export function useAgentStream(cardId: string | null) {
     return () => {
       cancelled = true;
       cleanup();
-      if (channelNameRef.current) {
+      if (channelNameRef.current && supabase) {
         supabase.removeChannel(channelNameRef.current);
         channelNameRef.current = null;
       }
@@ -163,7 +183,7 @@ export function useAgentStream(cardId: string | null) {
   // causing the effect to tear down and re-run from scratch.
   const forceReconnect = useCallback(() => {
     cleanup();
-    if (channelNameRef.current) {
+    if (channelNameRef.current && supabase) {
       supabase.removeChannel(channelNameRef.current);
       channelNameRef.current = null;
     }

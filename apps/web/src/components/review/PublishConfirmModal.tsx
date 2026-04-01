@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 /**
  * Publish confirmation modal shown before approving a script for Notion.
@@ -55,6 +55,64 @@ export function PublishConfirmModal({
     onConfirm();
   };
 
+  // Escape key handler
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onCancel]);
+
+  // Focus trap + auto-focus when modal opens
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen || !modalRef.current) return;
+
+    const modal = modalRef.current;
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+    const getFocusableElements = (): HTMLElement[] => {
+      return Array.from(modal.querySelectorAll(focusableSelector)) as HTMLElement[];
+    };
+
+    // Auto-focus the "Keep Editing" button
+    const focusables = getFocusableElements();
+    const keepEditingBtn = modal.querySelector('button'); // first button is "Keep Editing"
+    const initialFocus = keepEditingBtn instanceof HTMLElement ? keepEditingBtn : focusables[0];
+    initialFocus?.focus();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+
+      const elements = getFocusableElements();
+      if (elements.length === 0) {
+        e.preventDefault();
+        return;
+      }
+
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    modal.addEventListener('keydown', handleKeyDown);
+    return () => modal.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -66,7 +124,13 @@ export function PublishConfirmModal({
       />
 
       {/* Modal */}
-      <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 p-6 animate-scale-in">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Confirm publish"
+        className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 p-6 animate-scale-in"
+      >
         <h2 className="text-2xl font-bold text-white mb-4">
           📤 Ready to Publish to Notion?
         </h2>

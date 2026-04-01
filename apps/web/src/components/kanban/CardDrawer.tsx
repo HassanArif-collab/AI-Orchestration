@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import type { KanbanCard } from '../../types';
 import { useAgentStream } from '../../hooks/useAgentStream';
 import { usePipelineState } from '../../hooks/usePipelineState';
@@ -26,6 +26,54 @@ export function CardDrawer({ card, onClose }: Props) {
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
+  // Focus trap + auto-focus when drawer opens
+  useEffect(() => {
+    if (!card || !drawerRef.current) return;
+
+    const drawer = drawerRef.current;
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+    const getFocusableElements = (): HTMLElement[] => {
+      return Array.from(drawer.querySelectorAll(focusableSelector)) as HTMLElement[];
+    };
+
+    // Auto-focus the close button (or first focusable element)
+    const focusables = getFocusableElements();
+    const closeButton = drawer.querySelector('button[onClick]'); // close button is the first with onClick
+    const initialFocus = closeButton instanceof HTMLElement ? closeButton : focusables[0];
+    initialFocus?.focus();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+
+      const elements = getFocusableElements();
+      if (elements.length === 0) {
+        e.preventDefault();
+        return;
+      }
+
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+
+      if (e.shiftKey) {
+        // Shift+Tab: if focus is on first element, wrap to last
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        // Tab: if focus is on last element, wrap to first
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    drawer.addEventListener('keydown', handleKeyDown);
+    return () => drawer.removeEventListener('keydown', handleKeyDown);
+  }, [card]);
+
   if (!card) return null;
 
   return (
@@ -39,6 +87,9 @@ export function CardDrawer({ card, onClose }: Props) {
       {/* Drawer */}
       <div
         ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Card details"
         className="fixed right-0 top-0 h-full w-[600px] max-w-[90vw] bg-gray-900 border-l border-gray-700 z-50 flex flex-col shadow-2xl animate-slide-in"
       >
         {/* Header */}

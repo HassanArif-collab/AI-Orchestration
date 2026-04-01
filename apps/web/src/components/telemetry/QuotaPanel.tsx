@@ -1,5 +1,4 @@
 import { useQuota } from '../../hooks/useQuota';
-import { ProgressBar } from '../common/ProgressBar';
 
 /**
  * Displays live RPM/TPM remaining for each AI provider.
@@ -32,31 +31,17 @@ export function QuotaPanel() {
             </span>
           </div>
 
-          {provider.rpm_remaining === -1 ? (
-            <p className="text-xs text-green-400">RPM: Unlimited (local/unreported)</p>
-          ) : (
-            <ProgressBar
-              label={`RPM Remaining: ${provider.rpm_remaining}`}
-              value={Math.min(100, (provider.rpm_remaining / 30) * 100)} // Assume 30 RPM max for visual
-              color="bg-blue-500"
-            />
-          )}
-
-          {provider.tpm_remaining === -1 ? (
-            <p className="text-xs text-green-400">TPM: Unlimited (local/unreported)</p>
-          ) : (
-            <ProgressBar
-              label={`TPM Remaining: ${provider.tpm_remaining.toLocaleString()}`}
-              value={Math.min(100, (provider.tpm_remaining / 500000) * 100)} // Assume 500k TPM max for visual
-              color="bg-purple-500"
-            />
-          )}
+          <div className="flex items-center gap-4 text-xs">
+            <span className={`font-mono ${provider.rpm_remaining === -1 ? 'text-green-400' : 'text-gray-300'}`}>
+              rpm: {provider.rpm_remaining === -1 ? '∞' : provider.rpm_remaining}
+            </span>
+            <span className={`font-mono ${provider.tpm_remaining === -1 ? 'text-green-400' : 'text-gray-300'}`}>
+              tpm: {provider.tpm_remaining === -1 ? '∞' : provider.tpm_remaining.toLocaleString()}
+            </span>
+          </div>
         </div>
       ))}
 
-      <p className="text-xs text-gray-600 italic">
-        All values read directly from provider HTTP headers. No hardcoded estimates.
-      </p>
     </div>
   );
 }

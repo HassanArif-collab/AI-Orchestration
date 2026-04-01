@@ -106,6 +106,7 @@ export function Card({ card, onClick }: Props) {
   };
 
   const handleActionClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
     switch (actionInfo.action) {
       case 'save':
         handleSave(e);

@@ -4,6 +4,10 @@
  * Uses a module-level store so any component can call `showToast()`
  * without needing to thread props or context through the tree.
  * The <ToastContainer /> component reads from this same store.
+ *
+ * Toasts have a two-phase lifecycle:
+ *   active → (dismiss) → dismissing → (300ms) → removed
+ * This allows CSS exit animations before DOM removal.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -15,6 +19,7 @@ export interface Toast {
   type: 'success' | 'error' | 'info' | 'warning';
   title: string;
   message: string;
+  status: 'active' | 'dismissing';
 }
 
 type Listener = () => void;
@@ -23,6 +28,7 @@ type Listener = () => void;
 
 let toasts: Toast[] = [];
 const listeners = new Set<Listener>();
+const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function emitChange() {
   for (const fn of listeners) fn();
@@ -39,22 +45,40 @@ function getSnapshot(): Toast[] {
 
 // ── Actions ──
 
-function addToast(toast: Omit<Toast, 'id'>): string {
+const EXIT_DURATION = 300; // ms — must match CSS animation duration
+
+function addToast(toast: Omit<Toast, 'id' | 'status'>): string {
   const id = Date.now().toString() + Math.random().toString(36).slice(2, 6);
-  toasts = [...toasts, { ...toast, id }];
+  const fullToast: Toast = { ...toast, id, status: 'active' };
+  toasts = [...toasts, fullToast];
 
   // Auto-dismiss after 5 seconds
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     dismissToast(id);
+    autoDismissTimers.delete(id);
   }, 5000);
+  autoDismissTimers.set(id, timer);
 
   emitChange();
   return id;
 }
 
 function dismissToast(id: string) {
-  toasts = toasts.filter((t) => t.id !== id);
+  const toast = toasts.find((t) => t.id === id);
+  if (!toast || toast.status === 'dismissing') return;
+
+  // Cancel auto-dismiss timer if manually dismissed
+  autoDismissTimers.delete(id);
+
+  // Phase 1: Mark as dismissing (triggers CSS exit animation)
+  toasts = toasts.map((t) => t.id === id ? { ...t, status: 'dismissing' } : t);
   emitChange();
+
+  // Phase 2: Remove from DOM after exit animation
+  setTimeout(() => {
+    toasts = toasts.filter((t) => t.id !== id);
+    emitChange();
+  }, EXIT_DURATION);
 }
 
 // ── Public API ──

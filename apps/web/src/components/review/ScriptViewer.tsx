@@ -16,7 +16,7 @@ export function ScriptViewer({ narration, visuals }: Props) {
         📝 Script with Visual Cues
       </h3>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Left: Narration */}
         <div>
           <h4 className="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">

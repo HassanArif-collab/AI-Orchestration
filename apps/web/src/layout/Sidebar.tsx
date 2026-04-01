@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { QuotaPanel } from '../components/telemetry/QuotaPanel';
 import { ModelRegistry } from '../components/telemetry/ModelRegistry';
 import { SkillViewer } from '../components/system/SkillViewer';
@@ -10,7 +10,11 @@ type SidebarTab = 'chat' | 'youtube' | 'quota' | 'models' | 'skills' | 'knowledg
 
 export function Sidebar() {
   const [activeTab, setActiveTab] = useState<SidebarTab>('chat');
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(() => {
+    if (typeof window !== 'undefined') return window.innerWidth >= 1024;
+    return true;
+  });
+  const tablistRef = useRef<HTMLDivElement>(null);
 
   const tabs: { id: SidebarTab; label: string; icon: string }[] = [
     { id: 'chat',      label: 'Chat',       icon: '💬' },
@@ -20,6 +24,28 @@ export function Sidebar() {
     { id: 'skills',    label: 'Skills',     icon: '📝' },
     { id: 'knowledge', label: 'KB',         icon: '📚' },
   ];
+
+  // Arrow key navigation for tabs
+  const handleTablistKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+
+    const currentIndex = tabs.findIndex((t) => t.id === activeTab);
+    let nextIndex: number;
+
+    if (e.key === 'ArrowRight') {
+      nextIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
+    } else {
+      nextIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
+    }
+
+    setActiveTab(tabs[nextIndex].id);
+
+    // Focus the new tab button
+    const tabButtons = tablistRef.current?.querySelectorAll('[role="tab"]');
+    if (tabButtons && tabButtons[nextIndex] instanceof HTMLElement) {
+      tabButtons[nextIndex].focus();
+    }
+  }, [activeTab, tabs]);
 
   return (
     <>
@@ -41,10 +67,20 @@ export function Sidebar() {
         `}
       >
         {/* Tab bar */}
-        <div className="flex flex-wrap border-b border-gray-800 shrink-0">
+        <div
+          ref={tablistRef}
+          role="tablist"
+          onKeyDown={handleTablistKeyDown}
+          className="flex flex-wrap border-b border-gray-800 shrink-0"
+        >
           {tabs.map((tab) => (
             <button
               key={tab.id}
+              id={`tab-${tab.id}`}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              aria-controls={`panel-${tab.id}`}
+              tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => setActiveTab(tab.id)}
               className={`flex-1 min-w-[60px] py-2 text-xs font-medium ${
                 activeTab === tab.id
@@ -65,7 +101,12 @@ export function Sidebar() {
         </div>
 
         {/* Tab content */}
-        <div className="flex-1 overflow-hidden flex flex-col">
+        <div
+          role="tabpanel"
+          id={`panel-${activeTab}`}
+          aria-labelledby={`tab-${activeTab}`}
+          className="flex-1 overflow-hidden flex flex-col"
+        >
           {activeTab === 'chat' && <ChatPanel />}
           {activeTab === 'youtube' && <YouTubePanel />}
           {activeTab === 'quota' && (

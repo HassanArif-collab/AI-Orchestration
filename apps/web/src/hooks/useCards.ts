@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { KanbanCard } from '../types';
 import { useEffect } from 'react';
 
@@ -14,6 +14,7 @@ import { useEffect } from 'react';
  */
 export function useCards() {
   const fetcher = async (): Promise<KanbanCard[]> => {
+    if (!isSupabaseConfigured() || !supabase) return [];
     const { data, error } = await supabase
       .from('kanban_cards')
       .select('*')
@@ -27,6 +28,7 @@ export function useCards() {
 
   // Subscribe to realtime changes on kanban_cards table
   useEffect(() => {
+    if (!isSupabaseConfigured() || !supabase) return;
     const channel = supabase
       .channel('kanban-realtime')
       .on(
@@ -41,7 +43,7 @@ export function useCards() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      if (supabase) supabase.removeChannel(channel);
     };
   }, [mutate]);
 
