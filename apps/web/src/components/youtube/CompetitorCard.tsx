@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import type { CompetitorVideo } from '../../hooks/useYouTube';
+import { api } from '../../lib/api';
+import { mapApiError } from '../../lib/errorMapper';
+import { showToast } from '../../hooks/useToast';
 
 interface Props {
   video: CompetitorVideo;
@@ -12,24 +15,19 @@ export function CompetitorCard({ video }: Props) {
   const handleRepurpose = async () => {
     setIsRepurposing(true);
     try {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/analytics/repurpose`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: video.title,
-            video_id: video.video_id,
-            channel: video.channel_title,
-            views: video.views,
-          }),
-        }
-      );
-      if (res.ok) {
-        setRepurposed(true);
+      const result = await api.repurposeVideo({
+        title: video.title,
+        video_id: video.video_id,
+        channel: video.channel_title,
+        views: video.views,
+      });
+      setRepurposed(true);
+      if (result.card_id) {
+        showToast({ type: 'success', title: 'Card created', message: 'Repurposed video added to pipeline.' });
       }
     } catch (err) {
-      console.error('Repurpose failed:', err);
+      const friendlyError = mapApiError(err);
+      showToast({ type: 'error', title: 'Repurpose failed', message: friendlyError.message });
     } finally {
       setIsRepurposing(false);
     }

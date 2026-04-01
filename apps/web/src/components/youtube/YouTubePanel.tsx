@@ -42,10 +42,17 @@ export function YouTubePanel() {
               Click "Repurpose" to create a Kanban card for adaptation.
             </p>
 
-            {isLoading && <p className="text-gray-500 text-sm">Loading...</p>}
-            {error && <p className="text-red-400 text-sm">{String(error)}</p>}
-
-            {videos.map((video) => (
+            {isLoading && (
+              <div className="space-y-3">
+                <div className="bg-gray-800 rounded-lg p-3 border border-gray-700 animate-pulse">
+                  <div className="h-32 bg-gray-700 rounded mb-2" />
+                  <div className="h-4 bg-gray-700 rounded w-3/4" />
+                  <div className="h-3 bg-gray-700 rounded w-1/2 mt-2" />
+                </div>
+              </div>
+            )}
+            {!isLoading && error && <p className="text-red-400 text-sm">{String(error)}</p>}
+            {!isLoading && !error && videos.map((video) => (
               <CompetitorCard key={video.video_id} video={video} />
             ))}
 

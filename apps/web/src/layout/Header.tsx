@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { api } from '../lib/api';
+import { mapApiError } from '../lib/errorMapper';
+import { showToast } from '../hooks/useToast';
 
 export function Header() {
   const [seedHint, setSeedHint] = useState('');
@@ -10,8 +12,10 @@ export function Header() {
     try {
       await api.discover({ seed_hint: seedHint || undefined });
       setSeedHint('');
+      showToast({ type: 'success', title: 'Discovery started', message: 'Finding trending topics...' });
     } catch (err) {
-      console.error('Discovery failed:', err);
+      const friendlyError = mapApiError(err);
+      showToast({ type: 'error', title: friendlyError.title, message: friendlyError.message });
     } finally {
       setIsDiscovering(false);
     }

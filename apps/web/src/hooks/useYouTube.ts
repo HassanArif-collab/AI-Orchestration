@@ -72,5 +72,9 @@ export async function repurposeVideo(video: {
       views: video.views,
     }),
   });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`API ${res.status}: ${body}`);
+  }
   return res.json();
 }

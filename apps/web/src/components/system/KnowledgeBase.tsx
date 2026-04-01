@@ -1,26 +1,52 @@
 import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { api } from '../../lib/api';
+import { mapApiError } from '../../lib/errorMapper';
 
 export function KnowledgeBase() {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadContent = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await api.getKnowledgeBase();
+      setContent(data.content || '');
+      setFilePath(data.path || null);
+    } catch (err) {
+      const friendlyError = mapApiError(err);
+      setError(friendlyError.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/settings/knowledge-base`)
-      .then((res) => res.json())
-      .then((data) => {
-        setContent(data.content || '');
-        setFilePath(data.path || null);
-      })
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
+    loadContent();
   }, []);
 
   if (isLoading) return <div className="p-4 text-gray-500 text-sm">Loading knowledge base...</div>;
+
+  if (error) {
+    return (
+      <div className="p-4">
+        <div className="bg-red-900/30 border border-red-500/50 rounded-lg p-3 mb-3">
+          <p className="text-red-300 text-sm font-medium">Failed to load knowledge base</p>
+          <p className="text-red-200/70 text-xs mt-1">{error}</p>
+        </div>
+        <button
+          onClick={loadContent}
+          className="text-xs text-blue-400 hover:text-blue-300 underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4">

@@ -110,6 +110,20 @@
   animation: pulse-border 2s ease-in-out infinite;
 }
 
+/* Respect reduced motion preferences (WCAG 2.1) */
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-in,
+  .animate-slide-in-right,
+  .animate-scale-in,
+  .animate-shake,
+  .animate-blink,
+  .animate-spin,
+  .animate-fade-in,
+  .animate-pulse-border {
+    animation: none !important;
+  }
+}
+
 /* Base styles */
 :root {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

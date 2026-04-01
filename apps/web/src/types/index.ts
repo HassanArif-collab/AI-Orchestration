@@ -4,7 +4,7 @@
 
 export interface KanbanCard {
   id: string;
-  topic_brief: TopicBrief;
+  topic_brief: TopicBrief | null;
   column: number;                    // 1-6
   status: PipelineStatus;
   viability_score: number | null;

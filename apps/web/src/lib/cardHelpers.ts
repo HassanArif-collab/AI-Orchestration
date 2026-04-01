@@ -53,6 +53,14 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
 
   // Column 3: In Production / Researching
   if (card.column === 3) {
+    if (card.status === 'error') {
+      return {
+        action: 'resubmit',
+        reason: 'Pipeline failed. Click to retry.',
+        label: '🔄 Retry',
+        variant: 'warning' as const,
+      };
+    }
     return {
       action: 'none',
       reason: 'Pipeline is running. Check the drawer for progress.',
@@ -63,6 +71,14 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
 
   // Column 4: Script Evolution / Ready for Review
   if (card.column === 4) {
+    if (card.status === 'error') {
+      return {
+        action: 'resubmit',
+        reason: 'Script generation failed. Click to retry.',
+        label: '🔄 Retry',
+        variant: 'warning' as const,
+      };
+    }
     return {
       action: 'review',
       reason: 'Script is ready for your review.',
@@ -73,6 +89,14 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
 
   // Column 5: Review + Visuals
   if (card.column === 5) {
+    if (card.status === 'error') {
+      return {
+        action: 'resubmit',
+        reason: 'Visual annotation failed. Click to retry.',
+        label: '🔄 Retry',
+        variant: 'warning' as const,
+      };
+    }
     return {
       action: 'none',
       reason: 'Waiting for visual annotations.',

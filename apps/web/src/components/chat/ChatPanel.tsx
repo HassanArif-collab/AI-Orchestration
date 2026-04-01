@@ -61,6 +61,17 @@ export function ChatPanel() {
     await sendMessage(text);
   };
 
+  /** Click a suggestion chip — auto-send immediately */
+  const handleChipClick = (prompt: string) => {
+    setInput(prompt);
+    // Use setTimeout to ensure input state is committed before sending
+    setTimeout(() => {
+      if (!isLoading) {
+        sendMessage(prompt);
+      }
+    }, 0);
+  };
+
   const getButtonLabel = () => {
     if (!isLoading) return 'Send';
 
@@ -133,28 +144,28 @@ export function ChatPanel() {
             <p className="mb-4">Ask me anything about your content pipeline.</p>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => { setInput('What cards are in the pipeline?'); }}
+                onClick={() => handleChipClick('What cards are in the pipeline?')}
                 className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
               >
                 <p className="text-white text-xs font-medium group-hover:text-blue-400">📋 Pipeline Status</p>
                 <p className="text-gray-500 text-xs mt-0.5">"What cards are in the pipeline?"</p>
               </button>
               <button
-                onClick={() => { setInput('Show my published scripts'); }}
+                onClick={() => handleChipClick('Show my published scripts')}
                 className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
               >
                 <p className="text-white text-xs font-medium group-hover:text-blue-400">📄 Published Scripts</p>
                 <p className="text-gray-500 text-xs mt-0.5">"Show my published scripts"</p>
               </button>
               <button
-                onClick={() => { setInput('Search for AI regulation news'); }}
+                onClick={() => handleChipClick('Search for AI regulation news')}
                 className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
               >
                 <p className="text-white text-xs font-medium group-hover:text-blue-400">🔍 Web Search</p>
                 <p className="text-gray-500 text-xs mt-0.5">"Search for AI regulation news"</p>
               </button>
               <button
-                onClick={() => { setInput('How are competitor channels doing?'); }}
+                onClick={() => handleChipClick('How are competitor channels doing?')}
                 className="text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-3 transition-colors group"
               >
                 <p className="text-white text-xs font-medium group-hover:text-blue-400">📊 YouTube Analytics</p>

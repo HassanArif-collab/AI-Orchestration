@@ -38,9 +38,19 @@ async function request<T>(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+  // Merge default JSON headers — callers rarely set Content-Type themselves
+  const headers: Record<string, string> = {
+    ...(fetchOptions.headers as Record<string, string>),
+  };
+  // Only set Content-Type for requests with a body (POST/PATCH/PUT)
+  if (fetchOptions.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   try {
     const response = await fetch(`${BASE}${path}`, {
       ...fetchOptions,
+      headers,
       signal: controller.signal,
     });
 

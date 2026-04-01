@@ -25,7 +25,9 @@ export function AgentLog({ thought }: Props) {
           {display.label}
         </span>
         <span className="text-gray-400 text-xs">
-          {new Date(thought.created_at).toLocaleTimeString()}
+          {thought.created_at
+            ? new Date(thought.created_at).toLocaleTimeString()
+            : '—'}
         </span>
       </div>
       <p className="text-gray-300 mt-0.5 font-mono text-xs leading-relaxed">

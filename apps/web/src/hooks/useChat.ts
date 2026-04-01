@@ -41,6 +41,7 @@ export function useChat(): UseChatReturn {
   const [streamingText, setStreamingText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<string>(crypto.randomUUID());
+  const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(async (text: string) => {
     const userMsg: ChatMessage = {
@@ -67,6 +68,9 @@ export function useChat(): UseChatReturn {
     };
     setMessages((prev) => [...prev, assistantMsg]);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const response = await fetch(`${API_BASE}/api/chat/stream`, {
         method: 'POST',
@@ -75,6 +79,7 @@ export function useChat(): UseChatReturn {
           message: text,
           session_id: sessionRef.current,
         }),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -172,6 +177,7 @@ export function useChat(): UseChatReturn {
         }
       }
     } catch (err) {
+      if (controller.signal.aborted) return; // Clear was called — skip error state
       const friendlyError = mapApiError(err);
       setError(friendlyError.message);
       setCurrentStage('error');
@@ -183,22 +189,31 @@ export function useChat(): UseChatReturn {
         )
       );
     } finally {
-      setIsLoading(false);
-      setActiveTools([]);
-      setStreamingText('');
-      // Reset stage to idle after a short delay (allows UI to show 'done' briefly)
-      setTimeout(() => {
-        setCurrentStage((prev) => (prev === 'done' ? 'idle' : prev));
-      }, 1000);
+      abortRef.current = null;
+      if (!controller.signal.aborted) {
+        setIsLoading(false);
+        setActiveTools([]);
+        setStreamingText('');
+        // Reset stage to idle after a short delay (allows UI to show 'done' briefly)
+        setTimeout(() => {
+          setCurrentStage((prev) => (prev === 'done' ? 'idle' : prev));
+        }, 1000);
+      }
     }
   }, []);
 
   const clearHistory = useCallback(() => {
+    // Abort any in-flight SSE stream
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
     setMessages([]);
     setActiveTools([]);
     setCurrentStage('idle');
     setStreamingText('');
     setError(null);
+    setIsLoading(false);
     sessionRef.current = crypto.randomUUID();
   }, []);
 

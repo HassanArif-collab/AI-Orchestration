@@ -1,3 +1,6 @@
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
 interface Props {
   role: 'user' | 'assistant' | 'tool';
   content: string;
@@ -26,7 +29,13 @@ export function ChatMessage({ role, content, timestamp }: Props) {
             : 'bg-gray-800 text-gray-200 border border-gray-700'
         }`}
       >
-        <p className="text-sm whitespace-pre-wrap leading-relaxed">{content}</p>
+        {isUser ? (
+          <p className="text-sm whitespace-pre-wrap leading-relaxed">{content}</p>
+        ) : (
+          <div className="prose prose-sm prose-invert max-w-none [&_pre]:bg-gray-900 [&_pre]:rounded [&_pre]:p-2 [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_a]:text-blue-400">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          </div>
+        )}
         <span className={`text-xs mt-1 block ${isUser ? 'text-blue-200' : 'text-gray-500'}`}>
           {timestamp.toLocaleTimeString()}
         </span>
