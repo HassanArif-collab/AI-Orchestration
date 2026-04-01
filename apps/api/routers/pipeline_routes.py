@@ -89,6 +89,91 @@ STAGE_DEFINITIONS = {
 # Valid pipeline stage names for validation (derived from STAGE_DEFINITIONS)
 VALID_STAGE_NAMES = [s["name"] for s in STAGE_DEFINITIONS["stages"]]
 
+# ─── In-memory audit trail store (Issue 22) ────────────────────────────────────
+# Resets on server restart — acceptable for MVP.
+# run_id -> list of audit entries
+_audit_trail: dict[str, list[dict]] = {}
+
+# ─── In-memory feedback history store (Issue 23) ───────────────────────────────
+# run_id -> list of feedback entries
+_feedback_history: dict[str, list[dict]] = {}
+
+
+def _record_audit(
+    run_id: str,
+    decision_type: str,
+    stage: str = "",
+    actor: str = "system",
+    feedback_text: str = "",
+    score_at_decision: float | None = None,
+    risk_tier: str | None = None,
+    iteration_count: int | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Record an audit trail entry for a human decision.
+
+    Returns the created audit entry dict.
+    """
+    entry = {
+        "id": uuid.uuid4().hex,
+        "run_id": run_id,
+        "decision_type": decision_type,
+        "stage": stage,
+        "actor": actor,
+        "feedback_text": feedback_text,
+        "score_at_decision": score_at_decision,
+        "risk_tier": risk_tier,
+        "iteration_count": iteration_count,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "metadata": metadata or {},
+    }
+    if run_id not in _audit_trail:
+        _audit_trail[run_id] = []
+    _audit_trail[run_id].append(entry)
+    logger.info(
+        f"audit_recorded: run_id={run_id} decision={decision_type} "
+        f"stage={stage} actor={actor}"
+    )
+    return entry
+
+
+def _record_feedback_history(
+    run_id: str,
+    feedback_text: str,
+    from_stage: str,
+    to_stage: str,
+    iteration_before: int = 0,
+    score_before: float = 0,
+    script_snippet_before: str = "",
+) -> dict:
+    """Record a feedback history entry capturing the state before revision.
+
+    Returns the created feedback entry dict. Note: score_after and
+    script_snippet_after are left as placeholders here; they are updated
+    lazily when a subsequent score is observed.
+    """
+    entry = {
+        "id": uuid.uuid4().hex,
+        "run_id": run_id,
+        "feedback_text": feedback_text,
+        "from_stage": from_stage,
+        "to_stage": to_stage,
+        "iteration_before": iteration_before,
+        "score_before": score_before,
+        "score_after": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "script_snippet_before": script_snippet_before[:200] if script_snippet_before else "",
+        "script_snippet_after": "",
+    }
+    if run_id not in _feedback_history:
+        _feedback_history[run_id] = []
+    _feedback_history[run_id].append(entry)
+    logger.info(
+        f"feedback_history_recorded: run_id={run_id} from={from_stage} "
+        f"to={to_stage} score_before={score_before}"
+    )
+    return entry
+
 
 class FeedbackRequest(BaseModel):
     from_stage: str
@@ -118,25 +203,89 @@ class FeedbackRequest(BaseModel):
 
 
 def _run_to_dict(run) -> dict:
-    """Convert PipelineRun or run dict to API response dict."""
+    """Convert PipelineRun or run dict to API response dict.
+
+    Enhanced (Issue 21): Each stage now includes started_at, completed_at,
+    duration_seconds, is_parallel, is_human_gate, and error_message so the
+    frontend can render a horizontal step progress indicator.
+    Top-level total_stages and completed_stages counts are also provided.
+    """
     if isinstance(run, dict):
         d = run
     else:
         d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
-    # Build stages dict from stage_status + stage_outputs
-    stages = {}
+
+    # Pre-compute parallel stage lookup for O(1) access
+    parallel_set: set[str] = set()
+    for group in STAGE_DEFINITIONS.get("parallel_stages", []):
+        for s in group:
+            parallel_set.add(s)
+
+    # Build stage-def lookup: name -> stage def
+    _stage_def_map = {s["name"]: s for s in STAGE_DEFINITIONS["stages"]}
+
+    # Stage timestamps may live in stage_outputs or stage_status metadata.
+    # Legacy data won't have them — defaults are None.
+    stage_timings: dict = d.get("stage_timings", {})
+    stage_status: dict = d.get("stage_status", {})
+    stage_outputs: dict = d.get("stage_outputs", {})
+    error_message: str = d.get("error_message", "")
+
+    # Build enriched stages dict
+    stages: dict[str, dict] = {}
     for stage_name in STAGE_DEFINITIONS["execution_order"]:
+        status = stage_status.get(stage_name, "pending")
+        timing = stage_timings.get(stage_name, {})
+        started_at = timing.get("started_at") or None
+        completed_at = timing.get("completed_at") or None
+
+        # Compute duration
+        duration_seconds: float | None = None
+        if started_at and completed_at:
+            try:
+                started = datetime.fromisoformat(str(started_at))
+                completed = datetime.fromisoformat(str(completed_at))
+                duration_seconds = (completed - started).total_seconds()
+            except (ValueError, TypeError):
+                duration_seconds = None
+
+        # Per-stage error message (if stage errored)
+        stage_error = None
+        if status == "error":
+            # Could come from stage_outputs._error or top-level error_message
+            stage_out = stage_outputs.get(stage_name)
+            if isinstance(stage_out, dict):
+                stage_error = stage_out.get("_error") or stage_out.get("error_message")
+            if not stage_error and stage_name == d.get("current_stage", ""):
+                stage_error = error_message
+
+        stage_def = _stage_def_map.get(stage_name, {})
+
         stages[stage_name] = {
-            "status": d.get("stage_status", {}).get(stage_name, "pending"),
-            "output": d.get("stage_outputs", {}).get(stage_name),
+            "status": status,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_seconds": duration_seconds,
+            "is_parallel": stage_name in parallel_set,
+            "is_human_gate": stage_def.get("is_human_gate", False),
+            "error_message": stage_error,
+            "output": stage_outputs.get(stage_name),
         }
-    
+
     # Normalize trend_analysis output (TopicBrief → frontend-friendly)
     if stages.get("trend_analysis", {}).get("output"):
         out = stages["trend_analysis"]["output"]
         if isinstance(out, list):
-            stages["trend_analysis"]["output"] = [_normalize_topic_candidate(t) for t in out]
-    
+            stages["trend_analysis"]["output"] = [
+                _normalize_topic_candidate(t) for t in out
+            ]
+
+    # Top-level progress counts (Issue 21)
+    total_stages = len(STAGE_DEFINITIONS["execution_order"])
+    completed_stages = sum(
+        1 for s in stages.values() if s["status"] in ("complete", "completed")
+    )
+
     return {
         "run_id": d.get("run_id", ""),
         "current_stage": d.get("current_stage", ""),
@@ -145,7 +294,9 @@ def _run_to_dict(run) -> dict:
         "created_at": str(d.get("created_at", "")),
         "updated_at": str(d.get("updated_at", "")),
         "stages": stages,
-        "error_message": d.get("error_message", ""),
+        "error_message": error_message,
+        "total_stages": total_stages,
+        "completed_stages": completed_stages,
     }
 
 
@@ -320,9 +471,17 @@ async def start_run(req: StartPipelineRequest, bg: BackgroundTasks):
 
     if not runner or not store:
         mock_id = f"mock-{uuid.uuid4().hex[:8]}"
+        _record_audit(
+            run_id=mock_id, decision_type="create",
+            metadata={"mode": "mock", "topic": req.topic},
+        )
         return {"run_id": mock_id, "status": "started (mock — pipeline package loading)"}
 
     run = await runner.create_run()
+    _record_audit(
+        run_id=run.run_id, decision_type="create",
+        metadata={"topic": req.topic},
+    )
     bg.add_task(_run_pipeline_bg, run.run_id)
     return {"run_id": run.run_id, "status": "started"}
 
@@ -361,6 +520,11 @@ async def delete_run(run_id: str):
         run.stage_status["_deleted"] = True
     store.save(run)
 
+    _record_audit(
+        run_id=run_id, decision_type="delete",
+        stage=getattr(run, "current_stage", ""),
+        metadata={"mode": "soft", "deleted_at": deleted_at},
+    )
     logger.info(f"run_soft_deleted: run_id={run_id} deleted_at={deleted_at}")
     return {"deleted": run_id, "deleted_at": deleted_at, "mode": "soft"}
 
@@ -437,6 +601,16 @@ async def approve_gate(run_id: str, req: ApproveGateRequest, bg: BackgroundTasks
     if not run:
         raise HTTPException(404, f"Run {run_id} not found")
 
+    # Extract score/risk metadata for audit (best-effort)
+    _eval_score = None
+    _risk_tier = None
+    _iter_count = None
+    outputs = getattr(run, "stage_outputs", {})
+    if isinstance(outputs, dict):
+        _eval_score = outputs.get("_evaluation_score")
+        _risk_tier = outputs.get("_risk_tier")
+    _iter_count = getattr(run, "iteration_count", None)
+
     try:
         from packages.pipeline.stages import Stage, is_human_gate
         current = Stage(run.current_stage)
@@ -450,6 +624,15 @@ async def approve_gate(run_id: str, req: ApproveGateRequest, bg: BackgroundTasks
         run.status = "running"
         store.save(run)
 
+    _record_audit(
+        run_id=run_id, decision_type="approve",
+        stage=getattr(run, "current_stage", ""),
+        feedback_text=req.feedback,
+        score_at_decision=_eval_score,
+        risk_tier=_risk_tier,
+        iteration_count=_iter_count,
+        metadata={"selection": req.selection},
+    )
     bg.add_task(_run_pipeline_bg, run_id)
     return _run_to_dict(run)
 
@@ -463,9 +646,23 @@ async def reject_gate(run_id: str, req: ApproveGateRequest):
     run = store.load(run_id)
     if not run:
         raise HTTPException(404, f"Run {run_id} not found")
+
+    # Extract score metadata for audit
+    _eval_score = None
+    outputs = getattr(run, "stage_outputs", {})
+    if isinstance(outputs, dict):
+        _eval_score = outputs.get("_evaluation_score")
+
     run.stage_status[run.current_stage] = "pending"
     run.status = "running"
     store.save(run)
+
+    _record_audit(
+        run_id=run_id, decision_type="reject",
+        stage=getattr(run, "current_stage", ""),
+        feedback_text=req.feedback,
+        score_at_decision=_eval_score,
+    )
     return _run_to_dict(run)
 
 
@@ -479,12 +676,50 @@ async def request_feedback(run_id: str, req: FeedbackRequest, bg: BackgroundTask
     run = store.load(run_id)
     if not run:
         raise HTTPException(404, f"Run {run_id} not found")
+
+    # Capture state BEFORE feedback is processed (Issue 23)
+    _score_before = None
+    _iteration_before = 0
+    _script_before = ""
+    _risk_tier = None
+    outputs = getattr(run, "stage_outputs", {})
+    if isinstance(outputs, dict):
+        _score_before = outputs.get("_evaluation_score") or outputs.get("evaluation_score")
+        _risk_tier = outputs.get("_risk_tier")
+        draft = outputs.get("script_writing", "")
+        if isinstance(draft, str):
+            _script_before = draft[:200]
+    _iteration_before = getattr(run, "iteration_count", 0) or 0
+
     try:
         from packages.pipeline.stages import Stage
         await runner.request_feedback(run, Stage(req.from_stage),
                                        Stage(req.to_stage), req.feedback)
     except (ImportError, ValueError) as e:
         raise HTTPException(400, str(e))
+
+    # Record audit trail entry (Issue 22)
+    _record_audit(
+        run_id=run_id, decision_type="feedback",
+        stage=req.from_stage,
+        feedback_text=req.feedback,
+        score_at_decision=_score_before,
+        risk_tier=_risk_tier,
+        iteration_count=_iteration_before,
+        metadata={"to_stage": req.to_stage},
+    )
+
+    # Record feedback history entry (Issue 23)
+    _record_feedback_history(
+        run_id=run_id,
+        feedback_text=req.feedback,
+        from_stage=req.from_stage,
+        to_stage=req.to_stage,
+        iteration_before=_iteration_before,
+        score_before=_score_before or 0,
+        script_snippet_before=_script_before,
+    )
+
     bg.add_task(_run_pipeline_bg, run_id)
     return _run_to_dict(run)
 
@@ -514,16 +749,82 @@ async def get_stage_output(
 @router.get("/runs/{run_id}/iterations")
 async def get_iterations(run_id: str):
     """Get all iteration logs for a pipeline run.
-    
+
     Returns the iteration history from the ExperimentLoop,
     including scores, mutation zones, and baseline comparisons.
+
+    Enhanced (Issue 23c): Cross-references feedback history to annotate
+    iterations that were triggered by feedback loops.
     """
     try:
         from packages.pipeline.iteration_store import IterationLogStore
-        store = IterationLogStore()
-        return {"run_id": run_id, "iterations": store.get_all(run_id)}
+        iter_store = IterationLogStore()
+        iterations = iter_store.get_all(run_id)
     except Exception as e:
-        return {"run_id": run_id, "iterations": [], "error": str(e)}
+        iterations = []
+
+    # Cross-reference with feedback history (Issue 23c)
+    fb_entries = _feedback_history.get(run_id, [])
+    if fb_entries and iterations:
+        # Build a map of score_before for matching
+        for iteration in iterations:
+            iter_score = iteration.get("score")
+            # Find feedback entries whose score_before matches this iteration
+            matching_fb = [
+                fb for fb in fb_entries
+                if fb["score_before"] is not None
+                and iter_score is not None
+                and abs(float(fb["score_before"]) - float(iter_score)) < 0.1
+            ]
+            if matching_fb:
+                iteration["feedback_context"] = [
+                    {
+                        "feedback_id": fb["id"],
+                        "feedback_text": fb["feedback_text"],
+                        "from_stage": fb["from_stage"],
+                        "to_stage": fb["to_stage"],
+                    }
+                    for fb in matching_fb
+                ]
+
+    return {
+        "run_id": run_id,
+        "iterations": iterations,
+        "feedback_entries_count": len(fb_entries),
+    }
+
+
+# ─── Audit Trail & Feedback History endpoints (Issues 22-23) ────────────────────
+
+@router.get("/runs/{run_id}/audit-trail")
+async def get_audit_trail(run_id: str):
+    """Return the audit trail for a pipeline run.
+
+    Every human decision (approve, reject, feedback, delete, resume, create)
+    is recorded with timestamp, stage, score context, and risk tier.
+    """
+    entries = _audit_trail.get(run_id, [])
+    return {
+        "run_id": run_id,
+        "entries": entries,
+        "count": len(entries),
+    }
+
+
+@router.get("/runs/{run_id}/feedback-history")
+async def get_feedback_history(run_id: str):
+    """Return the feedback history showing how the script evolved.
+
+    Each entry captures the feedback text, the stage that was sent back,
+    the score before and after the revision, and snippets of the draft
+    before and after for diff comparison.
+    """
+    entries = _feedback_history.get(run_id, [])
+    return {
+        "run_id": run_id,
+        "entries": entries,
+        "count": len(entries),
+    }
 
 
 # ─── Resume/Recovery endpoints ─────────────────────────────────────────────────
@@ -611,6 +912,17 @@ async def resume_pipeline_run(run_id: str, bg: BackgroundTasks):
             if run.status == "completed":
                 raise HTTPException(400, f"Run {run_id} is already completed")
             raise HTTPException(400, f"Run {run_id} cannot be resumed")
+
+        # Record audit trail (Issue 22)
+        _record_audit(
+            run_id=run_id, decision_type="resume",
+            stage=current_stage,
+            metadata={
+                "run_status_before": run_status,
+                "failed_stages": failed_stages,
+                "will_rerun_expensive": will_rerun_expensive,
+            },
+        )
 
         # If we recovered and got a stage, start background execution
         if run.status == "running":

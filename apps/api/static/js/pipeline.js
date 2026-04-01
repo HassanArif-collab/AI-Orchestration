@@ -248,14 +248,195 @@ function renderMiniGraph(stages = {}) {
   }).join('');
 }
 
+/**
+ * Render a GitHub Actions/Vercel-style horizontal step progress indicator.
+ * Used in run detail modal for a cleaner pipeline progress view.
+ * @param {object} stages - Map of stage name to stage info object
+ * @returns {string} HTML string for the step progress indicator
+ */
+function renderStepProgress(stages = {}) {
+  const total = STAGE_ORDER.length;
+  const completed = STAGE_ORDER.filter(s => {
+    const st = stages[s];
+    return st && st.status === 'complete';
+  }).length;
+  const currentIdx = STAGE_ORDER.findIndex(s => {
+    const st = stages[s];
+    return st && (st.status === 'running' || st.status === 'waiting_human');
+  });
+  const progressPct = Math.round((completed / total) * 100);
+
+  let html = `<div class="step-progress">`;
+
+  STAGE_ORDER.forEach((s, i) => {
+    const info = stages[s] || { status: 'pending' };
+    const status = info.status === 'waiting_human' ? 'waiting' : info.status;
+
+    // Status icon
+    let icon = '';
+    if (status === 'complete') icon = '✓';
+    else if (status === 'running') icon = '⟳';
+    else if (status === 'waiting') icon = '⏳';
+    else if (status === 'error') icon = '✗';
+    else icon = '';
+
+    // Connector line (before this step)
+    if (i > 0) {
+      const prevStatus = (stages[STAGE_ORDER[i - 1]] || {}).status;
+      const lineClass = prevStatus === 'complete' ? 'line-done' : 'line-pending';
+      html += `<div class="step-connector ${lineClass}"></div>`;
+    }
+
+    // Step circle
+    html += `
+      <div class="step ${status}" title="${s}: ${status}">
+        <div class="step-circle">${icon}</div>
+        <div class="step-label">${STAGE_LABELS[s] || s}</div>
+      </div>`;
+  });
+
+  html += '</div>';
+  return html;
+}
+
 async function loadRunDetail(runId) {
   try {
-    const run = await api(`/api/pipeline/runs/${runId}`);
-    const iterationData = await api(`/api/pipeline/runs/${runId}/iterations`).catch(() => ({ iterations: [] }));
-    showRunDetail(run, iterationData.iterations || []);
+    const [run, iterationData, auditEntries, feedbackEntries] = await Promise.all([
+      api(`/api/pipeline/runs/${runId}`),
+      api(`/api/pipeline/runs/${runId}/iterations`).catch(() => ({ iterations: [] })),
+      _loadAuditTrail(runId),
+      _loadFeedbackHistory(runId),
+    ]);
+    showRunDetail(run, iterationData.iterations || [], auditEntries, feedbackEntries);
   } catch (e) {
     showToast(`Failed to load run: ${e.message}`, 'error');
   }
+}
+
+/**
+ * Load audit trail entries for a pipeline run.
+ * @param {string} runId - The run ID
+ * @returns {Promise<Array>} Array of audit trail entries
+ */
+async function _loadAuditTrail(runId) {
+  try {
+    const data = await api(`/api/pipeline/runs/${runId}/audit-trail`);
+    return data.entries || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Build HTML for the audit trail section.
+ * @param {Array} entries - Audit trail entries
+ * @returns {string} HTML string
+ */
+function _buildAuditTrailHtml(entries) {
+  if (!entries || entries.length === 0) return '';
+
+  const iconMap = {
+    approve: { icon: '✓', color: 'var(--accent-success)', bg: 'rgba(29,158,117,0.1)' },
+    reject: { icon: '✗', color: 'var(--accent-error)', bg: 'rgba(163,45,45,0.1)' },
+    feedback: { icon: '💬', color: 'var(--accent-info)', bg: 'rgba(24,95,165,0.1)' },
+    delete: { icon: '🗑', color: 'var(--accent-error)', bg: 'rgba(163,45,45,0.1)' },
+    resume: { icon: '↻', color: 'var(--accent-blue)', bg: 'rgba(55,138,221,0.1)' },
+    create: { icon: '▶', color: 'var(--accent-success)', bg: 'rgba(29,158,117,0.1)' },
+  };
+
+  // Show most recent first
+  const sorted = [...entries].reverse().slice(0, 20);
+
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3 style="font-size:14px;font-weight:600">📜 Audit Trail</h3>
+        <span style="font-size:11px;color:var(--text-muted)">${entries.length} events</span>
+      </div>
+      <div class="audit-trail">
+        ${sorted.map(entry => {
+          const style = iconMap[entry.decision_type] || iconMap.create;
+          const time = entry.timestamp ? fmtTime(entry.timestamp) : '';
+          const stageLabel = STAGE_LABELS[entry.stage] || entry.stage || '';
+          return `
+            <div class="audit-entry" style="border-left:3px solid ${style.color};background:${style.bg}">
+              <div class="audit-entry-header">
+                <span class="audit-icon" style="color:${style.color}">${style.icon}</span>
+                <span class="audit-type">${escHtml(entry.decision_type)}</span>
+                <span class="audit-meta">${escHtml(stageLabel)}</span>
+                <span class="audit-meta">${time}</span>
+              </div>
+              ${entry.feedback_text ? `<div class="audit-feedback">"${escHtml(entry.feedback_text.slice(0, 150))}"</div>` : ''}
+              ${entry.score_at_decision != null ? `<div class="audit-score">Score at decision: ${entry.score_at_decision}%</div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+/**
+ * Load feedback history entries for a pipeline run.
+ * @param {string} runId - The run ID
+ * @returns {Promise<Array>} Array of feedback history entries
+ */
+async function _loadFeedbackHistory(runId) {
+  try {
+    const data = await api(`/api/pipeline/runs/${runId}/feedback-history`);
+    return data.entries || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Build HTML for the feedback history section.
+ * @param {Array} entries - Feedback history entries
+ * @returns {string} HTML string
+ */
+function _buildFeedbackHistoryHtml(entries) {
+  if (!entries || entries.length === 0) return '';
+
+  const sorted = [...entries].reverse().slice(0, 10);
+
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3 style="font-size:14px;font-weight:600">🔄 Feedback History</h3>
+        <span style="font-size:11px;color:var(--text-muted)">${entries.length} feedback entries</span>
+      </div>
+      <div class="feedback-history">
+        ${sorted.map((entry, i) => {
+          const scoreChange = entry.score_after - entry.score_before;
+          const arrow = scoreChange >= 0 ? '↑' : '↓';
+          const color = scoreChange >= 0 ? 'var(--accent-success)' : 'var(--accent-error)';
+          const changeStr = `${arrow} ${Math.abs(scoreChange).toFixed(1)}%`;
+
+          return `
+            <div class="feedback-entry" onclick="this.querySelector('.feedback-detail').classList.toggle('open')">
+              <div class="feedback-entry-header">
+                <span class="feedback-num">#${sorted.length - i}</span>
+                <span class="feedback-text-trunc">${escHtml(entry.feedback_text.slice(0, 100))}${entry.feedback_text.length > 100 ? '...' : ''}</span>
+                <span class="feedback-score-change" style="color:${color}">${changeStr}</span>
+              </div>
+              <div class="feedback-score-detail">
+                <span>Before: ${entry.score_before}%</span>
+                <span style="margin:0 4px;color:var(--text-muted)">→</span>
+                <span>After: ${entry.score_after}%</span>
+              </div>
+              <div class="feedback-detail">
+                <div class="feedback-section">
+                  <div class="feedback-section-label">Before:</div>
+                  <pre class="feedback-diff">${escHtml(entry.script_snippet_before || 'N/A')}</pre>
+                </div>
+                <div class="feedback-section">
+                  <div class="feedback-section-label">After:</div>
+                  <pre class="feedback-diff">${escHtml(entry.script_snippet_after || 'N/A')}</pre>
+                </div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
 }
 
 function _buildErrorBanner(run) {
@@ -294,7 +475,7 @@ function _buildErrorBanner(run) {
     </div>`;
 }
 
-function showRunDetail(run, iterations = []) {
+function showRunDetail(run, iterations = [], auditEntries = [], feedbackEntries = []) {
   const stages = run.stages || {};
   const isWaiting = run.status === 'waiting_human';
 
@@ -464,6 +645,10 @@ function showRunDetail(run, iterations = []) {
       <button class="btn btn-outline btn-sm" onclick="sendFeedback('${run.run_id}')">Send to Researcher</button>
     </div>` : '';
 
+  // Build audit trail and feedback history HTML
+  const auditTrailHtml = _buildAuditTrailHtml(auditEntries);
+  const feedbackHistoryHtml = _buildFeedbackHistoryHtml(feedbackEntries);
+
   showModal(`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <h2 style="font-size:16px;color:var(--text-primary)">${escHtml(run.video_title || 'Pipeline Run')}</h2>
@@ -472,11 +657,13 @@ function showRunDetail(run, iterations = []) {
         <button class="btn btn-outline btn-sm" onclick="hideModal()">✕</button>
       </div>
     </div>
-    <div class="pipeline-graph" style="margin-bottom:16px">${renderMiniGraph(run.stages)}</div>
+    ${renderStepProgress(run.stages)}
     ${errorBannerHtml}
     ${approvalHtml}
     ${outputsHtml}
     ${graphHtml}
+    ${feedbackHistoryHtml}
+    ${auditTrailHtml}
     ${feedbackHtml}
   `);
 }
