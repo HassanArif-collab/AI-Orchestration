@@ -1,6 +1,7 @@
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { Board } from '../components/kanban/Board';
+import { ToastContainer } from '../components/ui/ToastContainer';
 
 export function MainLayout() {
   return (
@@ -12,6 +13,9 @@ export function MainLayout() {
         </main>
         <Sidebar />
       </div>
+
+      {/* Global toast notifications */}
+      <ToastContainer />
     </div>
   );
 }

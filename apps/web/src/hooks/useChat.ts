@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useSyncExternalStore } from 'react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -10,10 +10,15 @@ interface ChatMessage {
   timestamp: Date;
 }
 
+export type ChatStage = 'idle' | 'sending' | 'streaming' | 'tools' | 'done' | 'error';
+
 interface UseChatReturn {
   messages: ChatMessage[];
   isLoading: boolean;
   activeTools: string[];
+  currentStage: ChatStage;
+  streamingText: string;
+  error: string | null;
   sendMessage: (text: string) => Promise<void>;
   clearHistory: () => void;
   sessionId: string;
@@ -24,11 +29,16 @@ interface UseChatReturn {
  *
  * Uses the /api/chat/stream SSE endpoint for real-time token streaming.
  * Conversation persists via session_id stored in LangGraph checkpointer.
+ *
+ * Enhanced with stage tracking for rich UX feedback.
  */
 export function useChat(): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeTools, setActiveTools] = useState<string[]>([]);
+  const [currentStage, setCurrentStage] = useState<ChatStage>('idle');
+  const [streamingText, setStreamingText] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<string>(crypto.randomUUID());
 
   const sendMessage = useCallback(async (text: string) => {
@@ -41,7 +51,10 @@ export function useChat(): UseChatReturn {
 
     setMessages((prev) => [...prev, userMsg]);
     setIsLoading(true);
+    setCurrentStage('sending');
     setActiveTools([]);
+    setStreamingText('');
+    setError(null);
 
     // Placeholder for the streaming assistant response
     const assistantId = crypto.randomUUID();
@@ -63,12 +76,19 @@ export function useChat(): UseChatReturn {
         }),
       });
 
-      if (!response.ok) throw new Error(`Chat API returned ${response.status}`);
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(`Chat API returned ${response.status}: ${errorBody}`);
+      }
       if (!response.body) throw new Error('No response body');
+
+      // Transition from 'sending' to 'streaming' once we start receiving
+      setCurrentStage('streaming');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let accumulatedText = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -87,18 +107,24 @@ export function useChat(): UseChatReturn {
             const event = JSON.parse(jsonStr);
 
             switch (event.type) {
-              case 'token':
+              case 'token': {
+                accumulatedText += event.content;
+                setStreamingText(accumulatedText);
+                setCurrentStage('streaming');
+
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantId
-                      ? { ...m, content: m.content + event.content }
+                      ? { ...m, content: accumulatedText }
                       : m
                   )
                 );
                 break;
+              }
 
-              case 'tool_start':
+              case 'tool_start': {
                 setActiveTools((prev) => [...prev, event.tool]);
+                setCurrentStage('tools');
                 setMessages((prev) => [
                   ...prev,
                   {
@@ -110,18 +136,25 @@ export function useChat(): UseChatReturn {
                   },
                 ]);
                 break;
+              }
 
-              case 'tool_end':
+              case 'tool_end': {
                 setActiveTools((prev) => prev.filter((t) => t !== event.tool));
+                // If no more tools active, go back to streaming stage
                 break;
+              }
 
-              case 'done':
+              case 'done': {
                 if (event.session_id) {
                   sessionRef.current = event.session_id;
                 }
+                setCurrentStage('done');
                 break;
+              }
 
-              case 'error':
+              case 'error': {
+                setCurrentStage('error');
+                setError(event.message || 'An error occurred');
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantId
@@ -130,6 +163,7 @@ export function useChat(): UseChatReturn {
                   )
                 );
                 break;
+              }
             }
           } catch {
             // Skip malformed JSON lines
@@ -137,21 +171,33 @@ export function useChat(): UseChatReturn {
         }
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      setCurrentStage('error');
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, content: `Failed to connect: ${err}` }
+            ? { ...m, content: `Failed to connect: ${msg}` }
             : m
         )
       );
     } finally {
       setIsLoading(false);
       setActiveTools([]);
+      setStreamingText('');
+      // Reset stage to idle after a short delay (allows UI to show 'done' briefly)
+      setTimeout(() => {
+        setCurrentStage((prev) => (prev === 'done' ? 'idle' : prev));
+      }, 1000);
     }
   }, []);
 
   const clearHistory = useCallback(() => {
     setMessages([]);
+    setActiveTools([]);
+    setCurrentStage('idle');
+    setStreamingText('');
+    setError(null);
     sessionRef.current = crypto.randomUUID();
   }, []);
 
@@ -159,6 +205,9 @@ export function useChat(): UseChatReturn {
     messages,
     isLoading,
     activeTools,
+    currentStage,
+    streamingText,
+    error,
     sendMessage,
     clearHistory,
     sessionId: sessionRef.current,

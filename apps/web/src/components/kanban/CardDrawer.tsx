@@ -93,7 +93,15 @@ export function CardDrawer({ card, onClose }: Props) {
           {/* Review Panel (only when waiting for human review) */}
           {isWaitingForReview && (
             <div className="border-b border-gray-800">
-              <ReviewPanel cardId={card.id} onDecision={onClose} />
+              <ReviewPanel
+                cardId={card.id}
+                cardTitle={card.topic_brief?.title}
+                cardScore={card.viability_score}
+                cardIterationCount={state?.iteration_count}
+                cardContent={state?.current_draft}
+                cardVisualPlan={state?.visual_plan}
+                onDecision={onClose}
+              />
             </div>
           )}
 
