@@ -189,7 +189,7 @@ app.include_router(visual_routes,   prefix="/api/visual",    tags=["visual"])
 app.include_router(settings_routes, prefix="/api/settings",  tags=["settings"])
 app.include_router(topic_routes,    prefix="/api/topics",    tags=["topics"])
 app.include_router(kanban_routes, prefix="/api/kanban", tags=["kanban"])
-app.include_router(dlq_routes.router, prefix="/api", tags=["dlq"])
+app.include_router(dlq_routes, tags=["dlq"])
 
 # SSE endpoint
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])
