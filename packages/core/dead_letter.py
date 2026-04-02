@@ -25,12 +25,12 @@ Usage:
     # Delete a specific entry
     delete_entry("some-uuid")
 
-Imports: json, datetime, pathlib, fcntl
+Imports: json, datetime, pathlib
 Imported by: packages/integrations/, apps/api/routers/
 """
 
-import fcntl
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,40 @@ from packages.core.config import get_settings
 from packages.core.logger import get_logger
 
 log = get_logger(__name__)
+
+# ─── Cross-platform file locking ──────────────────────────────────────
+# fcntl is Unix-only. On Windows we use msvcrt.locking as a fallback.
+# For simplicity, we provide no-op stubs on platforms without locking.
+
+_IS_WIN = sys.platform == "win32"
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:
+    _msvcrt = None
+
+
+class _FileLock:
+    """Cross-platform file lock context manager."""
+
+    def __init__(self, file_obj, exclusive: bool = True):
+        self._f = file_obj
+        self._exclusive = exclusive
+
+    def __enter__(self):
+        if _fcntl is not None:
+            lock_type = _fcntl.LOCK_EX if self._exclusive else _fcntl.LOCK_SH
+            _fcntl.flock(self._f, lock_type)
+        return self
+
+    def __exit__(self, *args):
+        if _fcntl is not None:
+            _fcntl.flock(self._f, _fcntl.LOCK_UN)
 
 
 def queue_for_retry(
@@ -97,11 +131,8 @@ def queue_for_retry(
     }
 
     with open(dlq_path, "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+        with _FileLock(f, exclusive=True):
             f.write(json.dumps(entry) + "\n")
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     log.info(
         f"dead_letter_queued: operation={operation} id={entry_id}",
@@ -148,8 +179,7 @@ def get_pending_retries(operation: str | None = None) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
 
     with open(dlq_path) as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
-        try:
+        with _FileLock(f, exclusive=False):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -163,8 +193,6 @@ def get_pending_retries(operation: str | None = None) -> list[dict[str, Any]]:
                 except json.JSONDecodeError as e:
                     log.warning(f"dead_letter_parse_error: {e}")
                     continue
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return entries
 
@@ -194,8 +222,7 @@ def mark_retry_attempt(entry_id: str, success: bool = False) -> bool:
     found = False
 
     with open(dlq_path, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+        with _FileLock(f, exclusive=True):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -230,8 +257,6 @@ def mark_retry_attempt(entry_id: str, success: bool = False) -> bool:
             f.truncate()
             for entry in entries:
                 f.write(json.dumps(entry) + "\n")
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return True
 
@@ -257,8 +282,7 @@ def get_entry(entry_id: str) -> dict[str, Any] | None:
         return None
 
     with open(dlq_path) as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
-        try:
+        with _FileLock(f, exclusive=False):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -269,8 +293,6 @@ def get_entry(entry_id: str) -> dict[str, Any] | None:
                         return entry
                 except json.JSONDecodeError:
                     continue
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return None
 
@@ -299,8 +321,7 @@ def delete_entry(entry_id: str) -> bool:
     found = False
 
     with open(dlq_path, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+        with _FileLock(f, exclusive=True):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -323,8 +344,6 @@ def delete_entry(entry_id: str) -> bool:
             f.truncate()
             for entry in entries:
                 f.write(json.dumps(entry) + "\n")
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return True
 
@@ -350,8 +369,7 @@ def get_all_entries(include_completed: bool = False) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
 
     with open(dlq_path) as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
-        try:
+        with _FileLock(f, exclusive=False):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -363,8 +381,6 @@ def get_all_entries(include_completed: bool = False) -> list[dict[str, Any]]:
                         entries.append(entry)
                 except json.JSONDecodeError:
                     continue
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return entries
 
@@ -393,8 +409,7 @@ def clear_completed_entries(max_age_hours: int = 24) -> int:
     removed_count = 0
 
     with open(dlq_path, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+        with _FileLock(f, exclusive=True):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -423,8 +438,6 @@ def clear_completed_entries(max_age_hours: int = 24) -> int:
                     f.write(json.dumps(entry) + "\n")
 
                 log.info(f"dead_letter_cleanup: removed={removed_count}")
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return removed_count
 
@@ -459,8 +472,7 @@ def get_stats() -> dict[str, Any]:
         return stats
 
     with open(dlq_path) as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
-        try:
+        with _FileLock(f, exclusive=False):
             for line in f:
                 line = line.strip()
                 if not line:
@@ -488,7 +500,5 @@ def get_stats() -> dict[str, Any]:
                         stats["by_severity"][severity] = stats["by_severity"].get(severity, 0) + 1
                 except json.JSONDecodeError:
                     continue
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
 
     return stats
