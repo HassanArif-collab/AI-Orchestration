@@ -121,7 +121,7 @@ async def update_card_stage(card_id: str, stage: str) -> bool:
         sb = get_supabase()
         
         sb.table("kanban_cards").update({
-            "column": column,
+            "column_index": column,
             "status": stage,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", card_id).execute()

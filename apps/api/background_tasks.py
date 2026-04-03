@@ -366,7 +366,7 @@ async def cleanup_expired_cards():
             # Delete expired cards in Column 2 that haven't been saved
             result = sb.table("kanban_cards") \
                 .delete() \
-                .eq("column", 2) \
+                .eq("column_index", 2) \
                 .not_.is_("expires_at", "null") \
                 .lt("expires_at", now) \
                 .execute()

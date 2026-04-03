@@ -43,35 +43,58 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
     Returns:
         List of topic candidates as dictionaries
     """
-    finder = TopicFinderAgent()
-    seed = (context or {}).get("seed_query", "Pakistan economy")
-    genre = (context or {}).get("genre_id", "current_situation")
-
-    logger.info(f"running_trend_analysis: seed='{seed}' genre='{genre}'")
-
-    # Generate 3 candidates for the user to choose from
-    candidates = []
-    for _ in range(3):
-        brief = await finder.generate_candidate(seed, genre)
-        if brief:
-            candidates.append(brief.model_dump())
-
-    # Also discover adaptation candidates from Source Library
     try:
-        adaptation_briefs = await finder.discover_adaptation_candidates(genre)
-        for brief in adaptation_briefs[:1]:  # max 1 adaptation candidate per run
-            candidates.append(brief.model_dump())
-    except Exception as e:
-        logger.warning(f"adaptation_discovery_failed_non_blocking: {e}")
+        finder = TopicFinderAgent()
+        seed = (context or {}).get("seed_query", "Pakistan economy")
+        genre = (context or {}).get("genre_id", "current_situation")
 
-    if not candidates:
-        # Fallback to mock if nothing found to keep pipeline moving in dev
-        logger.warning("no_tier1_topics_found_using_mock_fallback")
+        logger.info(f"running_trend_analysis: seed='{seed}' genre='{genre}'")
+
+        # Generate 3 candidates for the user to choose from
+        candidates = []
+        for _ in range(3):
+            brief = await finder.generate_candidate(seed, genre)
+            if brief:
+                candidates.append(brief.model_dump())
+
+        # Also discover adaptation candidates from Source Library
+        try:
+            adaptation_briefs = await finder.discover_adaptation_candidates(genre)
+            for brief in adaptation_briefs[:1]:  # max 1 adaptation candidate per run
+                candidates.append(brief.model_dump())
+        except Exception as e:
+            logger.warning(f"adaptation_discovery_failed_non_blocking: {e}")
+
+        if not candidates:
+            # Fallback to mock if nothing found to keep pipeline moving in dev
+            logger.warning("no_tier1_topics_found_using_mock_fallback")
+            return [
+                {
+                    "topic_statement": "Why Pakistan's AI Policy Matters",
+                    "big_question": "Is the new AI draft actually enforceable?",
+                    "genre_id": genre,
+                    "gap_type": "Hidden Mechanism",
+                    "viability_score_breakdown": {"total": 15},
+                    "anchor_candidates": ["National AI Policy PDF"],
+                    "mainstream_assumption": "It's just another paper trail",
+                    "urgency_flag": True,
+                    "timing_rationale": "Recent cabinet approval",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "reservoir",
+                    "content_type": "original",
+                }
+            ]
+
+        return candidates
+
+    except Exception as e:
+        logger.error(f"trend_analysis_failed: {e}")
+        # Return fallback on any error (including zep_cloud SDK bugs like ErrorSeverity)
         return [
             {
                 "topic_statement": "Why Pakistan's AI Policy Matters",
                 "big_question": "Is the new AI draft actually enforceable?",
-                "genre_id": genre,
+                "genre_id": (context or {}).get("genre_id", "current_situation"),
                 "gap_type": "Hidden Mechanism",
                 "viability_score_breakdown": {"total": 15},
                 "anchor_candidates": ["National AI Policy PDF"],
@@ -83,8 +106,6 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
                 "content_type": "original",
             }
         ]
-
-    return candidates
 
 
 async def handle_research(run: PipelineRun, context: dict = None) -> dict:

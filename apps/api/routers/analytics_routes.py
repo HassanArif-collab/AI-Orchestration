@@ -74,7 +74,7 @@ async def repurpose_competitor_video(body: RepurposeRequest):
             "source_url": f"https://youtube.com/watch?v={body.video_id}",
             "original_views": body.views,
         },
-        "column": 2,
+        "column_index": 2,
         "status": "suggested",
         "viability_score": None,
         "expires_at": None,  # Repurposed cards don't auto-expire

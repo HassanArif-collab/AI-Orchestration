@@ -328,7 +328,7 @@ async def save_topics_node(state: DiscoveryState) -> dict:
             result = sb.table("kanban_cards").insert({
                 "title": topic.get("title", "Untitled"),
                 "topic_brief": topic,
-                "column": 2,  # Suggested Topics
+                "column_index": 2,  # Suggested Topics
                 "status": "suggested",
                 "viability_score": topic.get("viability_score", 0),
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),

@@ -549,7 +549,7 @@ async def move_card(card_id: str = Path(..., min_length=1, max_length=100), body
         from packages.core.supabase_client import get_supabase
         sb = get_supabase()
         sb.table("kanban_cards").update({
-            "column": body.column,
+            "column_index": body.column,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", card_id).execute()
         return {"status": "moved"}
