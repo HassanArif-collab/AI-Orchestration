@@ -255,9 +255,12 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
         router = ContentCreationRouter()
         script = await router.route(brief)
     except Exception as route_err:
-        # Catch LLMClientError ("Circuit breaker is OPEN") and any other
-        # errors from the content creation pipeline. Report a meaningful
-        # thought to the user instead of crashing the stage silently.
+        # BUGFIX: Previously this returned an error dict, which the pipeline
+        # treated as "stage completed successfully" — causing ALL subsequent
+        # stages (script_writing, visual_planning, seo, publish) to run with
+        # empty data and the whole pipeline to falsely declare "complete".
+        # Now we RAISE so the stage is properly marked as "error" and the
+        # pipeline stops, allowing the user to retry/resume.
         from packages.core.errors import LLMClientError
         if isinstance(route_err, LLMClientError):
             report_thought(
@@ -274,7 +277,9 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
                 content=f"⚠️ Content creation failed: {str(route_err)[:200]}. "
                         f"Check FreeRouter is running and providers are accessible."
             )
-        return {"error": "content_creation_failed", "topic": brief.topic_statement}
+        raise RuntimeError(
+            f"Content creation failed for topic '{brief.topic_statement[:60]}': {route_err}"
+        ) from route_err
 
     if not script:
         report_thought(
@@ -282,7 +287,9 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
             thought_type="error",
             content="Content creation failed — no script produced. Check LLM proxy connectivity."
         )
-        return {"error": "content_creation_failed", "topic": brief.topic_statement}
+        raise RuntimeError(
+            f"Content creation returned no script for topic '{brief.topic_statement[:60]}'"
+        )
 
     # Record initial baseline score (pre-experiment-loop)
     try:
@@ -327,20 +334,29 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     from packages.core.thoughts import report_thought
 
     script_data = run.get_output(Stage.RESEARCH)
-    if not script_data or "error" in (script_data or {}):
+    # BUGFIX: Previously returned {} when research had error — the pipeline
+    # treated this as "script_writing completed" and kept going. Now we RAISE
+    # so the stage is properly marked as "error" and the pipeline stops.
+    if not script_data or isinstance(script_data, dict) and "error" in script_data:
         logger.warning("script_writing_no_research_data")
         report_thought(
             card_id=run.run_id, agent_name="script_writer",
             thought_type="error",
-            content="No research data available — skipping script writing."
+            content="No research data available — script writing cannot proceed. "
+                    "Fix the research stage first, then resume."
         )
-        return script_data or {}
+        raise RuntimeError(
+            "Script writing requires valid research output but got: "
+            f"{str(script_data)[:100]}"
+        )
 
     try:
         script = AdaptedScript(**script_data)
     except Exception as e:
         logger.error(f"script_writing_model_parse_failed: {e}")
-        return script_data
+        raise RuntimeError(
+            f"Cannot parse research output into AdaptedScript: {e}"
+        ) from e
 
     router = ContentCreationRouter()
     

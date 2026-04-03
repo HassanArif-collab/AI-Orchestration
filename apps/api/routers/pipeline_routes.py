@@ -441,7 +441,14 @@ async def _run_pipeline_bg(run_id: str, context: dict = None) -> None:
                     pass  # Non-critical: don't let this block the pipeline
 
                 await emit_pipeline_update(run_id, stage.value, "running")
-                await runner.execute_stage(run, stage, context)
+                try:
+                    await runner.execute_stage(run, stage, context)
+                except Exception as stage_err:
+                    # Stage handler raised — execute_stage already marked it "error".
+                    # Re-raise so the outer try/except in _run_pipeline_bg() stops
+                    # the pipeline instead of continuing to the next stage.
+                    logger.error(f"stage_execution_failed: stage={stage.value} error={stage_err}")
+                    raise
 
                 await emit_stage_complete(run_id, stage.value)
 
