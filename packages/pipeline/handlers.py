@@ -79,27 +79,31 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
             logger.warning(f"adaptation_discovery_failed_non_blocking: {e}")
 
         if not candidates:
-            # Fallback to mock if nothing found to keep pipeline moving in dev
-            logger.warning("no_tier1_topics_found_using_mock_fallback")
+            # Fallback: generate a placeholder topic based on the user's seed query
+            # so the pipeline keeps moving even when LLM/Zep services are unavailable
+            logger.warning("no_tier1_topics_found_using_seed_fallback")
+            seed_fallback = seed if seed else "Pakistan economy"
             report_thought(
                 card_id=run.run_id, agent_name="topic_finder",
-                thought_type="output",
-                content="No topics found from live search — using fallback topic."
+                thought_type="error",
+                content=f"Could not find viable topics via LLM (3 attempts failed). "
+                        f"Using seed query as fallback: '{seed_fallback}'"
             )
             return [
                 {
-                    "topic_statement": "Why Pakistan's AI Policy Matters",
-                    "big_question": "Is the new AI draft actually enforceable?",
+                    "topic_statement": f"Why {seed_fallback} Matters More Than You Think",
+                    "big_question": f"What is the hidden truth about {seed_fallback}?",
                     "genre_id": genre,
                     "gap_type": "Hidden Mechanism",
-                    "viability_score_breakdown": {"total": 15},
-                    "anchor_candidates": ["National AI Policy PDF"],
-                    "mainstream_assumption": "It's just another paper trail",
+                    "viability_score_breakdown": {"total": 0, "auto_generated": True},
+                    "anchor_candidates": [],
+                    "mainstream_assumption": f"People think they understand {seed_fallback}",
                     "urgency_flag": True,
-                    "timing_rationale": "Recent cabinet approval",
+                    "timing_rationale": "Relevant now",
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "status": "reservoir",
                     "content_type": "original",
+                    "_fallback": True,
                 }
             ]
 
@@ -112,22 +116,31 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
         return candidates
 
     except Exception as e:
-        logger.error(f"trend_analysis_failed: {e}")
-        # Return fallback on any error (including zep_cloud SDK bugs like ErrorSeverity)
+        logger.error(f"trend_analysis_failed: {e}", exc_info=True)
+        seed = (context or {}).get("seed_query", "Pakistan economy")
+        genre = (context or {}).get("genre_id", "current_situation")
+        # Report the actual error so user can see it
+        report_thought(
+            card_id=getattr(run, 'run_id', ''),
+            agent_name="topic_finder",
+            thought_type="error",
+            content=f"Topic finder crashed: {str(e)[:200]}. Using fallback topic."
+        )
         return [
             {
-                "topic_statement": "Why Pakistan's AI Policy Matters",
-                "big_question": "Is the new AI draft actually enforceable?",
-                "genre_id": (context or {}).get("genre_id", "current_situation"),
+                "topic_statement": f"Why {seed} Matters More Than You Think",
+                "big_question": f"What is the hidden truth about {seed}?",
+                "genre_id": genre,
                 "gap_type": "Hidden Mechanism",
-                "viability_score_breakdown": {"total": 15},
-                "anchor_candidates": ["National AI Policy PDF"],
-                "mainstream_assumption": "It's just another paper trail",
+                "viability_score_breakdown": {"total": 0, "auto_generated": True},
+                "anchor_candidates": [],
+                "mainstream_assumption": f"People think they understand {seed}",
                 "urgency_flag": True,
-                "timing_rationale": "Recent cabinet approval",
+                "timing_rationale": "Relevant now",
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "status": "reservoir",
                 "content_type": "original",
+                "_fallback": True,
             }
         ]
 
@@ -221,13 +234,16 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
             return cached_script
 
         # Also check research cache for logging purposes
-        research_cache = ResearchCache(ttl_hours=cache_ttl_hours)
-        cached_research = research_cache.get(brief.topic_statement)
-        if cached_research:
-            logger.info(
-                f"research_dossier_cache_hit: topic='{brief.topic_statement[:50]}...' "
-                f"(will still generate script)"
-            )
+        try:
+            research_cache = ResearchCache()
+            cached_research = research_cache.get(topic_statement=brief.topic_statement)
+            if cached_research:
+                logger.info(
+                    f"research_dossier_cache_hit: topic='{brief.topic_statement[:50]}...' "
+                    f"(will still generate script)"
+                )
+        except Exception as cache_err:
+            logger.debug(f"research_cache_check_failed_non_blocking: {cache_err}")
 
     report_thought(
         card_id=run.run_id, agent_name="researcher",
