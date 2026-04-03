@@ -380,6 +380,15 @@ const Kanban = {
         const nextStage = task.stage < 6 ? task.stage + 1 : null;
         
         actionsEl.innerHTML = '';
+
+        // Show error message if task has one
+        if (task.error_message) {
+            const errorBanner = document.createElement('div');
+            errorBanner.className = 'error-banner';
+            errorBanner.style.cssText = 'background:#3d1a1a;border:1px solid #d1242f;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#ff6b6b;max-width:100%;word-wrap:break-word;';
+            errorBanner.textContent = '⚠️ ' + task.error_message;
+            actionsEl.appendChild(errorBanner);
+        }
         
         // Approve / Resume button for waiting or error tasks
         if ((isWaiting || isError) && nextStage) {
@@ -440,20 +449,27 @@ const Kanban = {
         
         // Render thoughts if available
         const thoughtsEl = document.getElementById('drawer-thoughts');
-        if (thoughtsEl && task.thoughts) {
-            try {
-                const thoughtsList = typeof task.thoughts === 'string' ? JSON.parse(task.thoughts) : task.thoughts;
-                if (Array.isArray(thoughtsList) && thoughtsList.length > 0) {
-                    thoughtsEl.innerHTML = thoughtsList.map(t => {
-                        const time = fmtTime(t.time || new Date().toISOString());
-                        const text = escHtml(t.text || '');
-                        return `<div class="thought-item"><span class="thought-time">${time}</span><span class="thought-text">${text}</span></div>`;
-                    }).join('');
-                } else {
-                    thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded</div>';
+        if (thoughtsEl) {
+            if (task.thoughts) {
+                try {
+                    const thoughtsList = typeof task.thoughts === 'string' ? JSON.parse(task.thoughts) : task.thoughts;
+                    if (Array.isArray(thoughtsList) && thoughtsList.length > 0) {
+                        thoughtsEl.innerHTML = thoughtsList.map(t => {
+                            const time = fmtTime(t.time || t.created_at || new Date().toISOString());
+                            const text = escHtml(t.content || t.text || '');
+                            const typeIcon = t.thought_type === 'error' ? '🔴' :
+                                             t.thought_type === 'output' ? '✅' :
+                                             t.thought_type === 'search' ? '🔍' : '💭';
+                            return `<div class="thought-item"><span class="thought-time">${time}</span><span class="thought-text">${typeIcon} [${escHtml(t.agent_name || 'agent')}] ${text}</span></div>`;
+                        }).join('');
+                    } else {
+                        thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded yet — thoughts will appear as the pipeline runs.</div>';
+                    }
+                } catch (e) {
+                    thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded yet.</div>';
                 }
-            } catch (e) {
-                thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded</div>';
+            } else {
+                thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded yet — thoughts will appear as the pipeline runs.</div>';
             }
         }
     },

@@ -376,48 +376,63 @@ async def _run_pipeline_bg(run_id: str, context: dict = None) -> None:
                     if (run.stage_status.get(stage.value) == "pending"
                             and is_human_gate(stage)
                             and run.can_start(stage)):
-                        
-                        
+
+
                         await emit_pipeline_update(run_id, stage.value, "waiting_human")
                         await runner.execute_stage(run, stage, context)
                         await emit_human_gate(run_id, stage.value)
                         return
-                
-                # Complete
-                # C12 FIX: Use "completed" to match PipelineRunner.resume_run() check
-                run.status = "completed"
+
+                # ── BUGFIX: Check for errored stages before declaring complete ──
+                # Previous code blindly set "completed" when no stages were runnable,
+                # even if a stage had errored. This caused the kanban to show
+                # "completed" while the card was stuck on the errored stage.
+                has_errors = any(
+                    st == "error"
+                    for st in run.stage_status.values()
+                )
+                if has_errors:
+                    run.status = "error"
+                    # Find the first errored stage for the error message
+                    for stage in Stage:
+                        if run.stage_status.get(stage.value) == "error":
+                            run.current_stage = stage
+                            run.error_message = f"Stage {stage.value} failed — pipeline cannot continue"
+                            break
+                    store.save(run)
+                    await emit_pipeline_update(run_id, run.current_stage.value if run.current_stage else "", "error")
+                    logger.error(f"pipeline_stalled_with_errors: run_id={run_id} errored_stages={[s.value for s in Stage if run.stage_status.get(s.value)=='error']}")
+                    return
+
+                # Truly complete — all stages finished successfully
+                run.status = "complete"
                 store.save(run)
-                
-                
+
                 await emit_pipeline_complete(run_id)
                 return
 
             if len(runnable) > 1:
                 # Parallel stages running
                 await emit_pipeline_update(run_id, str([s.value for s in runnable]), "running")
-                
-                
+
                 await asyncio.gather(*[runner.execute_stage(run, s, context) for s in runnable])
-                
+
                 for s in runnable:
                     await emit_stage_complete(run_id, s.value)
-                    
+
             else:
                 stage = runnable[0]
-                
-                
+
                 await emit_pipeline_update(run_id, stage.value, "running")
                 await runner.execute_stage(run, stage, context)
-                
-                
+
                 await emit_stage_complete(run_id, stage.value)
 
     except Exception as e:
         run.status = "error"
         run.error_message = str(e)
         store.save(run)
-        
-        
+
         await emit_pipeline_update(run_id, run.current_stage or "", "error")
 
 

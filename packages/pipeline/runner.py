@@ -223,7 +223,21 @@ class PipelineRunner:
                         await self.execute_stage(run, stage)
                         return stage
 
-                # Nothing runnable and no gates -> pipeline complete
+                # Nothing runnable and no gates -> check for errors before completing
+                # BUGFIX: Don't mark as complete if any stage has errored
+                has_errors = any(
+                    st == "error" for st in run.stage_status.values()
+                )
+                if has_errors:
+                    run.status = "error"
+                    for s in Stage:
+                        if run.stage_status.get(s.value) == "error":
+                            run.current_stage = s
+                            break
+                    run.error_message = "Pipeline stalled: one or more stages failed"
+                    self.store.save(run)
+                    return None
+
                 run.status = "complete"
                 self.store.save(run)
                 if self.hooks:
@@ -293,7 +307,8 @@ class PipelineRunner:
             return None
 
         # Already completed - nothing to resume
-        if run.status == "completed":
+        # BUGFIX: Accept both "complete" and "completed" for consistency
+        if run.status in ("complete", "completed"):
             self.logger.info(f"resume_run_already_completed: run_id={run_id}")
             return None
 
@@ -320,6 +335,22 @@ class PipelineRunner:
                     f"resume_run_race_condition: run_id={run_id} "
                     f"status changed to {reloaded.status} during resume"
                 )
+                return None
+
+            # BUGFIX: Also check if any OTHER stages (besides the reset one)
+            # are still in error state — if so, we can't proceed
+            other_errors = [
+                s for s in Stage
+                if run.stage_status.get(s.value) == "error" and s != failed_stage
+            ]
+            if other_errors:
+                self.logger.error(
+                    f"resume_run_multiple_errors: run_id={run_id} "
+                    f"errored_stages={[s.value for s in other_errors]}"
+                )
+                run.status = "error"
+                run.error_message = f"Multiple stages failed: {[s.value for s in other_errors]}"
+                self.store.save(run)
                 return None
 
             # Continue execution

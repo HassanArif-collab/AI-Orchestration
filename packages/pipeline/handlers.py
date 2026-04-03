@@ -43,6 +43,8 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
     Returns:
         List of topic candidates as dictionaries
     """
+    from packages.core.thoughts import report_thought
+
     try:
         finder = TopicFinderAgent()
         seed = (context or {}).get("seed_query", "Pakistan economy")
@@ -50,9 +52,20 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
 
         logger.info(f"running_trend_analysis: seed='{seed}' genre='{genre}'")
 
+        report_thought(
+            card_id=run.run_id, agent_name="topic_finder",
+            thought_type="thinking",
+            content=f"Analyzing trends for seed: '{seed}' (genre: {genre})"
+        )
+
         # Generate 3 candidates for the user to choose from
         candidates = []
-        for _ in range(3):
+        for i in range(3):
+            report_thought(
+                card_id=run.run_id, agent_name="topic_finder",
+                thought_type="search",
+                content=f"Generating topic candidate {i + 1} of 3..."
+            )
             brief = await finder.generate_candidate(seed, genre)
             if brief:
                 candidates.append(brief.model_dump())
@@ -68,6 +81,11 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
         if not candidates:
             # Fallback to mock if nothing found to keep pipeline moving in dev
             logger.warning("no_tier1_topics_found_using_mock_fallback")
+            report_thought(
+                card_id=run.run_id, agent_name="topic_finder",
+                thought_type="output",
+                content="No topics found from live search — using fallback topic."
+            )
             return [
                 {
                     "topic_statement": "Why Pakistan's AI Policy Matters",
@@ -84,6 +102,12 @@ async def handle_trend_analysis(run: PipelineRun, context: dict = None) -> list[
                     "content_type": "original",
                 }
             ]
+
+        report_thought(
+            card_id=run.run_id, agent_name="topic_finder",
+            thought_type="output",
+            content=f"Found {len(candidates)} topic candidates — waiting for your approval."
+        )
 
         return candidates
 
@@ -126,12 +150,17 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
     from packages.content_factory.router import ContentCreationRouter
     from packages.content_factory.topic_finder.models import TopicBrief
     from packages.content_factory.evaluation.baseline import BaselineManager
+    from packages.core.thoughts import report_thought
 
     settings = get_settings()
-    
+
     topic_data = run.get_output(Stage.HUMAN_TOPIC_APPROVAL)
     if not topic_data:
         logger.error("research_handler_missing_approved_topic")
+        report_thought(
+            card_id=run.run_id, agent_name="researcher",
+            thought_type="error", content="No approved topic found — cannot start research."
+        )
         return {}
 
     try:
@@ -151,6 +180,13 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
             content_type=topic_data.get("content_type", "original"),
         )
 
+    # Report research start
+    report_thought(
+        card_id=run.run_id, agent_name="researcher",
+        thought_type="thinking",
+        content=f"Starting research for: {brief.topic_statement[:80]}..."
+    )
+
     # Check if caching is enabled (default: True)
     use_cache = (context or {}).get("use_cache", True)
     cache_ttl_hours = (context or {}).get("cache_ttl_hours", 24)
@@ -167,6 +203,11 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
             logger.info(
                 f"research_script_cache_hit: topic='{brief.topic_statement[:50]}...' "
                 f"genre='{brief.genre_id}'"
+            )
+            report_thought(
+                card_id=run.run_id, agent_name="researcher",
+                thought_type="output",
+                content=f"Cache hit! Found cached script for this topic — skipping fresh research."
             )
             # Update baseline with cached script
             try:
@@ -188,10 +229,21 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
                 f"(will still generate script)"
             )
 
+    report_thought(
+        card_id=run.run_id, agent_name="researcher",
+        thought_type="search",
+        content="Routing to content creation pipeline — this may take a moment..."
+    )
+
     router = ContentCreationRouter()
     script = await router.route(brief)
 
     if not script:
+        report_thought(
+            card_id=run.run_id, agent_name="researcher",
+            thought_type="error",
+            content="Content creation failed — no script produced. Check LLM proxy connectivity."
+        )
         return {"error": "content_creation_failed", "topic": brief.topic_statement}
 
     # Record initial baseline score (pre-experiment-loop)
@@ -209,6 +261,16 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
         )
         script_cache.set(brief.topic_statement, brief.genre_id, script.model_dump())
 
+    # Report research completion
+    title = getattr(script, 'adapted_title', 'Untitled')
+    score = getattr(script, 'production_readiness_score', 0)
+    entries = getattr(script, 'entries', [])
+    report_thought(
+        card_id=run.run_id, agent_name="researcher",
+        thought_type="output",
+        content=f"Research complete! Script: '{title}' — {len(entries)} sections, initial score: {score:.1f}%"
+    )
+
     return script.model_dump()
 
 
@@ -224,10 +286,16 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     """
     from packages.content_factory.router import ContentCreationRouter
     from packages.content_factory.models import AdaptedScript
+    from packages.core.thoughts import report_thought
 
     script_data = run.get_output(Stage.RESEARCH)
     if not script_data or "error" in (script_data or {}):
         logger.warning("script_writing_no_research_data")
+        report_thought(
+            card_id=run.run_id, agent_name="script_writer",
+            thought_type="error",
+            content="No research data available — skipping script writing."
+        )
         return script_data or {}
 
     try:
@@ -241,6 +309,12 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     threshold = (context or {}).get("threshold", 85.0)
     max_iterations = (context or {}).get("max_iterations", 20)
 
+    report_thought(
+        card_id=run.run_id, agent_name="script_writer",
+        thought_type="thinking",
+        content=f"Starting experiment loop — target score: {threshold}%, max iterations: {max_iterations}"
+    )
+
     refined = await router.run_experiment_loop(
         script,
         max_iterations=max_iterations,
@@ -249,6 +323,12 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     )
 
     logger.info(f"script_writing_complete: final_score={refined.production_readiness_score:.1f}%")
+
+    report_thought(
+        card_id=run.run_id, agent_name="script_writer",
+        thought_type="output",
+        content=f"Script refined! Final score: {refined.production_readiness_score:.1f}%"
+    )
 
     # Non-blocking Zep write
     try:

@@ -95,6 +95,12 @@ def _run_to_kanban_dict(run) -> dict:
     script_html = _render_artifact_html(outputs.get("script_writing"), "script")
     visual_html = _render_artifact_html(outputs.get("visual_planning"), "visual")
 
+    # BUGFIX: Include thinking_started_at for frontend elapsed timer
+    # When status is "running" (mapped to "thinking"), use updated_at as start time
+    thinking_started_at = None
+    if status == "running":
+        thinking_started_at = d.get("updated_at")
+
     return {
         "id": run_id,
         "title": video_title,
@@ -109,6 +115,8 @@ def _run_to_kanban_dict(run) -> dict:
         "visual_cues": visual_html,
         "thoughts": json.dumps(thoughts),  # JSON string for frontend parsing
         "expires_at": d.get("expires_at"),
+        "thinking_started_at": thinking_started_at,
+        "error_message": d.get("error_message", ""),
     }
 
 
@@ -340,6 +348,19 @@ async def update_task(task_id: str = Path(..., min_length=1, max_length=100), da
 
             # ── Resume pipeline ──
             if run.status in ("error", "waiting_human", "running"):
+                # BUGFIX: Reset the errored stage to "pending" so the pipeline
+                # can actually retry it. Without this, get_runnable_stages()
+                # skips the errored stage and the pipeline immediately hits
+                # the "no runnable stages" branch.
+                if run.status == "error" and run.current_stage:
+                    from packages.pipeline.stages import Stage as StageEnum
+                    failed_stage_name = run.current_stage.value if hasattr(run.current_stage, 'value') else str(run.current_stage)
+                    run.stage_status[failed_stage_name] = "pending"
+                    run.error_message = ""
+                    run.status = "running"
+                    store.save(run)
+                    logger.info(f"kanban_error_stage_reset: task={task_id} stage={failed_stage_name}")
+
                 from apps.api.routers.pipeline_routes import _run_pipeline_bg
                 bg.add_task(_run_pipeline_bg, task_id)
                 return {"message": "Pipeline resumed...", "id": task_id}
