@@ -214,12 +214,27 @@ class RouterClient:
     _shared_openai_client: Optional[Any] = None
     _shared_openai_base_url: Optional[str] = None
 
-    # Class-level circuit breaker to prevent cascading failures
+    # Class-level circuit breaker to prevent cascading failures.
+    # NOTE: threshold is deliberately higher (10) because the pipeline makes
+    # many LLM calls across stages (trend_analysis alone does 6+ calls with
+    # 3 retries each). A threshold of 5 would trip the breaker during normal
+    # transient failures and block subsequent stages like research.
     _circuit_breaker = CircuitBreaker(
         name="RouterClient",
-        failure_threshold=5,
+        failure_threshold=10,
         recovery_timeout=30,
     )
+
+    @classmethod
+    def reset_circuit_breaker(cls) -> None:
+        """Reset the class-level circuit breaker to CLOSED state.
+
+        Call this before starting a new pipeline stage to avoid a stale
+        OPEN breaker (caused by failures in a previous stage) from
+        blocking all LLM calls in the current stage.
+        """
+        cls._circuit_breaker.reset()
+        log.info("circuit_breaker_reset: RouterClient")
 
     @classmethod
     def _get_shared_client(cls, base_url: str, timeout: float = 90.0) -> httpx.AsyncClient:

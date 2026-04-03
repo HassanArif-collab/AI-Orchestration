@@ -413,6 +413,13 @@ async def _run_pipeline_bg(run_id: str, context: dict = None) -> None:
 
             if len(runnable) > 1:
                 # Parallel stages running
+                # BUGFIX: Reset circuit breaker before parallel stage batch too
+                try:
+                    from packages.router.client import RouterClient
+                    RouterClient.reset_circuit_breaker()
+                except Exception:
+                    pass
+
                 await emit_pipeline_update(run_id, str([s.value for s in runnable]), "running")
 
                 await asyncio.gather(*[runner.execute_stage(run, s, context) for s in runnable])
@@ -422,6 +429,16 @@ async def _run_pipeline_bg(run_id: str, context: dict = None) -> None:
 
             else:
                 stage = runnable[0]
+
+                # BUGFIX: Reset circuit breaker before each new stage.
+                # Without this, failures in trend_analysis (which makes 6+ LLM
+                # calls) trip the class-level breaker and block ALL subsequent
+                # stages (research, script_writing, etc.) immediately.
+                try:
+                    from packages.router.client import RouterClient
+                    RouterClient.reset_circuit_breaker()
+                except Exception:
+                    pass  # Non-critical: don't let this block the pipeline
 
                 await emit_pipeline_update(run_id, stage.value, "running")
                 await runner.execute_stage(run, stage, context)
@@ -931,6 +948,16 @@ async def resume_pipeline_run(run_id: str, bg: BackgroundTasks):
             if run.status == "completed":
                 raise HTTPException(400, f"Run {run_id} is already completed")
             raise HTTPException(400, f"Run {run_id} cannot be resumed")
+
+        # BUGFIX: Reset circuit breaker on resume — the breaker may be OPEN
+        # from the original failure. Without this reset, the resumed stage
+        # would get immediately rejected with "Circuit breaker is OPEN".
+        try:
+            from packages.router.client import RouterClient
+            RouterClient.reset_circuit_breaker()
+            logger.info(f"circuit_breaker_reset_on_resume: run_id={run_id}")
+        except Exception:
+            pass
 
         # Record audit trail (Issue 22)
         _record_audit(

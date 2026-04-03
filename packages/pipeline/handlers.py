@@ -251,8 +251,30 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
         content="Routing to content creation pipeline — this may take a moment..."
     )
 
-    router = ContentCreationRouter()
-    script = await router.route(brief)
+    try:
+        router = ContentCreationRouter()
+        script = await router.route(brief)
+    except Exception as route_err:
+        # Catch LLMClientError ("Circuit breaker is OPEN") and any other
+        # errors from the content creation pipeline. Report a meaningful
+        # thought to the user instead of crashing the stage silently.
+        from packages.core.errors import LLMClientError
+        if isinstance(route_err, LLMClientError):
+            report_thought(
+                card_id=run.run_id, agent_name="researcher",
+                thought_type="error",
+                content=f"⚠️ LLM service unavailable: {str(route_err)[:200]}. "
+                        f"The circuit breaker may be open — try resuming the pipeline "
+                        f"in ~30 seconds after the service recovers."
+            )
+        else:
+            report_thought(
+                card_id=run.run_id, agent_name="researcher",
+                thought_type="error",
+                content=f"⚠️ Content creation failed: {str(route_err)[:200]}. "
+                        f"Check FreeRouter is running and providers are accessible."
+            )
+        return {"error": "content_creation_failed", "topic": brief.topic_statement}
 
     if not script:
         report_thought(
