@@ -1,7 +1,7 @@
 /**
- * kanban.js — Kanban board management for YouTube Pipeline.
+ * kanban.js — Kanban board management.
  * 
- * Refactored to be a direct view of PipelineRunner runs.
+ * Direct view of pipeline runs stored in Supabase.
  */
 
 // Stage labels and configuration
@@ -58,7 +58,7 @@ const Kanban = {
     _getBoardHTML() {
         return `
             <div class="kanban-header">
-                <h2 class="kanban-title">Content Pipeline</h2>
+                <h2 class="kanban-title">Kanban Board</h2>
                 <div class="kanban-actions">
                     <button class="btn btn-primary btn-sm" onclick="Kanban.createTask()">
                         + New Topic
@@ -315,7 +315,7 @@ const Kanban = {
     },
     
     async createTask() {
-        const title = prompt("Enter a topic or genre for the new content pipeline:");
+        const title = prompt("Enter a topic or genre for the new task:");
         if (!title) return;
         
         try {
@@ -323,10 +323,10 @@ const Kanban = {
                 method: 'POST',
                 body: { seed_query: title }
             });
-            showToast('Pipeline started!', 'success');
+            showToast('Task started!', 'success');
             await this.refresh();
         } catch (err) {
-            showToast('Failed to start pipeline: ' + err.message, 'error');
+            showToast('Failed to start task: ' + err.message, 'error');
         }
     },
     
@@ -334,7 +334,7 @@ const Kanban = {
         try {
             await api(`/api/kanban/tasks/${taskId}/soft-delete`, { method: 'POST' });
             this.closeDrawer();
-            showUndoToast('Pipeline run deleted', async () => {
+            showUndoToast('Task deleted', async () => {
                 try {
                     await api(`/api/kanban/tasks/${taskId}/undo-delete`, { method: 'POST' });
                     showToast('Run restored', 'success');

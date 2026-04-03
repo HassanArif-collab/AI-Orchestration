@@ -39,7 +39,7 @@ async function refreshMemory() {
           </div>`).join('')
       : `<div class="empty-state"><div class="icon">🧠</div>
           <div class="message">No memory sessions yet</div>
-          <div class="help">Created when pipeline agents run</div></div>`;
+          <div class="help">Created when agents process tasks</div></div>`;
   } catch { document.getElementById('mem-sessions').innerHTML = `<div class="empty-state"><div class="icon">❌</div><div class="message">Cannot load sessions</div></div>`; }
 }
 

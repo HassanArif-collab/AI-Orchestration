@@ -99,7 +99,6 @@ function statusDot(status) {
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 const TAB_INITS = {
-  pipeline:  () => initPipeline(),
   kanban:    () => Kanban.init(),
   chat:      () => initChat(),
   providers: () => initProviders(),
@@ -110,7 +109,6 @@ const TAB_INITS = {
 };
 
 const TAB_REFRESH = {
-  pipeline:  () => refreshPipeline(),
   kanban:    () => Kanban.refresh(),
   chat:      () => {},
   providers: () => refreshProviders(),
@@ -120,7 +118,7 @@ const TAB_REFRESH = {
   settings:  () => refreshSettings(),
 };
 
-let _activeTab = 'pipeline';
+let _activeTab = 'kanban';
 const _initialized = {};
 
 function switchTab(name) {
@@ -139,7 +137,7 @@ function switchTab(name) {
 }
 
 window.addEventListener('hashchange', () => {
-  const h = location.hash.replace('#','') || 'pipeline';
+  const h = location.hash.replace('#','') || 'kanban';
   switchTab(h);
 });
 
@@ -163,42 +161,21 @@ function connectSSE() {
 
   setSSEState('connected');
 
-  _es.addEventListener('pipeline_update', e => {
-    const d = JSON.parse(e.data).data;
-    if (_activeTab === 'pipeline') refreshPipeline();
-    if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'pipeline_update', data: d });
-    showToast(`${d.stage} → ${d.status}`, 'info', 2500);
-  });
-
   _es.addEventListener('stage_complete', e => {
     const d = JSON.parse(e.data).data;
     showToast(`✓ ${d.stage} complete`, 'success', 3000);
-    if (_activeTab === 'pipeline') refreshPipeline();
     if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'stage_complete', data: d });
   });
 
   _es.addEventListener('human_gate', e => {
     const d = JSON.parse(e.data).data;
     showToast(`Action needed: ${d.stage}`, 'warning', 6000);
-    const badge = document.getElementById('pipeline-badge');
-    const n = parseInt(badge.textContent || '0') + 1;
-    badge.textContent = n;
-    badge.classList.remove('hidden');
-    if (_activeTab === 'pipeline') refreshPipeline();
     if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'human_gate', data: d });
-  });
-
-  _es.addEventListener('pipeline_complete', e => {
-    const d = JSON.parse(e.data).data;
-    showToast(`Pipeline complete!`, 'success', 5000);
-    if (_activeTab === 'pipeline') refreshPipeline();
-    if (typeof Kanban !== 'undefined') Kanban.handleSSEEvent({ type: 'pipeline_complete', data: d });
   });
 
   // Iteration complete events for script improvement
   _es.addEventListener('iteration_complete', e => {
     const d = JSON.parse(e.data).data;
-    if (_activeTab === 'pipeline') refreshPipeline();
     showToast(`Iter ${d.iteration}: ${d.score}% ${d.beat_baseline?'↑':'·'} (${(d.mutation_zone||'').replace(/_/g,' ')})`, d.beat_baseline?'success':'info', 2000);
   });
 
@@ -364,7 +341,7 @@ async function checkFreeRouter() {
     if (!d.healthy) {
       // Show banner when health check returns unhealthy
       banner.classList.remove('hidden');
-      banner.textContent = '⚠ FreeRouter LLM proxy not running — pipeline runs will fail. Run: cd freerouter && python -m freerouter proxy';
+      banner.textContent = '⚠ FreeRouter LLM proxy not running — tasks will fail. Run: cd freerouter && python -m freerouter proxy';
     } else {
       banner.classList.add('hidden');
     }
@@ -372,7 +349,7 @@ async function checkFreeRouter() {
     // Show banner on network errors, server errors, or JSON parse failures
     // This ensures the banner appears when the health endpoint is unreachable
     banner.classList.remove('hidden');
-    banner.textContent = '⚠ FreeRouter health check failed — pipeline runs may fail. Error: ' + e.message;
+    banner.textContent = '⚠ FreeRouter health check failed — tasks may fail. Error: ' + e.message;
   }
 }
 
@@ -499,10 +476,10 @@ document.querySelectorAll('.nav-link').forEach(l => {
   });
 });
 
-// Bootstrap after ALL scripts load so initPipeline/initChat etc. are defined.
-// Do NOT call switchTab here — pipeline.js hasn't executed yet at this point.
+// Bootstrap after ALL scripts load so initChat etc. are defined.
+// Do NOT call switchTab here — all modules haven't executed yet at this point.
 window.addEventListener('load', () => {
-  const _initTab = location.hash.replace('#','') || 'pipeline';
+  const _initTab = location.hash.replace('#','') || 'kanban';
   switchTab(_initTab);
   
   // Bug C Fix: Delay SSE slightly to ensure all modules are registered

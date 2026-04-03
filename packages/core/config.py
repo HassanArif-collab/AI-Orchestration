@@ -296,7 +296,8 @@ class Settings(BaseSettings):
         if service == "notion":
             if not self.NOTION_API_KEY:
                 return ServiceStatus.NOT_CONFIGURED
-            if not self.NOTION_API_KEY.startswith("secret_"):
+            valid_prefixes = ("secret_", "ntn_")
+            if not any(self.NOTION_API_KEY.startswith(p) for p in valid_prefixes):
                 return ServiceStatus.MISCONFIGURED
             return ServiceStatus.AVAILABLE
 

@@ -124,7 +124,22 @@ async def build_chat_agent():
         _chat_agent = agent
         logger.info("chat_agent_initialized")
         return agent
-    except Exception as e:
+    except TypeError as e:
+        # langgraph-prebuilt renamed state_modifier → prompt in newer versions
+        if "state_modifier" in str(e):
+            try:
+                agent = create_react_agent(
+                    model=llm,
+                    tools=tools,
+                    prompt=CHAT_SYSTEM_PROMPT,
+                    checkpointer=checkpointer,
+                )
+                _chat_agent = agent
+                logger.info("chat_agent_initialized (prompt param)")
+                return agent
+            except Exception as e2:
+                logger.error(f"chat_agent_build_failed: {e2}")
+                return None
         logger.error(f"chat_agent_build_failed: {e}")
         return None
 
