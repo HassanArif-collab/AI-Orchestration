@@ -18,8 +18,8 @@ Topic → Research → Script → Visual Plan → Review → Publish
 | Decision | Reason |
 |----------|--------|
 | Two services | LLM complexity isolated from business logic |
-| SQLite state | Zero-config, file-based, concurrent-safe |
-| 9 stages with gates | Human oversight at critical decisions |
+| Supabase state | PostgreSQL-backed persistence, realtime subscriptions |
+| LangGraph orchestration | Declarative graph-based pipeline execution |
 | SSE updates | Real-time without WebSocket complexity |
 
 ## Quick Start
@@ -57,14 +57,16 @@ Open **http://localhost:3000**
 ```
 freerouter/        ← LLM proxy (port 4000)
 apps/
-  api/             ← Web dashboard (port 3000)
-  worker/          ← CLI pipeline runner
+  api/             ← FastAPI backend (port 3000)
+  web/             ← React + TypeScript frontend (Vite)
 packages/
-  core/            ← Config, logging (no dependencies)
+  core/            ← Config, logging, research cache (no dependencies)
   router/          ← FreeRouter HTTP client
-  pipeline/        ← 9-stage state machine
-  agents/          ← Agent base classes
-  content_factory/ ← Business logic
+  memory/          ← Zep Cloud agent memory
+  agents/          ← Agent base classes + registry
+  content_factory/ ← LangGraph orchestration + business logic
+  integrations/    ← YouTube, Notion clients
+  visual/          ← Remotion video animations
 ```
 
 ## The Pipeline
@@ -94,10 +96,12 @@ packages/
 
 | Doc | Purpose |
 |-----|---------|
-| [Getting Started](docs/HOW_TO_PULL_AND_RUN.md) | Detailed setup |
+| [Getting Started](docs/archive/GETTING_STARTED.md) | Detailed setup |
 | [Architecture](docs/ARCHITECTURE.md) | System design + why |
-| [Decisions](docs/DECISIONS.md) | ADRs with reasoning |
-| [API Reference](docs/API_REFERENCE.md) | Endpoints |
+| [Decisions](docs/archive/DECISIONS.md) | ADRs with reasoning |
+| [API Reference](docs/archive/API_REFERENCE.md) | Endpoints |
+| [Supabase Setup](docs/SUPABASE_SETUP.md) | Database configuration |
+| [Changelog](CHANGELOG.md) | Version history |
 
 ## Requirements
 

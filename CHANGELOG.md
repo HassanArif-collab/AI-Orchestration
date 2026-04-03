@@ -8,8 +8,33 @@ This file consolidates the implementation history and serves as a single source 
 
 ## [Unreleased]
 
-### Added
-- Documentation implementation plan (`docs/DOCUMENTATION_IMPLEMENTATION_PLAN.md`)
+### Changed
+- **Dead Code Removal (Phases 1-5)**: Systematic cleanup of deprecated code across the codebase.
+  - **Phase 1**: Relocated `research_cache.py` from `packages/pipeline/` to `packages/core/`; updated 6 consumer files.
+  - **Phase 2**: Deleted 8 fully dead packages — `script_generator/`, `adaptation/`, `evaluation/`, `error_log.py`, `router.py`, `production/workflow.py` + `agents.py`, `apps/worker/`, `scripts/run_pipeline.py`.
+  - **Phase 3**: Pruned `pipeline_routes.py` (861 lines removed), deleted `bootstrap.py` + `crew_config.py`, fixed `kanban_routes.py` bug, pruned `background_tasks.py` + `dependencies.py`.
+  - **Phase 4**: Removed dead `YouTubeAnalyticsClient` from `analytics.py`, fixed broken `YouTubeAnalytics` import in `scheduler.py`, updated `core/thoughts.py` and `orchestration/thoughts.py` docstrings.
+  - **Phase 5**: Rewrote `kanban_routes.py` to use `kanban_cards` directly, deleted `packages/pipeline/` directory (10 files), deleted `apps/worker/` (2 files), deleted 3 orphan test files.
+  - **Net result**: ~12,000 lines of dead code removed. Zero errors in production code. All 154 Python files pass AST validation.
+
+### Removed
+- `packages/pipeline/` — entire directory (state machine, runner, handlers, hooks, iteration_store, kanban_store, stages)
+- `packages/content_factory/adaptation/` — 4-stage adaptation pipeline (replaced by LangGraph nodes)
+- `packages/content_factory/evaluation/` — A-B evaluation loop (replaced by LangGraph nodes)
+- `packages/content_factory/script_generator/` — complexity assessor, decision log, evolution loop
+- `packages/content_factory/router.py` — ContentCreationRouter
+- `packages/content_factory/error_log.py` — ErrorLogger
+- `packages/content_factory/production/workflow.py` + `agents.py`
+- `packages/agents/bootstrap.py` + `crew_config.py`
+- `apps/worker/main.py` + `orchestrator_worker.py`
+- `scripts/run_pipeline.py` + `scripts/auto_production.py`
+- `packages/integrations/youtube/analytics.py` — removed dead `YouTubeAnalyticsClient` class
+- 6 orphan test files: `test_pipeline_wire.py`, `test_iteration_log.py`, `test_visual.py`, `test_adaptation_router.py`, `test_cross_script_learning.py`, `test_evaluation_loop.py`
+
+### Deprecated
+- `packages/content_factory/orchestration/master.py` — marked as deprecated; LangGraph is the active system
+- `packages/content_factory/orchestration/scheduler.py` — still functional but references deprecated master.py
+- 2 orphan test files remain: `tests/test_crew_config.py`, `tests/test_agent_bootstrap.py` (import deleted modules)
 
 ---
 

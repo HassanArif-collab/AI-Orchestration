@@ -31,10 +31,9 @@ make freerouter-web    # Dashboard on :8080   ← optional, manages provider key
 
 | Package | Purpose |
 |---|---|
-| `packages/core/` | Config (all env vars), logger, errors, shared types. Everything imports from here. |
+| `packages/core/` | Config (all env vars), logger, errors, shared types, research cache. Everything imports from here. |
 | `packages/router/` | HTTP client to FreeRouter — **ALL LLM calls go through here** |
 | `packages/memory/` | Zep Cloud agent memory (conversation + long-term facts) |
-| `packages/pipeline/` | 9-stage state machine runner, persists state in `packages/data/pipeline.db` |
 | `packages/agents/` | Base `AgentClass` + `AgentRegistry`. Skill prompts in `data/skills/*.md` |
 | `packages/integrations/` | YouTube Data API, Notion clients |
 | `packages/visual/` | Remotion video animations + Radiant shader backgrounds |
@@ -44,11 +43,9 @@ make freerouter-web    # Dashboard on :8080   ← optional, manages provider key
 | Module | Purpose |
 |---|---|
 | `topic_finder/` | Discovers and scores candidate topics, stores in SQLite reservoir |
-| `adaptation/` | 4-stage pipeline: extract → structural map → localize → dual-column script |
-| `evaluation/` | A-B baseline/challenger loop — evolutionary script improvement |
 | `music/` | Music architecture agent: emotional arc, section briefs, silence map |
-| `production/` | Final production agents and publishing workflow |
-| `orchestration/` | Master scheduler, health monitor, review interface, learning synthesis |
+| `production/` | Final production publishing |
+| `orchestration/` | LangGraph graphs, scheduler, health monitor, review interface, thoughts |
 
 ---
 
@@ -89,12 +86,6 @@ pip install -e ".[all]"
 # Start FreeRouter (required first — separate terminal)
 make freerouter
 
-# Smoke test
-python scripts/run_pipeline.py
-
-# Full worker
-python apps/worker/main.py start
-
 # Run test suite
 pytest tests/ -v
 
@@ -112,9 +103,9 @@ make format
 | `packages/core/config.py` | Single source of truth for all env vars |
 | `packages/router/client.py` | The only way to make LLM calls |
 | `packages/content_factory/models.py` | Shared Pydantic models (AdaptedScript, etc.) |
-| `packages/content_factory/orchestration/master.py` | Top-level pipeline orchestrator |
+| `packages/content_factory/orchestration/graphs.py` | LangGraph pipeline graph definitions |
+| `packages/content_factory/orchestration/nodes.py` | Individual pipeline stage node functions |
 | `data/skills/*.md` | Agent skill/prompt definitions (source code — committed) |
-| `packages/data/pipeline.db` | Runtime pipeline state (gitignored — auto-created) |
 | `docs/ARCHITECTURE.md` | Full architecture reference with data flow diagram |
 | `freerouter/.env` | LLM provider keys (gitignored — fill via `:8080` dashboard) |
 | `.env` | Pipeline integration keys (gitignored — copy from `.env.example`) |
@@ -132,45 +123,27 @@ See `.env.example` for all required root `.env` variables.
 
 ---
 
-## Complete Pipeline Wiring Map
+## Pipeline Wiring Map
 
-User runs:  `python apps/worker/main.py start`
-              ↓
-            `packages/pipeline/runner.PipelineRunner`
-              ↓ (calls `STAGE_HANDLERS` for each stage)
+The active pipeline is powered by **LangGraph** (not the legacy PipelineRunner, which was removed in Phase 5).
 
-### Stage 1: TREND_ANALYSIS
-  - `TopicFinderAgent.generate_candidate()` [Mode B candidates]
-  - `TopicFinderAgent.discover_adaptation_candidates()` [Mode A candidates]
-  - Zep audience context (if `ZEP_ENABLED=true`)
+Entry point: `packages/content_factory/orchestration/graphs.py`
 
-### Stage 2: RESEARCH (human approves topic)
-  - `ContentCreationRouter.route(brief)`
-      If `content_type="adaptation"` → Mode A: `run_adaptation(url)`
-           Stage1 (transcript) → Stage2 (structure) → Stage3 (localize)
-           → Stage4 (script) → Stage5 (Pakistani prose refinement)
-      If `content_type="original"` → Mode B: `RoundBasedProductionWorkflow`
-           Round1A (research) → Round1B (anchor check) → Round2 (opening)
-           → Round3 (full script) → Round4 (assembly)
+### LangGraph Nodes (defined in `orchestration/nodes.py`)
+  - `trend_analysis` — Topic discovery via TopicFinderAgent
+  - `human_topic_approval` — Human gate: pick topic
+  - `research` — Deep research with web search + LLM synthesis
+  - `script_writing` — Dual-column script generation
+  - `visual_planning` — Visual direction + music architecture
+  - `seo` — Metadata generation (titles, tags, description)
+  - `human_review` — Human gate: review script
+  - `asset_creation` — Generate visual assets
+  - `publish` — Publish to Notion / YouTube
 
-### Stage 3: SCRIPT_WRITING
-  - `ContentCreationRouter.run_experiment_loop(script, iterations=20, threshold=85%)`
-      `ScoringEngine` → `ChallengerGenerator` → `ExperimentLoop`
-      Stops at 85% OR 20 iterations OR no more failing zones
-  - `ZepAudienceModelStore.write_experiment_result()` [if `ZEP_ENABLED`]
-
-### Stage 4: VISUAL_PLANNING
-  - `MusicAgent.generate_music_architecture()`
-
-### Stage 5: SEO
-  - `RouterClient` LLM call → 7 titles + description + tags + thumbnail
-
-### Stage 6: ASSET_CREATION
-  - `VisualManifest.add_pending()` for remotion render jobs
-
-### Stage 7: PUBLISH
-  - `NotionScriptClient.create_script_page()` [if `NOTION_API_KEY` set]
-  - Dry run log [if no key]
+### State persistence
+  - `kanban_cards` (Supabase) — Card state for each pipeline run
+  - `agent_thoughts` (Supabase) — Real-time agent thinking updates
+  - `pipeline_runs` (Supabase) — LangGraph checkpoint snapshots
 
 ---
 
@@ -181,20 +154,6 @@ User runs:  `python apps/worker/main.py start`
   - `comparison`
   - `islamic_history`
   - `south_asian_history`
-
-## Content types
-  - `original`    → Mode B (CrewAI agents write from scratch)
-  - `adaptation`  → Mode A (JH video adapted for Pakistani context)
-
-## Self-correction stop conditions
-  1. `production_readiness_score >= 85%`
-  2. 20 iterations reached
-  3. No more failing zones to mutate
-
-## Dev mode (no live API calls)
-```bash
-PIPELINE_DEV_MODE=true python scripts/run_pipeline.py
-```
 
 ## Zep memory (optional)
 Set `ZEP_ENABLED=true` in `.env` ONLY after confirming `ZEP_API_KEY` works.
@@ -210,13 +169,10 @@ Default is false — pipeline runs fully without Zep.
 | Zep Cloud integration | `packages/memory/client.py` (class docstring) |
 | Zep setup (first time) | `packages/memory/init_zep.py` + run the script |
 | Session naming conventions | `packages/memory/schemas.py` |
-| Self-correction loop | `packages/content_factory/evaluation/__init__.py` |
-| Binary question categories | `packages/content_factory/KNOWLEDGE_BASE.md` |
 | Knowledge base (4 JSON files) | `packages/content_factory/KNOWLEDGE_BASE.md` |
 | Music architecture | `packages/content_factory/music/__init__.py` |
-| Orchestration (7 components) | `packages/content_factory/orchestration/__init__.py` |
+| Orchestration (LangGraph graphs) | `packages/content_factory/orchestration/__init__.py` |
 | Topic finder + feedback loop | `packages/content_factory/topic_finder/__init__.py` |
-| Agent types (BaseAgent vs CrewAI) | `packages/agents/base.py` |
+| Agent types (BaseAgent) | `packages/agents/base.py` |
 | Capability → model mapping | `packages/router/capabilities.py` |
-| Pipeline hooks | `packages/pipeline/hooks.py` |
 | API routes | `apps/api/main.py` |

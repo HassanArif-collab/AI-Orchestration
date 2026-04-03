@@ -51,9 +51,6 @@ pytest tests/ -q
 
 # Check code style
 ruff check packages/ apps/
-
-# Start a smoke test
-python scripts/run_pipeline.py
 ```
 
 ---
@@ -69,7 +66,7 @@ Before contributing, understand the key architectural decisions:
 | SQLite for state | Zero-config, concurrent-safe with WAL |
 | 9 stages with human gates | Oversight at critical decisions |
 
-See [docs/DECISIONS.md](docs/DECISIONS.md) for detailed reasoning.
+See [docs/archive/DECISIONS.md](docs/archive/DECISIONS.md) for detailed reasoning.
 
 ---
 
@@ -138,45 +135,27 @@ from packages.router.client import RouterClient
 
 ### Why Follow This Process
 
-Stages are state-machine steps. Adding one requires updates in multiple places to maintain consistency across the system.
+Pipeline stages are LangGraph nodes. Adding one requires updates in multiple places to maintain consistency across the system.
 
 ### Steps
 
-1. **Add stage definition** in `packages/pipeline/stages.py`:
+1. **Add node function** in `packages/content_factory/orchestration/nodes.py`:
 ```python
-class Stage(Enum):
-    # ... existing stages ...
-    YOUR_NEW_STAGE = "your_new_stage"
-```
-
-2. **Add stage handler** in `packages/pipeline/handlers.py`:
-```python
-async def handle_your_new_stage(run: PipelineRun, context: dict) -> dict:
+async def your_new_stage(state: PipelineState) -> dict:
     """Handle the your_new_stage stage."""
-    # Your implementation
-    pass
-
-STAGE_HANDLERS["your_new_stage"] = handle_your_new_stage
+    # Your implementation — update state and return partial state dict
+    return {"your_key": result}
 ```
 
-3. **Update Kanban mapping** in `apps/api/routers/pipeline_routes.py`:
+2. **Wire into LangGraph graph** in `packages/content_factory/orchestration/graphs.py`:
 ```python
-PIPELINE_TO_KANBAN_STAGE = {
-    # ... existing mappings ...
-    "your_new_stage": 4,  # Pick appropriate column
-}
+# Add the node to the graph
+graph.add_node("your_new_stage", your_new_stage)
+# Add edges to connect it
+graph.add_edge("previous_stage", "your_new_stage")
 ```
 
-4. **Add frontend UI** in `apps/api/static/js/pipeline.js`:
-```javascript
-// Add to STAGE_LABELS
-const STAGE_LABELS = {
-    // ... existing labels ...
-    your_new_stage: 'Your Stage',
-};
-```
-
-5. **Update STAGE_DEFINITIONS** in `apps/api/routers/pipeline_routes.py`:
+3. **Add stage definition** in `apps/api/routers/pipeline_routes.py`:
 ```python
 STAGE_DEFINITIONS["stages"].append({
     "name": "your_new_stage",
@@ -187,7 +166,13 @@ STAGE_DEFINITIONS["stages"].append({
 })
 ```
 
-6. **Add tests** in `tests/test_pipeline.py`
+4. **Add frontend UI** in the React app (`apps/web/src/`):
+```typescript
+// Add to stage labels/constants
+// Add UI components for the new stage
+```
+
+5. **Add tests** in `tests/`
 
 ---
 
@@ -277,7 +262,7 @@ pytest tests/ --cov=packages --cov=apps
 
 ```python
 import pytest
-from packages.pipeline.runner import PipelineRunner
+from packages.content_factory.orchestration.nodes import your_new_stage
 
 class TestYourFeature:
     """Tests for your feature.
@@ -286,14 +271,10 @@ class TestYourFeature:
         Explain what behavior is being verified and why it matters.
     """
 
-    @pytest.fixture
-    def runner(self):
-        return PipelineRunner()
-
-    async def test_feature_works(self, runner):
+    async def test_feature_works(self):
         """Test that the feature produces expected output."""
-        result = await runner.some_method()
-        assert result.status == "expected_status"
+        result = await your_new_stage(state)
+        assert result["your_key"] == expected_value
 ```
 
 ---
@@ -342,7 +323,7 @@ PRs are reviewed for:
 
 - Open an issue for bugs or feature requests
 - Check [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design
-- Check [docs/DECISIONS.md](docs/DECISIONS.md) for decision reasoning
+- Check [docs/archive/DECISIONS.md](docs/archive/DECISIONS.md) for decision reasoning
 
 ---
 

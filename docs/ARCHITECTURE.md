@@ -24,8 +24,8 @@ Video production has three challenges:
 
 | Problem | Solution | Where |
 |---------|----------|-------|
-| Quality control | Human gates at critical decisions | Pipeline stages 2, 7 |
-| Resumability | SQLite state persistence | `packages/pipeline/state.py` |
+| Quality control | Human gates at critical decisions | LangGraph orchestration nodes |
+| Resumability | Supabase-backed state persistence | `kanban_cards` + `agent_thoughts` tables |
 | Provider fragility | FreeRouter proxy with failover | `freerouter/` service |
 
 ---
@@ -36,14 +36,15 @@ Video production has three challenges:
 
 ```
 Layer 1: Infrastructure (reusable)
-├── core/       ← Config, logging, errors
+├── core/       ← Config, logging, errors, research cache
 ├── router/     ← LLM proxy client
-├── pipeline/   ← State machine
-├── agents/     ← Base classes
-└── memory/     ← Zep Cloud client
+├── agents/     ← Base classes + registry
+├── memory/     ← Zep Cloud client
+├── integrations/ ← YouTube, Notion clients
+└── visual/     ← Remotion video animations
 
 Layer 2: Business Logic (domain-specific)
-└── content_factory/   ← Video production logic
+└── content_factory/   ← LangGraph orchestration + video production logic
 ```
 
 **Reasoning**:
@@ -126,32 +127,37 @@ Stage 9:  publish                 ← AI publishes to Notion
 
 ---
 
-## SQLite for State Persistence
+## Supabase for State Persistence
 
-### Why SQLite?
+### Why Supabase?
 
-**Context**: Pipeline runs take 5-15 minutes. Crashes happen.
+**Context**: Pipeline runs take 5-15 minutes. The system needs realtime updates for the frontend.
 
 **Options Considered**:
 | Database | Pros | Cons |
 |----------|------|------|
-| PostgreSQL | Production-ready, concurrent | Requires server setup |
+| PostgreSQL (Supabase) | Production-ready, realtime, concurrent | Requires external service |
 | Redis | Fast, in-memory | Data lost on restart |
-| SQLite | Zero-config, file-based | Single-server limitation |
+| SQLite | Zero-config, file-based | Single-server, no realtime |
 
-**Decision**: SQLite with WAL mode
+**Decision**: Supabase (managed PostgreSQL)
 
 **Reasoning**:
-- Zero configuration (no server to manage)
-- File-based (easy backup, easy debugging)
-- WAL mode handles concurrent reads
-- Atomic transactions prevent corruption
-- Single-server limitation is acceptable (current scale)
+- Realtime subscriptions for live frontend updates
+- Concurrent connections for API + frontend
+- JSONB columns for flexible metadata storage
+- Managed service with auth and RLS support
+
+**Key Tables**:
+- `kanban_cards` — Pipeline task cards moving through columns
+- `agent_thoughts` — Real-time agent thinking updates
+- `pipeline_runs` — LangGraph checkpoint snapshots
+- `research_dossiers` — Cached research results
 
 **Consequences**:
-- Can't run multiple API servers sharing state
-- Must manage SQLite file carefully
-- Good for current scale; revisit if scaling horizontally
+- Requires Supabase project setup
+- External dependency (but managed, no self-hosting)
+- Realtime enables reactive frontend without polling
 
 ---
 
@@ -217,17 +223,17 @@ response = await router_client.chat(...)
 ### Why This Order Matters
 
 ```
-packages/core           ← Load first (no internal deps)
-packages/router         ← Depends on: core
-packages/memory         ← Depends on: core
-packages/pipeline       ← Depends on: core, router, memory
-packages/agents         ← Depends on: core, router, memory
-packages/content_factory← Depends on: core, router (via orchestration)
+packages/core            ← Load first (no internal deps)
+packages/router          ← Depends on: core
+packages/memory          ← Depends on: core
+packages/agents          ← Depends on: core, router, memory
+packages/integrations    ← Depends on: core
+packages/content_factory ← Depends on: core, router, memory (via orchestration)
 ```
 
 **Rules**:
 1. `core` has no internal dependencies — everything can import from it
-2. Business logic (`content_factory`) never imports from infrastructure directly
+2. Business logic (`content_factory`) imports from infrastructure, never the reverse
 3. Circular imports = architecture violation
 
 **How to add a new package**:
@@ -240,10 +246,11 @@ packages/content_factory← Depends on: core, router (via orchestration)
 
 | What | Where | Why |
 |------|-------|-----|
-| Pipeline state | `packages/data/pipeline.db` | SQLite, gitignored |
+| Pipeline state | Supabase (`kanban_cards`, `agent_thoughts`) | PostgreSQL, realtime |
 | Agent prompts | `data/skills/*.md` | Source-controlled, editable |
 | LLM config | `freerouter/.env` | Separate from main app |
 | Main config | `.env` | Root level |
+| LangGraph graphs | `packages/content_factory/orchestration/graphs.py` | Active pipeline execution |
 
 ---
 
@@ -259,11 +266,10 @@ packages/content_factory← Depends on: core, router (via orchestration)
 
 ### Adding a New Pipeline Stage
 
-1. Add to `packages/pipeline/stages.py`
-2. Add handler in `packages/pipeline/runner.py`
-3. Map to Kanban column in `PIPELINE_TO_KANBAN_STAGE`
-4. Add frontend UI in `apps/api/static/js/pipeline.js`
-5. Update `STAGE_DEFINITIONS` in `pipeline_routes.py`
+1. Add a node function in `packages/content_factory/orchestration/nodes.py`
+2. Wire it into the LangGraph graph in `packages/content_factory/orchestration/graphs.py`
+3. Add the stage definition in `apps/api/routers/pipeline_routes.py` (`STAGE_DEFINITIONS`)
+4. Add frontend UI in the React app (`apps/web/src/`)
 
 ---
 

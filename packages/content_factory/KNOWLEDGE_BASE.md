@@ -19,7 +19,7 @@ be modified without understanding the downstream impact.
 
 ## evaluation_suite.json
 **What it is:** 56 binary questions (yes/no) that score every script.
-**Used by:** ScoringEngine in evaluation/scoring.py.
+**Used by:** LangGraph nodes in `orchestration/nodes.py` for script scoring and evaluation.
 **Structure:**
   - 11 categories (A through K, O, P, Q)
   - Each question has: id, text, category, responsible_agent
@@ -53,8 +53,8 @@ be modified without understanding the downstream impact.
 ## genre_schema.json
 **What it is:** Maps each genre to its applicable question categories and
                structural rules.
-**Used by:** ScoringEngine (loads questions per genre), TopicFinderAgent
-             (classifies topics), ContentCreationRouter (selects workflow).
+**Used by:** Script scoring node in `orchestration/nodes.py` (loads questions per genre), TopicFinderAgent
+             (classifies topics).
 **Genres:**
   - history — chronological narrative, JH-style reveals
   - current_situation — gap between perception and reality
@@ -64,7 +64,7 @@ be modified without understanding the downstream impact.
   - south_asian_history — regional context + colonial lens (Phase 4 addition)
 
 **Adding a genre:** Add to genre_schema.json AND add genre-specific questions
-to evaluation_suite.json AND update the ScoringEngine's applicable questions.
+to evaluation_suite.json AND update the scoring logic in `orchestration/nodes.py`.
 
 ---
 
