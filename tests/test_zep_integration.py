@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from packages.memory.client import AsyncZepMemoryClient
 from packages.content_factory.topic_finder.feedback import FeedbackLoop
 from packages.content_factory.topic_finder.finder import TopicFinderAgent
-from packages.content_factory.evaluation.learning_log import LearningLogger, LearningLogEntry
+# evaluation.learning_log removed in Phase 2 dead code cleanup
 from packages.content_factory.orchestration.synthesis import SynthesisEngine
 from packages.content_factory.orchestration.master import MasterOrchestrator
 from packages.content_factory.topic_finder.models import TopicBrief
@@ -71,30 +71,7 @@ class TestZepIntegration(unittest.TestCase):
         self.assertIsNotNone(agent.zep_client)
 
     @patch('packages.memory.client.AsyncZepMemoryClient.add_facts')
-    def test_learning_log_semantic_write(self, mock_add_facts):
-        # Test Learning Log dual write
-        mock_add_facts.return_value = asyncio.Future()
-        mock_add_facts.return_value.set_result(None)
-        
-        logger = LearningLogger(log_path="packages/data/test_learning_log.jsonl")
-        entry = LearningLogEntry(
-            cycle_id="cycle_1",
-            genre_id="islamic_history",
-            baseline_id="base1",
-            challenger_id="challenger1",
-            mutation_zone="Zone 1",
-            baseline_score=50.0,
-            challenger_score=60.0,
-            beat_baseline=True,
-            fixed_questions=["Q1"],
-            timestamp=datetime.now(timezone.utc)
-        )
-        # Avoid file writing conflicts in test
-        with patch('builtins.open', unittest.mock.mock_open()):
-            logger.log_experiment(entry)
-            
-        # The async Zep write runs in background
-        self.assertIsNotNone(logger.zep_client)
+    # test_learning_log_semantic_write removed: evaluation/ deleted in Phase 2
 
     @patch('packages.memory.client.AsyncZepMemoryClient.search_memory')
     def test_synthesis_engine_integration(self, mock_search):

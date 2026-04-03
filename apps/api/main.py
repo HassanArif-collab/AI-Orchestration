@@ -73,21 +73,12 @@ async def lifespan(app: FastAPI):
     Initializes databases on startup and cleans up on shutdown.
     """
 
-    # Bootstrap agents into registry
-    try:
-        from packages.agents.bootstrap import bootstrap_agents
-        bootstrap_agents()
-    except Exception as e:
-        print(f"Warning: Agent bootstrap failed (non-fatal): {e}")
-    
-    # Start the orchestration scheduler
-    try:
-        from apps.api.background_tasks import start_scheduler
-        if not start_scheduler():
-            print("Warning: Scheduler startup failed (non-fatal)")
-    except Exception as e:
-        print(f"Warning: Scheduler startup failed (non-fatal): {e}")
-    
+    # NOTE: bootstrap_agents() removed in Phase 3 — packages.agents.bootstrap deleted
+    # (CrewAI agents were dead code; LangGraph nodes handle content creation)
+
+    # NOTE: start_scheduler() removed in Phase 3 — MasterOrchestrator deprecated
+    # (LangGraph pipeline handles topic discovery and production natively)
+
     # Start the expired card cleanup task
     try:
         from apps.api.background_tasks import start_cleanup_task

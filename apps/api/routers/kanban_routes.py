@@ -18,7 +18,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from apps.api.dependencies import get_pipeline_runner, get_run_store
+from apps.api.dependencies import get_run_store
 from apps.api.events import emit_task_created
 from packages.core.config import get_settings
 
@@ -305,65 +305,32 @@ async def get_task(task_id: str = Path(..., min_length=1, max_length=100)) -> di
 
 @router.patch("/tasks/{task_id}")
 async def update_task(task_id: str = Path(..., min_length=1, max_length=100), data: KanbanTaskUpdate = Body(...), bg: BackgroundTasks = BackgroundTasks()) -> dict:
-    """Update a Kanban task — supports moving cards between stages, approving gates, and extending expiration.
+    """Update a Kanban task — supports moving cards between stages and extending expiration.
 
-    When a card is moved forward past a 'waiting_human' gate, the gate is auto-approved
-    using the trend_analysis output (first candidate) as the selection, then the pipeline
-    resumes from the next stage.
+    NOTE: The legacy PipelineRunner gate approval flow was removed in Phase 3.
+    Card movement now uses LangGraph's /langgraph/resume endpoint for human gate decisions.
+    This endpoint handles expiration extension and column movement via Supabase.
     """
-    runner = get_pipeline_runner()
     store = get_run_store()
-    if not runner or not store:
-        raise HTTPException(503, "Pipeline runner not available")
+    if not store:
+        raise HTTPException(503, "Store not available")
 
     run = store.load(task_id)
     if not run:
         raise HTTPException(404, f"Task {task_id} not found")
 
     if data.stage is not None:
-        current_kanban_stage = get_kanban_stage(run.current_stage)
-
-        if data.stage > current_kanban_stage:
-            # ── Human gate approval flow ──
-            if run.status == "waiting_human":
-                try:
-                    from packages.pipeline.stages import Stage, is_human_gate
-
-                    current_stage = Stage(run.current_stage) if run.current_stage else None
-                    if current_stage and is_human_gate(current_stage):
-                        # Auto-approve: pick the best topic from trend_analysis output
-                        outputs = getattr(run, "stage_outputs", {})
-                        trend_output = outputs.get("trend_analysis")
-                        selection = None
-                        if isinstance(trend_output, list) and trend_output:
-                            # Use the first candidate as the approved topic
-                            selection = trend_output[0]
-                        elif isinstance(trend_output, dict):
-                            selection = trend_output
-
-                        await runner.approve_gate(run, current_stage, True, selection)
-                        logger.info(f"kanban_gate_auto_approved: task={task_id} stage={current_stage.value}")
-                except Exception as e:
-                    logger.warning(f"kanban_gate_approve_failed: {e}")
-
-            # ── Resume pipeline ──
-            if run.status in ("error", "waiting_human", "running"):
-                # BUGFIX: Reset the errored stage to "pending" so the pipeline
-                # can actually retry it. Without this, get_runnable_stages()
-                # skips the errored stage and the pipeline immediately hits
-                # the "no runnable stages" branch.
-                if run.status == "error" and run.current_stage:
-                    from packages.pipeline.stages import Stage as StageEnum
-                    failed_stage_name = run.current_stage.value if hasattr(run.current_stage, 'value') else str(run.current_stage)
-                    run.stage_status[failed_stage_name] = "pending"
-                    run.error_message = ""
-                    run.status = "running"
-                    store.save(run)
-                    logger.info(f"kanban_error_stage_reset: task={task_id} stage={failed_stage_name}")
-
-                from apps.api.routers.pipeline_routes import _run_pipeline_bg
-                bg.add_task(_run_pipeline_bg, task_id)
-                return {"message": "Pipeline resumed...", "id": task_id}
+        # Move card to new column via Supabase
+        try:
+            from packages.core.supabase_client import get_supabase
+            sb = get_supabase()
+            sb.table("kanban_cards").update({
+                "column_index": data.stage,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", task_id).execute()
+            logger.info(f"kanban_card_moved: task={task_id} to_column={data.stage}")
+        except Exception as e:
+            logger.warning(f"kanban_card_move_failed: {e}")
 
     # Handle expiration extension
     if data.extend_expiration:
@@ -468,29 +435,51 @@ async def hard_delete_task(task_id: str = Path(..., min_length=1, max_length=100
 
 @router.post("/topic-finder")
 async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) -> dict:
-    """Start a new PipelineRun with the user's seed query."""
-    runner = get_pipeline_runner()
-    if not runner:
-        raise HTTPException(503, "Pipeline runner not available")
+    """Start a new LangGraph discovery pipeline with the user's seed query.
 
-    run = await runner.create_run()
-    from apps.api.routers.pipeline_routes import _run_pipeline_bg
+    NOTE: The legacy PipelineRunner was removed in Phase 3. This endpoint now
+    delegates to the LangGraph discovery graph via Supabase Realtime for progress.
+    """
+    import uuid as _uuid
+    card_id = str(_uuid.uuid4())
 
-    # Pass seed_query and genre_id to the pipeline so trend_analysis uses them
-    pipeline_context = {
-        "seed_query": data.seed_query,
-        "genre_id": data.genre_id,
-    }
-    bg.add_task(_run_pipeline_bg, run.run_id, pipeline_context)
+    # Create a placeholder kanban card in Column 1 (Topic Finding)
+    try:
+        from packages.core.supabase_client import get_supabase
+        sb = get_supabase()
+        sb.table("kanban_cards").insert({
+            "id": card_id,
+            "title": data.seed_query[:100],
+            "column_index": 1,
+            "status": "thinking",
+            "seed_query": data.seed_query,
+            "genre_id": data.genre_id,
+        }).execute()
+    except Exception as e:
+        logger.warning(f"topic_finder_card_create_failed: {e}")
 
-    # Bug B Fix: Emit task_created immediately for Kanban board
-    task_data = _run_to_kanban_dict(run)
-    bg.add_task(emit_task_created, task_data)
+    # Trigger the LangGraph discovery graph
+    try:
+        from apps.api.routers.pipeline_routes import discover_topics
+        await discover_topics(background_tasks=bg, seed_hint=data.seed_query)
+    except Exception as e:
+        logger.error(f"topic_finder_discover_failed: {e}")
+
+    # Emit task_created for Kanban board
+    try:
+        await emit_task_created({
+            "id": card_id,
+            "title": data.seed_query[:100],
+            "stage": 1,
+            "status": "thinking",
+        })
+    except Exception as e:
+        logger.warning(f"topic_finder_emit_failed: {e}")
 
     return {
-        "id": run.run_id,
+        "id": card_id,
         "status": "thinking",
-        "message": f"Pipeline started for: {data.seed_query}"
+        "message": f"Discovery started for: {data.seed_query}"
     }
 
 @router.get("/stats")

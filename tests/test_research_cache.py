@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
 
-from packages.pipeline.research_cache import ResearchCache
+from packages.core.research_cache import ResearchCache
 
 
 def test_make_key_with_brief_id():
@@ -28,7 +28,7 @@ def test_make_key_requires_arguments():
         ResearchCache.make_key()
 
 
-@patch("packages.pipeline.research_cache.get_settings")
+@patch("packages.core.research_cache.get_settings")
 def test_get_returns_cached_research(mock_settings):
     """Test that get returns cached research from Supabase."""
     mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
@@ -59,7 +59,7 @@ def test_get_returns_cached_research(mock_settings):
         assert result["source_count"] == 1
 
 
-@patch("packages.pipeline.research_cache.get_settings")
+@patch("packages.core.research_cache.get_settings")
 def test_get_returns_none_on_cache_miss(mock_settings):
     """Test that get returns None when cache miss."""
     mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
@@ -79,7 +79,7 @@ def test_get_returns_none_on_cache_miss(mock_settings):
         assert result is None
 
 
-@patch("packages.pipeline.research_cache.get_settings")
+@patch("packages.core.research_cache.get_settings")
 def test_get_handles_exception_gracefully(mock_settings):
     """Test that get returns None on exception (non-blocking)."""
     mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
@@ -94,7 +94,7 @@ def test_get_handles_exception_gracefully(mock_settings):
         assert result is None  # Should not crash
 
 
-@patch("packages.pipeline.research_cache.get_settings")
+@patch("packages.core.research_cache.get_settings")
 def test_save_stores_research_permanently(mock_settings):
     """Test that save stores research in Supabase."""
     mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
@@ -123,7 +123,7 @@ def test_save_stores_research_permanently(mock_settings):
         assert call_args["source_count"] == 1
 
 
-@patch("packages.pipeline.research_cache.get_settings")
+@patch("packages.core.research_cache.get_settings")
 def test_save_handles_exception_gracefully(mock_settings):
     """Test that save doesn't crash on exception."""
     mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
@@ -141,7 +141,7 @@ def test_save_handles_exception_gracefully(mock_settings):
         )
 
 
-@patch("packages.pipeline.research_cache.get_settings")
+@patch("packages.core.research_cache.get_settings")
 def test_stats_returns_cache_info(mock_settings):
     """Test that stats returns cache statistics."""
     mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"

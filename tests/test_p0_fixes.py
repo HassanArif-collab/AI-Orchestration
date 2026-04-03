@@ -309,27 +309,6 @@ class TestP04_DeadLetterQueue:
             assert stats["total"] == 2
             assert stats["pending"] == 2
 
-    def test_evolution_state_persistence(self):
-        """Verify evolution loop can persist and restore state."""
-        from packages.content_factory.script_generator.evolution_loop import EvolutionState
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            state = EvolutionState(Path(tmpdir))
-            
-            # Save state
-            state.save("test_evo_id", {
-                "iteration": 5,
-                "score_history": [0.5, 0.6, 0.7, 0.75, 0.8]
-            })
-            
-            # Load state
-            loaded = state.load("test_evo_id")
-            
-            assert loaded is not None
-            assert loaded["iteration"] == 5
-            assert len(loaded["score_history"]) == 5
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # P0-05: Quality Floor Tests
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -352,19 +331,9 @@ class TestP05_QualityFloor:
         assert settings.SCRIPT_QUALITY_FLOOR == 60.0
         assert settings.SCRIPT_MAX_ITERATIONS == 20
 
-    def test_evaluator_threshold(self):
-        """Verify evaluator has production threshold."""
-        from packages.content_factory.script_generator.self_evaluator import SelfEvaluator
-        
-        assert hasattr(SelfEvaluator, 'PRODUCTION_THRESHOLD')
-        assert SelfEvaluator.PRODUCTION_THRESHOLD == 0.85  # 85%
+# test_evaluator_threshold removed: script_generator deleted in Phase 2
 
-    def test_evolution_threshold(self):
-        """Verify evolution loop has threshold."""
-        from packages.content_factory.script_generator.evolution_loop import ScriptEvolutionLoop
-        
-        assert hasattr(ScriptEvolutionLoop, 'PRODUCTION_THRESHOLD')
-        assert ScriptEvolutionLoop.PRODUCTION_THRESHOLD == 0.85
+# test_evolution_threshold removed: script_generator deleted in Phase 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -570,7 +539,7 @@ class TestIntegration:
         from packages.core.dead_letter import queue_for_retry, get_pending_retries
         
         # P0-05
-        from packages.content_factory.script_generator.self_evaluator import SelfEvaluator
+        # script_generator removed in Phase 2 dead code cleanup
         
         # P0-06
         from packages.router.web_search import WebSearchClient

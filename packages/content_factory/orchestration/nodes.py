@@ -414,7 +414,7 @@ async def research_node(state: ProductionState) -> dict:
     await report_thought(card_id, "researcher", "🔍 Checking for existing research cache...")
     
     try:
-        from packages.pipeline.research_cache import ResearchCache
+        from packages.core.research_cache import ResearchCache
         cache = ResearchCache()
         
         cached = cache.get(topic_title)

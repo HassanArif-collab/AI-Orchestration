@@ -24,7 +24,7 @@ from pathlib import Path
 from packages.core.json_utils import extract_json_object
 from packages.pipeline.stages import Stage
 from packages.pipeline.state import PipelineRun
-from packages.pipeline.research_cache import ResearchCache
+from packages.core.research_cache import ResearchCache
 from packages.content_factory.topic_finder.finder import TopicFinderAgent
 from packages.core.config import get_settings
 from packages.core.cache import FileCache
@@ -160,9 +160,16 @@ async def handle_research(run: PipelineRun, context: dict = None) -> dict:
     Returns:
         AdaptedScript object as dict
     """
-    from packages.content_factory.router import ContentCreationRouter
+    try:
+        from packages.content_factory.router import ContentCreationRouter
+    except ImportError:
+        logger.error("content_factory.router removed in Phase 2 — this handler is dead code")
+        return {}
     from packages.content_factory.topic_finder.models import TopicBrief
-    from packages.content_factory.evaluation.baseline import BaselineManager
+    try:
+        from packages.content_factory.evaluation.baseline import BaselineManager
+    except ImportError:
+        BaselineManager = None
     from packages.core.thoughts import report_thought
 
     settings = get_settings()
@@ -329,7 +336,11 @@ async def handle_script_writing(run: PipelineRun, context: dict = None) -> dict:
     Returns:
         Refined script data as dict
     """
-    from packages.content_factory.router import ContentCreationRouter
+    try:
+        from packages.content_factory.router import ContentCreationRouter
+    except ImportError:
+        logger.error("content_factory.router removed in Phase 2 — this handler is dead code")
+        return {}
     from packages.content_factory.models import AdaptedScript
     from packages.core.thoughts import report_thought
 

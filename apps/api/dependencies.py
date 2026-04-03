@@ -5,6 +5,9 @@ _proxy_client → http://localhost:4000  (FreeRouter LLM proxy, still separate)
 
 FreeRouter web (:8080) is gone — chat and providers now use freerouter
 internals directly.
+
+REMOVED (Phase 3 dead code cleanup):
+    get_pipeline_runner() — PipelineRunner is deprecated, use LangGraph endpoints.
 """
 
 from __future__ import annotations
@@ -28,15 +31,6 @@ def get_run_store():
     try:
         from packages.pipeline.state import RunStore
         return RunStore()
-    except ImportError:
-        return None
-
-
-def get_pipeline_runner():
-    try:
-        from packages.pipeline.runner import PipelineRunner
-        from packages.pipeline.state import RunStore
-        return PipelineRunner(store=RunStore())
     except ImportError:
         return None
 
