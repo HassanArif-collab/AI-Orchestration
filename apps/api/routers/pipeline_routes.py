@@ -345,10 +345,14 @@ def _normalize_topic_candidate(raw: dict) -> dict:
 
 # ─── Background pipeline runner ───────────────────────────────────────────────
 
-async def _run_pipeline_bg(run_id: str) -> None:
+async def _run_pipeline_bg(run_id: str, context: dict = None) -> None:
     """Background task: run pipeline until gate or completion, emitting SSE.
     
     Also creates and updates a corresponding Kanban task for visual tracking.
+    
+    Args:
+        run_id: The pipeline run ID to execute.
+        context: Optional context dict passed to stage handlers (e.g., seed_query, genre_id).
     """
     runner = get_pipeline_runner()
     store = get_run_store()
@@ -375,7 +379,7 @@ async def _run_pipeline_bg(run_id: str) -> None:
                         
                         
                         await emit_pipeline_update(run_id, stage.value, "waiting_human")
-                        await runner.execute_stage(run, stage)
+                        await runner.execute_stage(run, stage, context)
                         await emit_human_gate(run_id, stage.value)
                         return
                 
@@ -393,7 +397,7 @@ async def _run_pipeline_bg(run_id: str) -> None:
                 await emit_pipeline_update(run_id, str([s.value for s in runnable]), "running")
                 
                 
-                await asyncio.gather(*[runner.execute_stage(run, s) for s in runnable])
+                await asyncio.gather(*[runner.execute_stage(run, s, context) for s in runnable])
                 
                 for s in runnable:
                     await emit_stage_complete(run_id, s.value)
@@ -403,7 +407,7 @@ async def _run_pipeline_bg(run_id: str) -> None:
                 
                 
                 await emit_pipeline_update(run_id, stage.value, "running")
-                await runner.execute_stage(run, stage)
+                await runner.execute_stage(run, stage, context)
                 
                 
                 await emit_stage_complete(run_id, stage.value)

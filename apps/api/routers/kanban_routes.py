@@ -297,7 +297,12 @@ async def get_task(task_id: str = Path(..., min_length=1, max_length=100)) -> di
 
 @router.patch("/tasks/{task_id}")
 async def update_task(task_id: str = Path(..., min_length=1, max_length=100), data: KanbanTaskUpdate = Body(...), bg: BackgroundTasks = BackgroundTasks()) -> dict:
-    """Update a Kanban task — supports moving cards between stages and extending expiration."""
+    """Update a Kanban task — supports moving cards between stages, approving gates, and extending expiration.
+
+    When a card is moved forward past a 'waiting_human' gate, the gate is auto-approved
+    using the trend_analysis output (first candidate) as the selection, then the pipeline
+    resumes from the next stage.
+    """
     runner = get_pipeline_runner()
     store = get_run_store()
     if not runner or not store:
@@ -309,11 +314,35 @@ async def update_task(task_id: str = Path(..., min_length=1, max_length=100), da
 
     if data.stage is not None:
         current_kanban_stage = get_kanban_stage(run.current_stage)
+
         if data.stage > current_kanban_stage:
-            if run.status in ("error", "waiting_human"):
+            # ── Human gate approval flow ──
+            if run.status == "waiting_human":
+                try:
+                    from packages.pipeline.stages import Stage, is_human_gate
+
+                    current_stage = Stage(run.current_stage) if run.current_stage else None
+                    if current_stage and is_human_gate(current_stage):
+                        # Auto-approve: pick the best topic from trend_analysis output
+                        outputs = getattr(run, "stage_outputs", {})
+                        trend_output = outputs.get("trend_analysis")
+                        selection = None
+                        if isinstance(trend_output, list) and trend_output:
+                            # Use the first candidate as the approved topic
+                            selection = trend_output[0]
+                        elif isinstance(trend_output, dict):
+                            selection = trend_output
+
+                        await runner.approve_gate(run, current_stage, True, selection)
+                        logger.info(f"kanban_gate_auto_approved: task={task_id} stage={current_stage.value}")
+                except Exception as e:
+                    logger.warning(f"kanban_gate_approve_failed: {e}")
+
+            # ── Resume pipeline ──
+            if run.status in ("error", "waiting_human", "running"):
                 from apps.api.routers.pipeline_routes import _run_pipeline_bg
                 bg.add_task(_run_pipeline_bg, task_id)
-                return {"message": "Resuming pipeline run...", "id": task_id}
+                return {"message": "Pipeline resumed...", "id": task_id}
 
     # Handle expiration extension
     if data.extend_expiration:
@@ -418,14 +447,20 @@ async def hard_delete_task(task_id: str = Path(..., min_length=1, max_length=100
 
 @router.post("/topic-finder")
 async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) -> dict:
-    """Start a new PipelineRun."""
+    """Start a new PipelineRun with the user's seed query."""
     runner = get_pipeline_runner()
     if not runner:
         raise HTTPException(503, "Pipeline runner not available")
 
     run = await runner.create_run()
     from apps.api.routers.pipeline_routes import _run_pipeline_bg
-    bg.add_task(_run_pipeline_bg, run.run_id)
+
+    # Pass seed_query and genre_id to the pipeline so trend_analysis uses them
+    pipeline_context = {
+        "seed_query": data.seed_query,
+        "genre_id": data.genre_id,
+    }
+    bg.add_task(_run_pipeline_bg, run.run_id, pipeline_context)
 
     # Bug B Fix: Emit task_created immediately for Kanban board
     task_data = _run_to_kanban_dict(run)

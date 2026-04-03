@@ -398,6 +398,7 @@ def start_cleanup_task():
         raise
     _cleanup_task = loop.create_task(cleanup_expired_cards())
     logger.info("cleanup_task_scheduled: expired card cleanup started")
+    return True
 
 
 async def stop_cleanup_task():

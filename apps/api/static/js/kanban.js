@@ -96,7 +96,7 @@ const Kanban = {
                         </div>
                         <div class="stage-badge" id="drawer-stage-badge">Stage 1</div>
                     </div>
-                    <div class="drawer-actions">
+                    <div class="drawer-actions" id="drawer-actions">
                         <button class="btn btn-danger btn-sm" onclick="Kanban.deleteTask(Kanban.activeTaskId)">
                             🗑️ Delete Task
                         </button>
@@ -372,6 +372,51 @@ const Kanban = {
         const config = KANBAN_STAGES[task.stage] || KANBAN_STAGES[1];
         stageBadge.textContent = config.name;
         stageBadge.style.background = config.color;
+        
+        // Show contextual action buttons based on task status
+        const actionsEl = document.getElementById('drawer-actions');
+        const isWaiting = task.status === 'waiting';
+        const isError = task.status === 'error';
+        const nextStage = task.stage < 6 ? task.stage + 1 : null;
+        
+        actionsEl.innerHTML = '';
+        
+        // Approve / Resume button for waiting or error tasks
+        if ((isWaiting || isError) && nextStage) {
+            const approveBtn = document.createElement('button');
+            approveBtn.className = 'btn btn-primary btn-sm';
+            approveBtn.style.marginRight = '8px';
+            approveBtn.textContent = isWaiting 
+                ? `✅ Approve & Start ${KANBAN_STAGES[nextStage]?.name || 'Next Stage'}` 
+                : `🔄 Retry & Continue`;
+            approveBtn.onclick = async () => {
+                approveBtn.disabled = true;
+                approveBtn.textContent = '⏳ Starting...';
+                try {
+                    await api(`/api/kanban/tasks/${task.id}`, {
+                        method: 'PATCH',
+                        body: { stage: nextStage }
+                    });
+                    showToast('Pipeline resumed!', 'success');
+                    this.closeDrawer();
+                    await this.refresh();
+                } catch (err) {
+                    showToast('Failed: ' + err.message, 'error');
+                    approveBtn.disabled = false;
+                    approveBtn.textContent = isWaiting 
+                        ? `✅ Approve & Start ${KANBAN_STAGES[nextStage]?.name || 'Next Stage'}` 
+                        : `🔄 Retry & Continue`;
+                }
+            };
+            actionsEl.appendChild(approveBtn);
+        }
+        
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm';
+        deleteBtn.textContent = '🗑️ Delete Task';
+        deleteBtn.onclick = () => this.deleteTask(this.activeTaskId);
+        actionsEl.appendChild(deleteBtn);
         
         const artifactBox = document.getElementById('drawer-artifact');
         if (artifactBox) {
