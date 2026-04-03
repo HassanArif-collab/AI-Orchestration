@@ -436,7 +436,9 @@ class RouterClient:
                     # Emit rate_limit SSE event for frontend awareness (Issue 15)
                     try:
                         from apps.api.events import event_bus as _event_bus
-                        import asyncio
+                        # BUGFIX: Do NOT re-import asyncio here — it shadows the module-level
+                        # import (line 33) and causes UnboundLocalError in Python 3.12+
+                        # when asyncio.sleep() is called after this try/except block.
                         asyncio.ensure_future(_event_bus.publish("rate_limit", {
                             "wait_time": wait_time,
                             "attempt": attempt + 1,

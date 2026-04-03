@@ -325,11 +325,12 @@ class ExperimentLoop:
 
             # 7. Emit SSE event for real-time updates
             try:
-                import asyncio
                 from apps.api.events import emit_iteration_complete
-                # Serialize script with datetime handling for SSE payload
-                _script_payload = json.loads(json.dumps(challenger.model_dump(), default=str))
-                asyncio.create_task(emit_iteration_complete(
+                # BUGFIX: Do NOT re-import asyncio here — it shadows the module-level
+                # import and causes UnboundLocalError in Python 3.12+ when referenced
+                # after this try/except block ends.
+                import asyncio as _asyncio
+                _asyncio.create_task(emit_iteration_complete(
                     run_id=run_id or cycle_id,
                     iteration=i,
                     score=challenger_score,
@@ -338,8 +339,8 @@ class ExperimentLoop:
                     beat_baseline=is_new_best,
                     script_json=_script_payload,
                 ))
-            except RuntimeError:
-                pass  # No event loop in this context
+            except Exception:
+                pass  # No event loop in this context — non-critical
 
             # 8. Persist best after each iteration
             if self._snapshot:
