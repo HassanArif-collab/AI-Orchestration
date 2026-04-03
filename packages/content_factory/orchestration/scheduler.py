@@ -167,10 +167,12 @@ class Scheduler:
         """Daily sweep of Analytics API pipelines."""
         try:
             logger.info("analytics_ingestion_starting")
-            from packages.integrations.youtube.analytics import YouTubeAnalytics
-            analytics = YouTubeAnalytics()
-            # TODO: Call analytics.fetch_channel_stats() and save to video_performance table
+            from packages.integrations.youtube.analytics import AnalyticsTracker
+            tracker = AnalyticsTracker()
+            # TODO: Call tracker.pull_weekly_stats() and save to video_performance table
             logger.info("analytics_ingestion_completed: stub — async implementation pending")
+        except ImportError:
+            logger.debug("analytics_ingestion_skipped: YouTube analytics not available")
         except Exception as e:
             logger.error(f"analytics_ingestion_failed: {e}")
 

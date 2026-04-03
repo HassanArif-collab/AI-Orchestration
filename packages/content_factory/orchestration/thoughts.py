@@ -9,6 +9,10 @@ Key features:
 2. update_card_stage() - Move the Kanban card to the correct column
 3. @pipeline_node decorator - Automatic thought reporting, error capture, and Kanban updates
 
+Related modules:
+- packages.core.thoughts — core CRUD operations (get_thoughts_for_card, delete_thoughts_for_card)
+  and the sync report_thought() used by API routes and external agents.
+
 CRITICAL: All functions must NEVER crash the pipeline.
 If Supabase is down, we log locally and continue.
 """
