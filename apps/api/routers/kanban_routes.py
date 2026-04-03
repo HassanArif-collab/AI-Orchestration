@@ -1,9 +1,11 @@
 """
-Kanban task management routes -- Refactored to use PipelineRunner.
+Kanban task management routes.
 
 These endpoints handle the Kanban board operations for the YouTube Pipeline
-dashboard. The Kanban board is a view-only (mostly) representation of the
-Pipeline runs stored in Supabase pipeline_runs table.
+dashboard. All operations use the kanban_cards Supabase table as the
+canonical data source (the frontend subscribes via Supabase Realtime).
+
+Phase 5: Migrated from pipeline_runs (RunStore) to kanban_cards.
 """
 
 from __future__ import annotations
@@ -18,56 +20,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from apps.api.dependencies import get_run_store
 from apps.api.events import emit_task_created
 from packages.core.config import get_settings
 
 router = APIRouter()
 
 
-# Map pipeline stage names to Kanban column numbers (1-6)
-PIPELINE_TO_KANBAN_STAGE = {
-    "trend_analysis": 1,        # Topic Finding
-    "human_topic_approval": 2,  # Suggested Topics (human gate)
-    "research": 3,              # Researching
-    "script_writing": 4,        # Script
-    "visual_planning": 5,       # Visual
-    "seo": 4,                   # Script (parallel stage)
-    "human_review": 5,          # Visual (human gate)
-    "asset_creation": 6,        # Notion
-    "publish": 6,               # Notion (final)
-}
+def _card_to_kanban_dict(card: dict) -> dict:
+    """Convert a kanban_cards row to the frontend Kanban task format.
 
-def get_kanban_stage(pipeline_stage: str) -> int:
-    """Convert pipeline stage name to Kanban column number."""
-    return PIPELINE_TO_KANBAN_STAGE.get(pipeline_stage, 1)
+    Args:
+        card: Row dict from kanban_cards table (Supabase response)
 
-def _run_to_kanban_dict(run) -> dict:
-    """Convert a PipelineRun or run dict to a Kanban-friendly dictionary."""
-    if isinstance(run, dict):
-        d = run
-    else:
-        d = run.to_dict() if hasattr(run, "to_dict") else vars(run)
-    stage_name = d.get("current_stage", "trend_analysis")
+    Returns:
+        Dictionary matching the frontend's expected Kanban task shape
+    """
+    card_id = card.get("id", "")
+    status = card.get("status", "idle")
+    column_index = card.get("column_index", 1)
+    color = card.get("color", "#1D9E75")
 
-    # Extract title - check 'title' first (normalized field), then 'topic_statement' (raw field)
-    # This handles both normalized data (from frontend approval) and raw data (from pipeline storage)
-    video_title = "Untitled"
-    outputs = d.get("stage_outputs", {})
-    approval = outputs.get("human_topic_approval")
-    if isinstance(approval, dict):
-        video_title = approval.get("title") or approval.get("topic_statement") or "Untitled"
-    else:
-        trend = outputs.get("trend_analysis")
-        if isinstance(trend, list) and trend:
-            video_title = trend[0].get("title") or trend[0].get("topic_statement") or "Untitled"
-
-    # Status mapping to Kanban visual states
-    # C12 FIX: Accept both "complete" and "completed" for backward compat
-    status = d.get("status", "idle")
-    if status == "running":
+    # Map card status to frontend visual state
+    if status == "thinking":
         kanban_status = "thinking"
-    elif status == "waiting_human":
+    elif status == "waiting":
         kanban_status = "waiting"
     elif status in ("complete", "completed"):
         kanban_status = "complete"
@@ -76,177 +52,56 @@ def _run_to_kanban_dict(run) -> dict:
     else:
         kanban_status = "idle"
 
-    # Color mapping (simple palette based on stage)
-    colors = ["#1D9E75", "#378ADD", "#BA7517", "#D4A017", "#D1242F", "#0969DA"]
-    stage_num = get_kanban_stage(stage_name)
-    color = colors[stage_num - 1] if 1 <= stage_num <= 6 else colors[0]
-
-    # Thoughts: Load from centralized Supabase thoughts module
-    run_id = d.get("run_id", "")
+    # Load thoughts from centralized Supabase module
     thoughts = []
     try:
         from packages.core.thoughts import get_thoughts_for_card
-        thoughts = get_thoughts_for_card(str(run_id))
+        thoughts = get_thoughts_for_card(str(card_id))
     except Exception as e:
-        print(f"Error loading thoughts for {run_id}: {e}")
-
-    # Render artifacts as readable HTML (Task 6 fix)
-    research_html = _render_artifact_html(outputs.get("research"), "research")
-    script_html = _render_artifact_html(outputs.get("script_writing"), "script")
-    visual_html = _render_artifact_html(outputs.get("visual_planning"), "visual")
+        logger.debug(f"Error loading thoughts for {card_id}: {e}")
 
     # BUGFIX: Include thinking_started_at for frontend elapsed timer
-    # When status is "running" (mapped to "thinking"), use updated_at as start time
     thinking_started_at = None
-    if status == "running":
-        thinking_started_at = d.get("updated_at")
+    if status == "thinking":
+        thinking_started_at = card.get("updated_at")
+
+    # Extract notion_url from metadata if available
+    metadata = card.get("metadata", {}) or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+
+    notion_url = metadata.get("notion_url")
+
+    # Extract error_message from metadata if available
+    error_message = card.get("error_message", "") or metadata.get("error_message", "")
 
     return {
-        "id": run_id,
-        "title": video_title,
-        "stage": stage_num,
+        "id": card_id,
+        "title": card.get("title", "Untitled"),
+        "stage": column_index,
         "status": kanban_status,
         "color": color,
-        "updated_at": d.get("updated_at"),
-        "created_at": d.get("created_at"),
-        "notion_url": outputs.get("publish", {}).get("notion_url") if isinstance(outputs.get("publish"), dict) else None,
-        "research": research_html,
-        "script": script_html,
-        "visual_cues": visual_html,
-        "thoughts": json.dumps(thoughts),  # JSON string for frontend parsing
-        "expires_at": d.get("expires_at"),
+        "updated_at": card.get("updated_at"),
+        "created_at": card.get("created_at"),
+        "notion_url": notion_url,
+        "research": "",          # Stage outputs not stored in kanban_cards
+        "script": "",            # Frontend fetches these via LangGraph state
+        "visual_cues": "",       # if needed
+        "thoughts": json.dumps(thoughts),
+        "expires_at": card.get("expires_at"),
         "thinking_started_at": thinking_started_at,
-        "error_message": d.get("error_message", ""),
+        "error_message": error_message,
     }
 
 
-def _render_artifact_html(data: Any, artifact_type: str) -> str:
-    """Render artifact data as readable HTML instead of truncated JSON strings.
+def _get_supabase():
+    """Get Supabase client with lazy import."""
+    from packages.core.supabase_client import get_supabase
+    return get_supabase()
 
-    Args:
-        data: The artifact data (dict, list, or other)
-        artifact_type: Type hint (research, script, visual)
-
-    Returns:
-        HTML string for display in the Kanban drawer
-    """
-    import html as html_module
-    
-    if not data:
-        return ""
-
-    if isinstance(data, str):
-        # Special handling for visual plain text output (Option A)
-        if artifact_type == "visual":
-            # Highlight category labels in visual annotations
-            content = html_module.escape(data[:2000])
-            labels = ["[B-ROLL]", "[MAP]", "[DATA]", "[ARCHIVAL]", "[GRAPHIC]", "[TRANSITION]", "[SOUND]"]
-            for label in labels:
-                content = content.replace(
-                    html_module.escape(label),
-                    f'<span style="color:#1D9E75;font-weight:600;">{html_module.escape(label)}</span>'
-                )
-            # Preserve line breaks and format nicely
-            content = content.replace('\n', '<br>')
-            return f'<pre style="margin:0;font-size:12px;white-space:pre-wrap;font-family:inherit;">{content}</pre>'
-        return data[:500] if len(data) > 500 else data
-
-    if not isinstance(data, dict):
-        # Fallback for non-dict data
-        return str(data)[:500]
-
-    # Handle AdaptedScript (script_writing output)
-    # C2 FIX: All user/agent data escaped before HTML insertion
-    if artifact_type == "script" and "entries" in data:
-        entries = data.get("entries", [])
-        if not entries:
-            return ""
-
-        title = html_module.escape(str(data.get("adapted_title", "Untitled Script")))
-        score = data.get("production_readiness_score", 0)
-
-        html_parts = [
-            f'<div style="margin-bottom:8px;font-weight:600;">{title}</div>',
-            f'<div style="margin-bottom:8px;font-size:11px;color:#888;">Score: {score:.1f}%</div>',
-            '<table style="width:100%;border-collapse:collapse;font-size:12px;">',
-            '<thead><tr style="background:#1e1e1e;">',
-            '<th style="padding:6px;text-align:left;border-bottom:1px solid #333;">Narration</th>',
-            '<th style="padding:6px;text-align:left;border-bottom:1px solid #333;">Visual</th>',
-            '</tr></thead>',
-            '<tbody>'
-        ]
-
-        for i, entry in enumerate(entries[:10]):  # Limit to first 10 entries
-            bg = "#141414" if i % 2 == 0 else "#1a1a1a"
-            prose = html_module.escape(str(entry.get("prose", ""))[:200])
-            visual = html_module.escape(str(entry.get("visual_direction", ""))[:100])
-            html_parts.append(
-                f'<tr style="background:{bg}"><td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;">{prose}</td>'
-                f'<td style="padding:6px;vertical-align:top;border-bottom:1px solid #333;color:#888;">{visual}</td></tr>'
-            )
-
-        if len(entries) > 10:
-            html_parts.append(f'<tr><td colspan="2" style="padding:6px;text-align:center;color:#888;">... and {len(entries) - 10} more entries</td></tr>')
-
-        html_parts.append('</tbody></table>')
-        return ''.join(html_parts)
-
-    # Handle Research output
-    # C2 FIX: All user/agent data escaped before HTML insertion
-    if artifact_type == "research":
-        # Check for common research fields
-        if "source_video_id" in data:
-            # This is an AdaptedScript from research stage
-            title = html_module.escape(str(data.get("adapted_title", data.get("source_title", "Research Output"))))
-            entries = data.get("entries", [])
-            if entries:
-                return _render_artifact_html(data, "script")
-            return f'<div style="font-weight:600;">{title}</div>'
-
-        # Generic research dict - show key fields
-        html_parts = []
-        for key in ["topic", "title", "summary", "main_findings", "key_points"]:
-            if key in data:
-                val = data[key]
-                if isinstance(val, list):
-                    escaped = html_module.escape("<br>".join(str(v)[:100] for v in val[:5]))
-                    html_parts.append(f'<div style="margin-bottom:6px;"><strong>{html_module.escape(key)}:</strong> {escaped}</div>')
-                elif isinstance(val, str):
-                    escaped = html_module.escape(val[:300])
-                    html_parts.append(f'<div style="margin-bottom:6px;"><strong>{html_module.escape(key)}:</strong> {escaped}</div>')
-
-        if html_parts:
-            return ''.join(html_parts)
-
-    # Handle Visual Planning output
-    # C2 FIX: All user/agent data escaped before HTML insertion
-    if artifact_type == "visual" and "section_briefs" in data:
-        briefs = data.get("section_briefs", [])
-        if not briefs:
-            return ""
-
-        html_parts = ['<div style="font-size:12px;">']
-        for i, brief in enumerate(briefs[:6]):
-            section = html_module.escape(str(brief.get("section_index", i)))
-            palette = html_module.escape(str(brief.get("sonic_palette", "N/A"))[:50])
-            html_parts.append(
-                f'<div style="margin-bottom:4px;padding:4px;background:#1a1a1a;border-radius:4px;">'
-                f'<span style="color:#1D9E75;">Section {section}:</span> {palette}</div>'
-            )
-        if len(briefs) > 6:
-            html_parts.append(f'<div style="color:#888;">... and {len(briefs) - 6} more sections</div>')
-        html_parts.append('</div>')
-        return ''.join(html_parts)
-
-    # C2 FIX: Escape fallback JSON output
-    try:
-        json_str = json.dumps(data, indent=2, default=str)
-        escaped_json = html_module.escape(json_str)
-        if len(escaped_json) > 500:
-            return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{escaped_json[:500]}...</pre>'
-        return f'<pre style="margin:0;font-size:11px;white-space:pre-wrap;">{escaped_json}</pre>'
-    except Exception:
-        return html_module.escape(str(data)[:500])
 
 # ─── Pydantic Models ────────────────────────────────────────────────────────────
 
@@ -262,7 +117,7 @@ class TopicFinderRequest(BaseModel):
 
 class KanbanEventRequest(BaseModel):
     """Request model for Kanban events (thoughts, stage changes, artifacts)."""
-    task_id: str = Field(..., description="The run/task ID")
+    task_id: str = Field(..., description="The card ID")
     event_type: str = Field(..., description="Event type: thought, stage_change, artifact, status_change")
     data: Dict[str, Any] = Field(default_factory=dict, description="Event payload")
 
@@ -272,36 +127,67 @@ KANBAN_MAX_LIST_LIMIT = 200
 
 @router.get("/tasks")
 async def list_tasks(limit: int = Query(default=100, ge=1, le=KANBAN_MAX_LIST_LIMIT)) -> dict:
-    """List all pipeline runs as Kanban tasks."""
-    store = get_run_store()
-    if not store:
+    """List all kanban cards as tasks.
+
+    Reads from the kanban_cards table (canonical data source for the frontend).
+    Excludes soft-deleted cards.
+    """
+    try:
+        sb = _get_supabase()
+        result = (
+            sb.table("kanban_cards")
+            .select("*")
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+
+        tasks = []
+        for card in (result.data or []):
+            # Skip soft-deleted cards (marked via metadata.deleted_at)
+            metadata = card.get("metadata", {}) or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except (json.JSONDecodeError, TypeError):
+                    metadata = {}
+            if metadata.get("deleted_at"):
+                continue
+
+            try:
+                tasks.append(_card_to_kanban_dict(card))
+            except Exception as e:
+                logger.debug(f"Error processing card {card.get('id')}: {e}")
+                continue
+
+        return {"tasks": tasks}
+    except Exception as e:
+        logger.error(f"list_tasks_failed: {e}")
         return {"tasks": []}
 
-    # 3.7 FIX: Use include_details=True to fetch all columns in one query,
-    # avoiding N+1 per-run load() calls
-    runs = store.list_runs(limit=limit, include_details=True)
-    tasks = []
-    for run_data in runs:
-        try:
-            tasks.append(_run_to_kanban_dict(run_data))
-        except Exception as e:
-            print(f"Error processing task {run_data.get('run_id')}: {e}")
-            continue
-
-    return {"tasks": tasks}
 
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
-    """Get a single PipelineRun as a Kanban task."""
-    store = get_run_store()
-    if not store:
-        raise HTTPException(503, "Store not available")
+    """Get a single kanban card as a task."""
+    try:
+        sb = _get_supabase()
+        result = (
+            sb.table("kanban_cards")
+            .select("*")
+            .eq("id", task_id)
+            .maybe_single()
+            .execute()
+        )
 
-    run = store.load(task_id)
-    if not run:
-        raise HTTPException(404, f"Task {task_id} not found")
+        if not result.data:
+            raise HTTPException(404, f"Task {task_id} not found")
 
-    return _run_to_kanban_dict(run)
+        return _card_to_kanban_dict(result.data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, f"Failed to load task: {e}")
+
 
 @router.patch("/tasks/{task_id}")
 async def update_task(task_id: str = Path(..., min_length=1, max_length=100), data: KanbanTaskUpdate = Body(...), bg: BackgroundTasks = BackgroundTasks()) -> dict:
@@ -311,64 +197,77 @@ async def update_task(task_id: str = Path(..., min_length=1, max_length=100), da
     Card movement now uses LangGraph's /langgraph/resume endpoint for human gate decisions.
     This endpoint handles expiration extension and column movement via Supabase.
     """
-    store = get_run_store()
-    if not store:
-        raise HTTPException(503, "Store not available")
+    try:
+        sb = _get_supabase()
 
-    run = store.load(task_id)
-    if not run:
-        raise HTTPException(404, f"Task {task_id} not found")
+        # Load current card for the response
+        result = sb.table("kanban_cards").select("*").eq("id", task_id).maybe_single().execute()
+        if not result.data:
+            raise HTTPException(404, f"Task {task_id} not found")
 
-    if data.stage is not None:
-        # Move card to new column via Supabase
-        try:
-            from packages.core.supabase_client import get_supabase
-            sb = get_supabase()
-            sb.table("kanban_cards").update({
-                "column_index": data.stage,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", task_id).execute()
+        update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
+
+        if data.stage is not None:
+            update_data["column_index"] = data.stage
             logger.info(f"kanban_card_moved: task={task_id} to_column={data.stage}")
-        except Exception as e:
-            logger.warning(f"kanban_card_move_failed: {e}")
 
-    # Handle expiration extension
-    if data.extend_expiration:
-        try:
-            from packages.core.supabase_client import get_supabase
-            sb = get_supabase()
+        # Handle expiration extension
+        if data.extend_expiration:
             new_expiration = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
-            sb.table("kanban_cards").update({
-                "expires_at": new_expiration,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", task_id).execute()
-        except Exception as e:
-            raise HTTPException(500, f"Failed to extend expiration: {e}")
+            update_data["expires_at"] = new_expiration
 
-    return _run_to_kanban_dict(run)
+        if update_data:
+            sb.table("kanban_cards").update(update_data).eq("id", task_id).execute()
+
+        # Re-fetch the updated card for the response
+        updated = sb.table("kanban_cards").select("*").eq("id", task_id).maybe_single().execute()
+        if not updated.data:
+            raise HTTPException(404, f"Task {task_id} not found after update")
+
+        return _card_to_kanban_dict(updated.data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to update task: {e}")
+
 
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
-    """Soft-delete the underlying pipeline run and associated thoughts.
+    """Soft-delete a kanban card by setting metadata.deleted_at.
 
-    Marks the task as deleted without permanently removing it.
-    Use /hard-delete/{task_id} for permanent removal, or /undo-delete/{task_id} to restore.
+    Marks the card as deleted without permanently removing it.
+    Use POST /tasks/{task_id}/hard-delete for permanent removal,
+    or POST /tasks/undo-delete/{task_id} to restore.
     """
-    store = get_run_store()
-    if not store:
-        raise HTTPException(503, "Store not available")
+    try:
+        sb = _get_supabase()
 
-    run = store.load(task_id)
-    if not run:
-        raise HTTPException(404, f"Task {task_id} not found")
+        # Verify card exists
+        result = sb.table("kanban_cards").select("id,metadata").eq("id", task_id).maybe_single().execute()
+        if not result.data:
+            raise HTTPException(404, f"Task {task_id} not found")
 
-    deleted_at = datetime.now(timezone.utc).isoformat()
-    if hasattr(run, "deleted_at"):
-        run.deleted_at = deleted_at
-    store.save(run)
+        # Soft-delete via metadata
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        metadata = result.data.get("metadata", {}) or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
+        metadata["deleted_at"] = deleted_at
 
-    logger.info(f"kanban_task_soft_deleted: task_id={task_id} deleted_at={deleted_at}")
-    return {"success": True, "deleted_id": task_id, "deleted_at": deleted_at, "mode": "soft"}
+        sb.table("kanban_cards").update({
+            "metadata": metadata,
+            "updated_at": deleted_at,
+        }).eq("id", task_id).execute()
+
+        logger.info(f"kanban_task_soft_deleted: task_id={task_id} deleted_at={deleted_at}")
+        return {"success": True, "deleted_id": task_id, "deleted_at": deleted_at, "mode": "soft"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to soft-delete task: {e}")
 
 
 @router.post("/tasks/{task_id}/soft-delete")
@@ -376,7 +275,7 @@ async def soft_delete_task(task_id: str = Path(..., min_length=1, max_length=100
     """Explicitly soft-delete a kanban task.
 
     Marks the task as deleted without permanently removing it.
-    The task can be restored via /undo-delete/{task_id}.
+    The task can be restored via POST /tasks/undo-delete/{task_id}.
     """
     return await delete_task(task_id)
 
@@ -385,53 +284,75 @@ async def soft_delete_task(task_id: str = Path(..., min_length=1, max_length=100
 async def undo_delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
     """Restore a soft-deleted kanban task.
 
-    Clears the deleted_at timestamp, making the task visible again.
+    Clears the deleted_at timestamp from metadata, making the task visible again.
     """
-    store = get_run_store()
-    if not store:
-        raise HTTPException(503, "Store not available")
+    try:
+        sb = _get_supabase()
 
-    run = store.load(task_id)
-    if not run:
-        raise HTTPException(404, f"Task {task_id} not found")
+        # Load current card
+        result = sb.table("kanban_cards").select("id,metadata").eq("id", task_id).maybe_single().execute()
+        if not result.data:
+            raise HTTPException(404, f"Task {task_id} not found")
 
-    deleted_at = getattr(run, "deleted_at", None)
-    if not deleted_at:
-        raise HTTPException(400, f"Task {task_id} is not soft-deleted")
+        # Check if it's actually soft-deleted
+        metadata = result.data.get("metadata", {}) or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
 
-    run.deleted_at = None
-    store.save(run)
+        previously_deleted_at = metadata.get("deleted_at")
+        if not previously_deleted_at:
+            raise HTTPException(400, f"Task {task_id} is not soft-deleted")
 
-    logger.info(f"kanban_task_undeleted: task_id={task_id}")
-    return {"success": True, "restored_id": task_id, "previously_deleted_at": deleted_at}
+        # Clear the deleted flag
+        del metadata["deleted_at"]
+        sb.table("kanban_cards").update({
+            "metadata": metadata,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", task_id).execute()
+
+        logger.info(f"kanban_task_undeleted: task_id={task_id}")
+        return {"success": True, "restored_id": task_id, "previously_deleted_at": previously_deleted_at}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to undo-delete task: {e}")
 
 
 @router.post("/tasks/{task_id}/hard-delete")
 async def hard_delete_task(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
-    """Permanently delete a kanban task and associated thoughts (irreversible).
+    """Permanently delete a kanban card and associated thoughts (irreversible).
 
     Unlike the default DELETE (soft-delete), this permanently removes
-    the task from storage. Use with caution.
+    the card from storage. Use with caution.
     """
-    store = get_run_store()
-    if not store:
-        raise HTTPException(503, "Store not available")
-
-    run = store.load(task_id)
-    if not run:
-        raise HTTPException(404, f"Task {task_id} not found")
-
-    store.delete(task_id)
-
-    # Also delete associated thoughts via centralized module
     try:
-        from packages.core.thoughts import delete_thoughts_for_card
-        delete_thoughts_for_card(str(task_id))
-    except Exception as e:
-        logger.warning(f"kanban_hard_delete_thoughts_failed: {task_id}: {e}")
+        sb = _get_supabase()
 
-    logger.info(f"kanban_task_hard_deleted: task_id={task_id}")
-    return {"success": True, "deleted_id": task_id, "mode": "hard"}
+        # Verify card exists
+        result = sb.table("kanban_cards").select("id").eq("id", task_id).maybe_single().execute()
+        if not result.data:
+            raise HTTPException(404, f"Task {task_id} not found")
+
+        # Delete from kanban_cards (cascade will delete thoughts via FK)
+        sb.table("kanban_cards").delete().eq("id", task_id).execute()
+
+        # Also delete associated thoughts explicitly via centralized module
+        try:
+            from packages.core.thoughts import delete_thoughts_for_card
+            delete_thoughts_for_card(str(task_id))
+        except Exception as e:
+            logger.warning(f"kanban_hard_delete_thoughts_failed: {task_id}: {e}")
+
+        logger.info(f"kanban_task_hard_deleted: task_id={task_id}")
+        return {"success": True, "deleted_id": task_id, "mode": "hard"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to hard-delete task: {e}")
+
 
 @router.post("/topic-finder")
 async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) -> dict:
@@ -445,8 +366,7 @@ async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) ->
 
     # Create a placeholder kanban card in Column 1 (Topic Finding)
     try:
-        from packages.core.supabase_client import get_supabase
-        sb = get_supabase()
+        sb = _get_supabase()
         sb.table("kanban_cards").insert({
             "id": card_id,
             "title": data.seed_query[:100],
@@ -484,27 +404,46 @@ async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) ->
 
 @router.get("/stats")
 async def get_stats() -> dict:
-    """Get statistics from the RunStore."""
-    store = get_run_store()
-    if not store:
+    """Get statistics from the kanban_cards table."""
+    try:
+        sb = _get_supabase()
+        result = (
+            sb.table("kanban_cards")
+            .select("column_index, status")
+            .order("updated_at", desc=True)
+            .limit(1000)
+            .execute()
+        )
+
+        cards = result.data or []
+        total = len(cards)
+        by_stage = {}
+        by_status = {}
+
+        for card in cards:
+            # Skip soft-deleted cards
+            metadata = card.get("metadata", {}) or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except (json.JSONDecodeError, TypeError):
+                    metadata = {}
+            if metadata.get("deleted_at"):
+                continue
+
+            stage_num = card.get("column_index", 1)
+            by_stage[stage_num] = by_stage.get(stage_num, 0) + 1
+            status = card.get("status", "idle")
+            by_status[status] = by_status.get(status, 0) + 1
+
+        return {
+            "total_tasks": total,
+            "by_stage": by_stage,
+            "by_status": by_status
+        }
+    except Exception as e:
+        logger.error(f"get_stats_failed: {e}")
         return {"total_tasks": 0, "by_stage": {}, "by_status": {}}
-
-    summaries = store.list_runs(limit=1000)
-    total = len(summaries)
-    by_stage = {}
-    by_status = {}
-
-    for s in summaries:
-        stage_num = get_kanban_stage(s.get("current_stage", "trend_analysis"))
-        by_stage[stage_num] = by_stage.get(stage_num, 0) + 1
-        status = s.get("status", "idle")
-        by_status[status] = by_status.get(status, 0) + 1
-
-    return {
-        "total_tasks": total,
-        "by_stage": by_stage,
-        "by_status": by_status
-    }
 
 @router.post("/events")
 async def record_kanban_event(data: KanbanEventRequest) -> dict:
@@ -545,8 +484,7 @@ async def save_card(card_id: str = Path(..., min_length=1, max_length=100)) -> d
     This prevents the 3-hour auto-delete for Column 2 cards.
     """
     try:
-        from packages.core.supabase_client import get_supabase
-        sb = get_supabase()
+        sb = _get_supabase()
         sb.table("kanban_cards").update({"expires_at": None}).eq("id", card_id).execute()
         return {"status": "saved"}
     except Exception as e:
@@ -557,8 +495,7 @@ async def save_card(card_id: str = Path(..., min_length=1, max_length=100)) -> d
 async def extend_card_expiration(task_id: str = Path(..., min_length=1, max_length=100)) -> dict:
     """Extend a card's expiration by 3 hours."""
     try:
-        from packages.core.supabase_client import get_supabase
-        sb = get_supabase()
+        sb = _get_supabase()
 
         # Verify card exists
         result = sb.table("kanban_cards").select("id,expires_at").eq("id", task_id).execute()
@@ -591,8 +528,7 @@ class MoveCardRequest(BaseModel):
 async def move_card(card_id: str = Path(..., min_length=1, max_length=100), body: MoveCardRequest = Body(...)) -> dict:
     """Move a card to a different column."""
     try:
-        from packages.core.supabase_client import get_supabase
-        sb = get_supabase()
+        sb = _get_supabase()
         sb.table("kanban_cards").update({
             "column_index": body.column,
             "updated_at": datetime.now(timezone.utc).isoformat()

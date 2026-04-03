@@ -6,8 +6,9 @@ _proxy_client → http://localhost:4000  (FreeRouter LLM proxy, still separate)
 FreeRouter web (:8080) is gone — chat and providers now use freerouter
 internals directly.
 
-REMOVED (Phase 3 dead code cleanup):
-    get_pipeline_runner() — PipelineRunner is deprecated, use LangGraph endpoints.
+REMOVED (Phase 3-5 dead code cleanup):
+    get_pipeline_runner() — PipelineRunner deleted in Phase 5.
+    get_run_store() — RunStore deleted in Phase 5; kanban_routes.py now uses kanban_cards directly.
 """
 
 from __future__ import annotations
@@ -25,14 +26,6 @@ async def get_proxy_client() -> httpx.AsyncClient:
             timeout=60.0,
         )
     return _proxy_client
-
-
-def get_run_store():
-    try:
-        from packages.pipeline.state import RunStore
-        return RunStore()
-    except ImportError:
-        return None
 
 
 def get_memory_client():

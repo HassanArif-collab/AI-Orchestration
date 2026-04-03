@@ -77,7 +77,12 @@ class MasterOrchestrator:
         asyncio.create_task(self._trigger_pipeline(cycle.cycle_id, selected_topic))
 
     async def _trigger_pipeline(self, cycle_id: str, topic: TopicBrief) -> None:
-        """Start a PipelineRunner for this production cycle."""
+        """Start a PipelineRunner for this production cycle.
+
+        NOTE: PipelineRunner was removed in Phase 5. This is now a no-op stub.
+        The scheduler.py trigger_production_cycle() still calls this but it
+        does nothing since the LangGraph system handles pipeline execution.
+        """
         try:
             from packages.pipeline.runner import PipelineRunner
             runner = PipelineRunner()
@@ -89,6 +94,8 @@ class MasterOrchestrator:
                 logger.info(f"pipeline_paused_at_gate | cycle={cycle_id} run={run.run_id} gate={gate.value}")
             else:
                 logger.info(f"pipeline_completed | cycle={cycle_id} run={run.run_id}")
+        except ImportError:
+            logger.debug(f"pipeline_trigger_skipped | cycle={cycle_id} (PipelineRunner removed in Phase 5)")
         except Exception as e:
             logger.error(f"pipeline_trigger_failed: {e} cycle={cycle_id}")
         
