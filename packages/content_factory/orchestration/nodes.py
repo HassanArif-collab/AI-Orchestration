@@ -162,7 +162,7 @@ Output ONLY valid JSON array, no markdown."""
             response = await router.complete_text(
                 prompt,
                 system="You are a documentary topic researcher. Output ONLY valid JSON.",
-                model="openrouter/google/gemini-2.0-flash-001"
+                model="topic_finder"
             )
         
         # Parse JSON response
@@ -541,7 +541,7 @@ Output ONLY the script narration text. Keep it conversational, active voice, and
             draft = await router.complete_text(
                 prompt,
                 system="You are a documentary scriptwriter. Write engaging, conversational narration.",
-                model="groq/llama-3.3-70b-versatile"
+                model="script_writer"
             )
         
         await report_thought(
@@ -698,7 +698,7 @@ Category question counts: structure=8, hook=6, clarity=8, engagement=7, credibil
             response = await router.complete_text(
                 prompt,
                 system="You are a strict script evaluator. Return ONLY valid JSON.",
-                model="groq/llama-3.3-70b-versatile",
+                model="scorer",
                 temperature=0.0
             )
 
@@ -786,7 +786,7 @@ Output the improved script narration text only."""
             challenger_draft = await router.complete_text(
                 prompt,
                 system="You are a script improvement specialist. Output improved script only.",
-                model="groq/llama-3.3-70b-versatile"
+                model="challenger"
             )
         
         await report_thought(
@@ -911,7 +911,7 @@ Add visual directions to each section."""
             annotated = await router.complete_text(
                 prompt,
                 system="You are a video director. Output ONLY visual notes in plain text. NO JSON.",
-                model="ollama/llama3.2"
+                model="annotator"
             )
         
         await report_thought(

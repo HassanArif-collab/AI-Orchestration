@@ -195,7 +195,7 @@ class TestChatModels:
     @pytest.mark.asyncio
     async def test_models_500_on_import_error(self, client):
         """Should return 500 when freerouter not available."""
-        with patch.dict("sys.modules", {"freerouter.router": None}):
+        with patch.dict("sys.modules", {"freerouter.config": None}):
             # Since _fr() uses lazy import, we just verify the endpoint exists
             # It will 500 if freerouter is not installed
             resp = await client.get("/api/chat/models")

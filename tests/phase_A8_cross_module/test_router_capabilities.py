@@ -28,11 +28,11 @@ class TestCapabilityModels:
 
     def test_research_capability(self):
         from packages.router.capabilities import CAPABILITY_MODELS
-        assert CAPABILITY_MODELS["research"] == "groq/llama-3.3-70b-versatile"
+        assert CAPABILITY_MODELS["research"] == "openrouter/stepfun/step-3.5-flash:free"
 
     def test_scripting_capability(self):
         from packages.router.capabilities import CAPABILITY_MODELS
-        assert CAPABILITY_MODELS["scripting"] == "openrouter/stepfun/step-3.5-flash:free"
+        assert CAPABILITY_MODELS["scripting"] == "openrouter/qwen/qwen3.6-plus:free"
 
 
 class TestLoadOverrides:
@@ -82,7 +82,7 @@ class TestGetModelForCapability:
     def test_known_capability(self, mock_load):
         from packages.router.capabilities import get_model_for_capability
         model = get_model_for_capability("research")
-        assert model == "groq/llama-3.3-70b-versatile"
+        assert model == "openrouter/stepfun/step-3.5-flash:free"
 
     @patch("packages.router.capabilities._load_overrides", return_value={})
     def test_unknown_capability_falls_back_to_auto(self, mock_load):
@@ -95,6 +95,7 @@ class TestGetModelForCapability:
     def test_override_wins_over_default(self, mock_load):
         from packages.router.capabilities import get_model_for_capability
         model = get_model_for_capability("research")
+        # Override from capabilities.yaml takes priority over ROUTES default
         assert model == "custom/override-model"
 
     @patch("packages.router.capabilities._load_overrides", return_value={})

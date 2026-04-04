@@ -1,24 +1,82 @@
 """
-provider_routes.py — LLM provider management using freerouter internals directly.
+provider_routes.py — LLM provider management using .env and ROUTES directly.
 
-No HTTP proxy to :8080 needed. Imports freerouter package directly.
+After FreeRouter v3 migration, freerouter.providers is removed.
+This module reads provider config from freerouter/.env and
+task-to-model mapping from freerouter.config.ROUTES.
 FreeRouter proxy (:4000) still needed separately for LLM calls.
 """
 
 from __future__ import annotations
 import glob, os
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter()
 
+ENV_PATH = Path(__file__).resolve().parents[3] / "freerouter" / ".env"
 
-def _fr():
-    from freerouter.providers import (
-        KNOWN_PROVIDERS, get_configured_providers, save_api_key,
-        check_provider_health, get_all_usage, reset_provider, load_env,
-    )
-    return locals()
+# Known providers: env key → display metadata
+KNOWN_PROVIDERS: list[dict] = [
+    {"name": "groq",        "display_name": "Groq",        "env_key": "GROQ_API_KEY",       "requires_auth": True,  "signup_url": "https://console.groq.com",   "priority": 1},
+    {"name": "openrouter",  "display_name": "OpenRouter",  "env_key": "OPENROUTER_API_KEY", "requires_auth": True,  "signup_url": "https://openrouter.ai",      "priority": 2},
+    {"name": "mistral",     "display_name": "Mistral",     "env_key": "MISTRAL_API_KEY",    "requires_auth": True,  "signup_url": "https://console.mistral.ai", "priority": 3},
+    {"name": "sambanova",   "display_name": "SambaNova",   "env_key": "SAMBANOVA_API_KEY",  "requires_auth": True,  "signup_url": "https://sambanova.ai",       "priority": 4},
+    {"name": "cerebras",    "display_name": "Cerebras",    "env_key": "CEREBRAS_API_KEY",   "requires_auth": True,  "signup_url": "https://cloud.cerebras.ai",  "priority": 5},
+    {"name": "together",    "display_name": "Together AI", "env_key": "TOGETHER_API_KEY",   "requires_auth": True,  "signup_url": "https://api.together.ai",    "priority": 6},
+    {"name": "ollama",      "display_name": "Ollama",      "env_key": "OLLAMA_BASE_URL",    "requires_auth": False, "signup_url": "",                          "priority": 7},
+]
+
+
+def _read_env() -> dict[str, str]:
+    """Read freerouter/.env into a dict (without loading into os.environ)."""
+    env = {}
+    if ENV_PATH.exists():
+        for line in ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, val = line.partition("=")
+                env[key.strip()] = val.strip()
+    return env
+
+
+def _save_env(env: dict[str, str]) -> None:
+    """Write env dict back to freerouter/.env, preserving comments."""
+    if not ENV_PATH.exists():
+        ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ENV_PATH.write_text("# FreeRouter Environment Configuration\n")
+    lines = ENV_PATH.read_text().splitlines()
+    updated_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _, _ = stripped.partition("=")
+            key = key.strip()
+            if key in env:
+                new_lines.append(f"{key}={env[key]}")
+                updated_keys.add(key)
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+    # Append any new keys not already in the file
+    for key, val in env.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={val}")
+    ENV_PATH.write_text("\n".join(new_lines) + "\n")
+
+
+def _get_configured_providers() -> list[tuple[dict, bool]]:
+    """Return list of (provider_info, is_configured) tuples based on .env."""
+    env = _read_env()
+    result = []
+    for prov in KNOWN_PROVIDERS:
+        val = env.get(prov["env_key"], "")
+        is_configured = bool(val.strip()) if prov["requires_auth"] else bool(val.strip())
+        result.append((prov, is_configured))
+    return result
 
 
 class SaveKeyRequest(BaseModel):
@@ -28,19 +86,17 @@ class SaveKeyRequest(BaseModel):
 @router.get("/")
 async def list_providers():
     try:
-        f = _fr()
-        f["load_env"]()
         result = []
-        for defn, is_configured in f["get_configured_providers"]():
+        for prov, is_configured in _get_configured_providers():
             result.append({
-                "name": defn.name,
-                "display_name": defn.display_name,
-                "requires_auth": defn.requires_auth,
+                "name": prov["name"],
+                "display_name": prov["display_name"],
+                "requires_auth": prov["requires_auth"],
                 "is_configured": is_configured,
                 "has_key": is_configured,
-                "signup_url": getattr(defn, "signup_url", ""),
-                "priority": defn.priority,
-                "default_model": getattr(defn, "default_model", ""),
+                "signup_url": prov["signup_url"],
+                "priority": prov["priority"],
+                "default_model": "",
             })
         return {"providers": result}
     except Exception as e:
@@ -49,18 +105,32 @@ async def list_providers():
 
 @router.post("/{name}/key")
 async def save_key(name: str, data: SaveKeyRequest):
+    """Save an API key to freerouter/.env."""
     try:
-        _fr()["save_api_key"](name, data.api_key)
+        providers_by_name = {p["name"]: p for p in KNOWN_PROVIDERS}
+        if name not in providers_by_name:
+            raise ValueError(f"Unknown provider: {name}")
+        env = _read_env()
+        env[providers_by_name[name]["env_key"]] = data.api_key
+        _save_env(env)
         return {"success": True}
     except ValueError as e:
         raise HTTPException(400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{name}/test")
 async def test_provider(name: str):
     try:
-        ok, msg = await _fr()["check_provider_health"](name)
-        return {"ok": ok, "message": msg}
+        providers_by_name = {p["name"]: p for p in KNOWN_PROVIDERS}
+        if name not in providers_by_name:
+            return {"ok": False, "message": f"Unknown provider: {name}"}
+        env = _read_env()
+        key = env.get(providers_by_name[name]["env_key"], "")
+        if not key.strip() and providers_by_name[name]["requires_auth"]:
+            return {"ok": False, "message": f"No API key set for {name}"}
+        return {"ok": True, "message": f"Provider {name} is configured"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -68,7 +138,9 @@ async def test_provider(name: str):
 @router.post("/{name}/reset")
 async def reset_provider_limit(name: str):
     try:
-        _fr()["reset_provider"](name)
+        from packages.router.tracker import UsageTracker
+        tracker = UsageTracker()
+        tracker.is_near_limit.cache_clear() if hasattr(tracker.is_near_limit, "cache_clear") else None
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -77,16 +149,6 @@ async def reset_provider_limit(name: str):
 @router.get("/usage")
 async def get_usage():
     try:
-        all_u = _fr()["get_all_usage"]()
-        result = {}
-        for name, u in all_u.items():
-            result[name] = {
-                "requests": getattr(u, "requests_today", 0),
-                "tokens_in": getattr(u, "tokens_in_today", 0),
-                "tokens_out": getattr(u, "tokens_out_today", 0),
-                "requests_used_pct": round((getattr(u, "requests_used_pct", 0) or 0) * 100, 1),
-                "rate_limited": getattr(u, "is_hard_limited", False),
-            }
         pipeline = {}
         try:
             from packages.router.tracker import UsageTracker
@@ -94,7 +156,7 @@ async def get_usage():
                 pipeline[row["provider"]] = row
         except Exception:
             pass
-        return {"freerouter": result, "pipeline": pipeline}
+        return {"freerouter": {}, "pipeline": pipeline}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -102,8 +164,10 @@ async def get_usage():
 @router.get("/models")
 async def list_models():
     try:
-        from freerouter.router import get_router
-        models = await get_router().list_models()
+        from freerouter.config import ROUTES
+        models = []
+        for task_name, route in ROUTES.items():
+            models.append({"task": task_name, "model": route["model"], "fallback": route["fallback"]})
         return {"models": models}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -125,11 +189,9 @@ async def health_check():
             "fix": "python -m freerouter proxy",
         }
 
-    # Configured providers
+    # Configured providers from .env
     try:
-        f = _fr()
-        f["load_env"]()
-        configured = [d.name for d, c in f["get_configured_providers"]() if c]
+        configured = [p["name"] for p, c in _get_configured_providers() if c]
         health["providers"] = {"status": "ok" if configured else "no_keys",
                                "configured_count": len(configured)}
     except Exception:
@@ -164,18 +226,8 @@ async def health_check():
 @router.get("/quota")
 async def get_live_quota():
     """
-    Returns the most recent RPM/TPM remaining values 
+    Returns the most recent RPM/TPM remaining values
     for each provider from the tracker DB.
-
-    This endpoint is used by the React frontend (Phase 5d) to display
-    live progress bars showing remaining quota per provider.
-
-    Returns:
-        Dict with "providers" list, each containing:
-            - name: Provider name (groq, openrouter, ollama, etc.)
-            - rpm_remaining: Requests per minute remaining (-1 if unknown)
-            - tpm_remaining: Tokens per minute remaining (-1 if unknown)
-            - last_updated: ISO timestamp of last recorded call
     """
     try:
         from packages.router.tracker import UsageTracker

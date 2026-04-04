@@ -588,7 +588,7 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
             response = await self._router.complete_text(
                 prompt,
                 system=SYSTEM_DIMENSION_EXTRACTOR,
-                model="openrouter/google/gemini-1.5-pro",  # Gemini for massive research context
+                model="researcher",  # Gemini for massive research context
                 max_tokens=500,
             )
 

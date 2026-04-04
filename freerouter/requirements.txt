@@ -1,19 +1,8 @@
-# Web server
-fastapi>=0.100.0
-uvicorn>=0.20.0
+# FreeRouter minimal dependencies (v3)
+# These are already installed by the root project (pyproject.toml)
+# Listed here for standalone/documentation purposes:
 
-# HTTP client (direct provider calls)
-httpx>=0.24.0
-
-# Data validation
-pydantic>=2.0.0
-
-# Environment variable management
-python-dotenv>=1.0.0
-
-# YAML config
-pyyaml>=6.0
-
-# CLI
-typer>=0.9.0
-rich>=13.0.0
+litellm>=1.52.0      # LLM routing (from crewai-deps)
+fastapi>=0.111.0     # Web framework (from main deps)
+uvicorn>=0.29.0      # ASGI server (from main deps)
+python-dotenv>=1.1.0 # Environment variables (from main deps)

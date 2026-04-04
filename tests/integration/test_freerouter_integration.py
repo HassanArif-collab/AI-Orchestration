@@ -370,105 +370,66 @@ class TestDirectCerebrasInvalidKey:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B. Provider System Tests (unit-level)
+# B. Route Configuration Tests (unit-level)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestProviderSystem:
-    """Test FreeRouter provider definitions and configuration."""
+class TestRouteConfiguration:
+    """Test freerouter.config.ROUTES task-to-model routing table."""
 
-    def test_get_configured_providers_structure(self):
-        """get_configured_providers returns list of (ProviderDefinition, bool) tuples."""
-        from freerouter.providers import get_configured_providers
+    def test_routes_has_expected_task_names(self):
+        """ROUTES contains all expected task names."""
+        from freerouter.config import ROUTES
 
-        result = get_configured_providers()
-        assert isinstance(result, list)
-        assert len(result) > 0
-        for item in result:
-            assert isinstance(item, tuple) and len(item) == 2
-            defn, is_configured = item
-            assert hasattr(defn, "name")
-            assert hasattr(defn, "base_url")
-            assert hasattr(defn, "priority")
-            assert isinstance(is_configured, bool)
+        expected = ["auto", "researcher", "topic_finder", "script_writer",
+                     "scorer", "challenger", "annotator"]
+        for task_name in expected:
+            assert task_name in ROUTES, f"ROUTES missing task '{task_name}'"
 
-    def test_at_least_seven_providers_configured(self):
-        """At least 7 providers should show as configured with real API keys.
+    def test_each_route_has_model_and_fallback(self):
+        """Every route entry has 'model' and 'fallback' keys."""
+        from freerouter.config import ROUTES
 
-        The freerouter/.env has keys for: Groq, OpenRouter, Mistral, SambaNova,
-        Cerebras, APIFreeLLM, Z.AI = 7 providers. Ollama is local (no auth needed).
+        for task_name, route in ROUTES.items():
+            assert "model" in route, f"Route '{task_name}' missing 'model' key"
+            assert "fallback" in route, f"Route '{task_name}' missing 'fallback' key"
+            assert isinstance(route["model"], str) and len(route["model"]) > 0
+            assert isinstance(route["fallback"], str) and len(route["fallback"]) > 0
+
+    def test_all_model_strings_have_provider_slash_format(self):
+        """All model strings contain a '/' (provider/model format)."""
+        from freerouter.config import ROUTES
+
+        for task_name, route in ROUTES.items():
+            for key in ("model", "fallback"):
+                model_str = route[key]
+                assert "/" in model_str, (
+                    f"Route '{task_name}.{key}' = '{model_str}' missing provider/ prefix"
+                )
+
+    def test_env_file_exists(self):
+        """freerouter/.env file exists."""
+        env_path = REPO_ROOT / "freerouter" / ".env"
+        assert env_path.exists(), f"freerouter/.env not found at {env_path}"
+
+    def test_at_least_one_api_key_set(self):
+        """At least GROQ_API_KEY or OPENROUTER_API_KEY is set in the environment.
+
+        The system requires at least one LLM provider API key to function.
         """
-        from freerouter.providers import get_configured_providers
-
-        result = get_configured_providers()
-        configured = [defn.name for defn, is_configured in result if is_configured]
-        assert len(configured) >= 7, (
-            f"Expected >=7 configured providers, got {len(configured)}: {configured}"
+        env_path = REPO_ROOT / "freerouter" / ".env"
+        env_content = env_path.read_text()
+        has_groq = bool(os.getenv("GROQ_API_KEY", "").strip()) or \
+                   "GROQ_API_KEY=" in env_content and "GROQ_API_KEY=$" not in env_content
+        has_openrouter = bool(os.getenv("OPENROUTER_API_KEY", "").strip()) or \
+                         "OPENROUTER_API_KEY=" in env_content and "OPENROUTER_API_KEY=$" not in env_content
+        assert has_groq or has_openrouter, (
+            "At least GROQ_API_KEY or OPENROUTER_API_KEY must be set"
         )
 
-    def test_all_expected_providers_exist(self):
-        """All 13 expected providers are present in KNOWN_PROVIDERS."""
-        from freerouter.providers import KNOWN_PROVIDERS
-
-        expected = [
-            "ollama", "groq", "openrouter", "together", "mistral",
-            "sambanova", "deepinfra", "cerebras", "openai", "github",
-            "anthropic", "apifreellm", "zai",
-        ]
-        actual = [p.name for p in KNOWN_PROVIDERS]
-        for name in expected:
-            assert name in actual, f"Provider '{name}' missing from KNOWN_PROVIDERS"
-
-    def test_default_models_cover_all_providers(self):
-        """DEFAULT_MODELS has entries for all providers in KNOWN_PROVIDERS."""
-        from freerouter.providers import KNOWN_PROVIDERS, DEFAULT_MODELS
-
-        provider_names = {p.name for p in KNOWN_PROVIDERS}
-        model_keys = set(DEFAULT_MODELS.keys())
-        missing = provider_names - model_keys
-        assert not missing, f"DEFAULT_MODELS missing: {missing}"
-
-    def test_provider_timeout_configuration(self):
-        """get_provider_timeouts returns positive (connect, read) tuple."""
-        from freerouter.providers import get_provider_timeouts, PROVIDER_MAP
-
-        for name in ["groq", "openrouter", "cerebras", "sambanova", "mistral"]:
-            if name in PROVIDER_MAP:
-                connect, read = get_provider_timeouts(name)
-                assert isinstance(connect, (int, float)) and connect > 0
-                assert isinstance(read, (int, float)) and read > 0
-
-        # Unknown provider returns valid defaults
-        connect, read = get_provider_timeouts("nonexistent_provider")
-        assert connect > 0 and read > 0
-
-    def test_providers_sorted_by_priority(self):
-        """get_configured_providers returns providers sorted by priority (ascending)."""
-        from freerouter.providers import get_configured_providers
-
-        result = get_configured_providers()
-        priorities = [defn.priority for defn, _ in result]
-        assert priorities == sorted(priorities), (
-            f"Providers not sorted by priority: {priorities}"
-        )
-
-    def test_provider_base_urls_are_valid(self):
-        """Every provider base_url starts with https:// or http://."""
-        from freerouter.providers import KNOWN_PROVIDERS
-
-        for defn in KNOWN_PROVIDERS:
-            assert defn.base_url.startswith(("https://", "http://")), (
-                f"Provider {defn.name} has invalid base_url: {defn.base_url}"
-            )
-
-    def test_provider_env_keys_are_set(self):
-        """All env_key values are uppercase with no spaces."""
-        from freerouter.providers import KNOWN_PROVIDERS
-
-        for defn in KNOWN_PROVIDERS:
-            assert defn.env_key == defn.env_key.upper(), (
-                f"{defn.name}: env_key '{defn.env_key}' not uppercase"
-            )
-            assert " " not in defn.env_key
+    def test_routes_are_non_empty(self):
+        """ROUTES dict is not empty."""
+        from freerouter.config import ROUTES
+        assert len(ROUTES) >= 7, f"Expected >=7 routes, got {len(ROUTES)}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -478,22 +439,22 @@ class TestProviderSystem:
 class TestCapabilities:
     """Test model capability mapping."""
 
-    def test_research_returns_groq(self):
-        """research capability maps to groq/llama-3.3-70b-versatile."""
+    def test_research_returns_openrouter(self):
+        """research capability maps to openrouter/stepfun/step-3.5-flash:free via researcher route."""
         result = get_model_for_capability("research")
-        assert result == "groq/llama-3.3-70b-versatile", (
-            f"Expected groq/llama-3.3-70b-versatile, got {result}"
+        assert result == "openrouter/stepfun/step-3.5-flash:free", (
+            f"Expected openrouter/stepfun/step-3.5-flash:free, got {result}"
         )
 
     def test_scripting_returns_openrouter(self):
-        """scripting capability maps to openrouter step model."""
+        """scripting capability maps to openrouter qwen model via script_writer route."""
         result = get_model_for_capability("scripting")
-        assert result == "openrouter/stepfun/step-3.5-flash:free"
+        assert result == "openrouter/qwen/qwen3.6-plus:free"
 
     def test_creative_returns_openrouter(self):
-        """creative capability maps to openrouter step model."""
+        """creative capability maps to openrouter qwen model via topic_finder route."""
         result = get_model_for_capability("creative")
-        assert result == "openrouter/stepfun/step-3.5-flash:free"
+        assert result == "openrouter/qwen/qwen3.6-plus:free"
 
     def test_unknown_capability_returns_auto(self):
         """Unknown capability returns 'auto'."""
@@ -513,9 +474,9 @@ class TestCapabilities:
             assert model != "auto", f"Known capability '{cap}' should not return 'auto'"
 
     def test_seo_capability(self):
-        """seo capability maps to groq model."""
+        """seo capability maps to groq model via scorer route."""
         result = get_model_for_capability("seo")
-        assert "groq" in result
+        assert result == "groq/compound-beta-mini"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
