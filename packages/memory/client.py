@@ -217,7 +217,7 @@ class AsyncZepMemoryClient:
             return OperationResult.fail(
                 message="Zep API key not configured. Memory search is unavailable.",
                 code="ZEP_UNAVAILABLE",
-                severity=ErrorSeverity.warning,
+                severity=ErrorSeverity.WARNING,
                 user_message="Memory service is not configured. Topic discovery will use fallback mode.",
             )
 
@@ -260,7 +260,7 @@ class AsyncZepMemoryClient:
             return OperationResult.fail(
                 message=f"Zep memory search failed after all retries: {e}",
                 code="ZEP_UNAVAILABLE",
-                severity=ErrorSeverity.warning,
+                severity=ErrorSeverity.WARNING,
                 user_message="Memory service is temporarily unavailable. Using fallback discovery mode.",
                 retryable=True,
                 details={"session_id": session_id, "query": query[:100]},
@@ -281,7 +281,7 @@ class AsyncZepMemoryClient:
             return OperationResult.fail(
                 message=f"Zep memory search failed: {e}",
                 code="ZEP_UNAVAILABLE",
-                severity=ErrorSeverity.warning,
+                severity=ErrorSeverity.WARNING,
                 user_message="Memory search encountered an error. Using fallback mode.",
                 retryable=True,
                 details={"session_id": session_id, "query": query[:100]},

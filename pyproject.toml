@@ -103,4 +103,7 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "tests/phase_A0_bootstrap"]
+testpaths = ["tests", "tests/phase_A0_bootstrap", "tests/integration"]
+markers = [
+    "integration: tests requiring real services and .env credentials",
+]
