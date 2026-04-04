@@ -403,7 +403,7 @@ async def research_node(state: ProductionState) -> dict:
     If a fresh dossier exists (<24hr), skip re-scraping.
     If not, scrape and save a NEW dossier (dossiers accumulate, never overwrite).
     
-    Uses model: openrouter/google/gemini-1.5-pro (Phase 3)
+    Uses model: researcher
     """
     card_id = state.get("card_id", "unknown")
     topic_brief = state.get("topic_brief", {})
@@ -489,7 +489,7 @@ async def draft_node(state: ProductionState) -> dict:
       - Uses evaluation_feedback or human_feedback to guide rewrite
       - Research dossier and learnings still available
     
-    Uses model: groq/llama-3.3-70b-versatile (Phase 3)
+    Uses model: script_writer
     """
     card_id = state.get("card_id", "unknown")
     topic_brief = state.get("topic_brief", {})
@@ -583,7 +583,7 @@ async def score_node(state: ProductionState) -> dict:
     Also tracks best_draft: if this score beats the previous best,
     save this draft as the new best.
     
-    Uses model: groq/llama-3.3-70b-versatile (Phase 3)
+    Uses model: scorer
     """
     card_id = state.get("card_id", "unknown")
     draft = state.get("current_draft", "")
@@ -750,7 +750,7 @@ async def mutate_node(state: ProductionState) -> dict:
     The Challenger Generator: takes the current draft + scorer feedback,
     mutates the WEAKEST sections to produce a challenger draft.
     
-    Uses model: groq/llama-3.3-70b-versatile (Phase 3)
+    Uses model: challenger
     """
     card_id = state.get("card_id", "unknown")
     draft = state.get("current_draft", "")
@@ -878,7 +878,7 @@ async def visual_node(state: ProductionState) -> dict:
     From Phase 2d: Output is flowing text with labels like [B-ROLL], [MAP], [DATA], [SOUND].
     NO JSON. Just human-readable suggestions for a video editor.
     
-    Uses model: ollama/llama3.2 (Phase 3 — simple task, save cloud tokens)
+    Uses model: annotator
     """
     card_id = state.get("card_id", "unknown")
     draft = state.get("current_draft", "")

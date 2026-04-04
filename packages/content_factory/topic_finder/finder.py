@@ -187,7 +187,7 @@ class TopicFinderAgent:
                 response = await router.complete_text(
                     prompt, 
                     system="Output only valid JSON.",
-                    model="openrouter/google/gemini-2.0-flash-001"  # Gemini Flash for fast topic discovery
+                    model="topic_finder"
                 )
                 
                 try:
@@ -282,7 +282,7 @@ class TopicFinderAgent:
         resp = await router.complete_text(
             prompt, 
             system="You are a strict viability tester. Return ONLY valid JSON boolean mapping.",
-            model="openrouter/google/gemini-2.0-flash-001"  # Gemini Flash for 17-question grading
+            model="topic_finder"
         )
         try:
             res_data = json.loads(resp.strip("` \n").removeprefix("json\n"))
@@ -368,7 +368,7 @@ Answer JSON:
                         resp = await router.complete_text(
                             prompt, 
                             system="Return only valid JSON.",
-                            model="openrouter/google/gemini-2.0-flash-001"  # Gemini Flash for adaptation mapping
+                            model="topic_finder"
                         )
                         import re
                         match = re.search(r'\{.*\}', resp, re.DOTALL)

@@ -117,19 +117,8 @@ def install_dependencies():
 
 def pull_ollama_models():
     """Pull recommended Ollama models."""
-    print("\nRecommended Ollama models:")
-    print("  - qwen2.5:7b       (fast chat)")
-    print("  - qwen2.5:14b     (smart chat)")
-    print("  - qwen2.5-coder:32b (coding)")
-    print("  - llama3.2-vision:11b (vision)")
-
-    choice = input("\nPull recommended models now? (y/N): ").strip().lower()
-    if choice == 'y':
-        models = ["qwen2.5:7b", "qwen2.5-coder:32b"]
-        for model in models:
-            print(f"Pulling {model}...")
-            subprocess.run(["ollama", "pull", model], check=False)
-        print("✓ Models pulled")
+    print("\nOllama is optional — v3 routes through OpenRouter and Groq.")
+    print("If you want local models, run: ollama pull qwen2.5:7b")
 
 
 def start_server():
@@ -139,12 +128,10 @@ def start_server():
     print("=" * 60)
     print("\nServer will be available at: http://localhost:4000")
     print("API endpoint: http://localhost:4000/v1/chat/completions")
-    print("Documentation: http://localhost:4000/docs")
+    print("Health check:  http://localhost:4000/health")
     print("\nPress Ctrl+C to stop\n")
 
-    # Import and run
-    from freerouter.cli import app
-    app(["start"])
+    subprocess.run([sys.executable, "-m", "freerouter"])
 
 
 def main():

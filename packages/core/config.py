@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     PIPELINE_DEV_MODE: bool = False
 
     # ─── LLM Model Selection ──────────────────────────────────────────────
-    CHAT_MODEL: str = "openrouter/google/gemini-2.0-flash-001"
+    CHAT_MODEL: str = "auto"
 
     # External integrations
     YOUTUBE_API_KEY: str = ""

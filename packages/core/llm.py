@@ -59,7 +59,7 @@ def freerouter_llm(
     ----------
     model:
         Model identifier recognised by FreeRouter (e.g. ``"gpt-4o-mini"``,
-        ``"openrouter/google/gemini-2.0-flash-001"``).  Falls back to
+        ``"auto"``).  Falls back to
         ``"default"`` which lets FreeRouter pick an available provider.
     temperature:
         Sampling temperature (0.0 – 2.0). Stored but not directly used —

@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """
-FreeRouter Example Usage
+FreeRouter v3 Example Usage
 
-This file demonstrates how to use FreeRouter with OpenAI SDK.
-Make sure FreeRouter is running: freerouter start
+Demonstrates how to use FreeRouter with the OpenAI SDK.
+Make sure FreeRouter is running: python -m freerouter
 """
 
 import os
 import sys
 
-# You can also set these as environment variables
-os.environ.setdefault("OPENAI_API_KEY", "any_key")  # FreeRouter doesn't require this
+os.environ.setdefault("OPENAI_API_KEY", "any_key")
 os.environ.setdefault("OPENAI_BASE_URL", "http://localhost:4000/v1")
 
 from openai import OpenAI
 
 
 def example_basic_chat():
-    """Basic chat completion example."""
+    """Basic chat using auto route."""
     print("\n" + "=" * 60)
-    print("Example 1: Basic Chat")
+    print("Example 1: Basic Chat (auto route)")
     print("=" * 60)
 
     client = OpenAI(
@@ -28,7 +27,7 @@ def example_basic_chat():
     )
 
     response = client.chat.completions.create(
-        model="free-router/fast",
+        model="auto",
         messages=[
             {"role": "user", "content": "What is the capital of France?"}
         ]
@@ -38,10 +37,10 @@ def example_basic_chat():
     print(f"Answer: {response.choices[0].message.content}")
 
 
-def example_coding():
-    """Code generation example."""
+def example_script_writing():
+    """Script writing example."""
     print("\n" + "=" * 60)
-    print("Example 2: Code Generation")
+    print("Example 2: Script Writing")
     print("=" * 60)
 
     client = OpenAI(
@@ -50,20 +49,20 @@ def example_coding():
     )
 
     response = client.chat.completions.create(
-        model="free-router/coder",
+        model="script_writer",
         messages=[
-            {"role": "user", "content": "Write a Python function to implement binary search"}
+            {"role": "user", "content": "Write a YouTube intro about black holes (2 paragraphs)"}
         ]
     )
 
-    print("Question: Write a Python function to implement binary search")
+    print("Question: Write a YouTube intro about black holes")
     print(f"\n{response.choices[0].message.content}")
 
 
-def example_auto_routing():
-    """Auto-routing example - let FreeRouter choose the model."""
+def example_scoring():
+    """Content scoring example."""
     print("\n" + "=" * 60)
-    print("Example 3: Auto-Routing")
+    print("Example 3: Content Scoring")
     print("=" * 60)
 
     client = OpenAI(
@@ -71,25 +70,43 @@ def example_auto_routing():
         api_key="any_key"
     )
 
-    test_messages = [
-        "What's the weather like today?",  # simple_chat -> fast
-        "Write a function to sort a list",  # coding -> coder
-        "If x + 5 = 15, what is x?",       # reasoning -> reasoning
-    ]
+    response = client.chat.completions.create(
+        model="scorer",
+        messages=[
+            {"role": "user", "content": "Rate this script on a scale of 1-10 and explain why:\n\nBlack holes are cool. They eat stars."}
+        ]
+    )
 
-    for msg in test_messages:
-        response = client.chat.completions.create(
-            model="free-router/auto",  # Auto-select model
-            messages=[{"role": "user", "content": msg}]
-        )
-        print(f"\nUser: {msg}")
-        print(f"Response: {response.choices[0].message.content[:100]}...")
+    print("Question: Rate a sample script")
+    print(f"\n{response.choices[0].message.content}")
+
+
+def example_topic_finding():
+    """Topic finding example."""
+    print("\n" + "=" * 60)
+    print("Example 4: Topic Finding")
+    print("=" * 60)
+
+    client = OpenAI(
+        base_url="http://localhost:4000/v1",
+        api_key="any_key"
+    )
+
+    response = client.chat.completions.create(
+        model="topic_finder",
+        messages=[
+            {"role": "user", "content": "Suggest 5 trending YouTube topics about artificial intelligence in 2025"}
+        ]
+    )
+
+    print("Question: Suggest 5 trending AI topics")
+    print(f"\n{response.choices[0].message.content}")
 
 
 def example_streaming():
     """Streaming response example."""
     print("\n" + "=" * 60)
-    print("Example 4: Streaming")
+    print("Example 5: Streaming")
     print("=" * 60)
 
     client = OpenAI(
@@ -101,7 +118,7 @@ def example_streaming():
     print("\nResponse (streaming):\n")
 
     stream = client.chat.completions.create(
-        model="free-router/fast",
+        model="auto",
         messages=[
             {"role": "user", "content": "Tell me a short story about a robot (3 sentences)"}
         ],
@@ -114,10 +131,10 @@ def example_streaming():
     print()
 
 
-def example_conversation():
-    """Multi-turn conversation example."""
+def example_annotator():
+    """Annotator example — generates visual cues."""
     print("\n" + "=" * 60)
-    print("Example 5: Multi-Turn Conversation")
+    print("Example 6: Visual Annotation")
     print("=" * 60)
 
     client = OpenAI(
@@ -125,56 +142,37 @@ def example_conversation():
         api_key="any_key"
     )
 
-    messages = [
-        {"role": "system", "content": "You are a helpful coding assistant."},
-        {"role": "user", "content": "What is a linked list?"},
-    ]
-
     response = client.chat.completions.create(
-        model="free-router/smart",
-        messages=messages
+        model="annotator",
+        messages=[
+            {"role": "user", "content": "Generate a one-sentence visual cue for: \"The camera zooms into a galaxy\""}
+        ]
     )
 
-    print("User: What is a linked list?")
-    print(f"Assistant: {response.choices[0].message.content[:200]}...")
-
-    # Continue conversation
-    messages.append({"role": "assistant", "content": response.choices[0].message.content})
-    messages.append({"role": "user", "content": "Can you show me how to implement one in Python?"})
-
-    response = client.chat.completions.create(
-        model="free-router/smart",
-        messages=messages
-    )
-
-    print("\nUser: Can you show me how to implement one in Python?")
-    print(f"Assistant: {response.choices[0].message.content[:300]}...")
+    print("Question: Generate visual cue for a galaxy zoom")
+    print(f"\n{response.choices[0].message.content}")
 
 
 def example_list_models():
     """List available models."""
     print("\n" + "=" * 60)
-    print("Example 6: List Available Models")
+    print("Example 7: List Available Models")
     print("=" * 60)
 
     import httpx
 
     response = httpx.get("http://localhost:4000/v1/models")
-    models = response.json()
+    data = response.json()
 
     print("Available models:\n")
-    for model in models.get("data", [])[:10]:
-        model_id = model.get("id", "unknown")
-        print(f"  - {model_id}")
-
-    if len(models.get("data", [])) > 10:
-        print(f"  ... and {len(models['data']) - 10} more")
+    for model in data.get("data", []):
+        print(f"  {model['id']:15s} provider={model['owned_by']:12s} primary={model['primary']}")
 
 
 def example_health_check():
     """Health check example."""
     print("\n" + "=" * 60)
-    print("Example 7: Health Check")
+    print("Example 8: Health Check")
     print("=" * 60)
 
     import httpx
@@ -182,66 +180,30 @@ def example_health_check():
     response = httpx.get("http://localhost:4000/health")
     health = response.json()
 
-    print(f"Status: {health.get('status')}")
+    print(f"Status:  {health.get('status')}")
     print(f"Version: {health.get('version')}")
-
-    providers = health.get("providers", {})
-    for provider, status in providers.items():
-        print(f"  {provider}: {status.get('status')} ({status.get('latency_ms', 0):.1f}ms)")
-
-
-def example_vision():
-    """Vision example (requires vision-capable model and Ollama)."""
-    print("\n" + "=" * 60)
-    print("Example 8: Vision (Image Analysis)")
-    print("=" * 60)
-
-    client = OpenAI(
-        base_url="http://localhost:4000/v1",
-        api_key="any_key"
-    )
-
-    # Example with a URL
-    response = client.chat.completions.create(
-        model="free-router/vision",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What's in this image?"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-                        }
-                    }
-                ]
-            }
-        ]
-    )
-
-    print("Question: What's in this image?")
-    print(f"Answer: {response.choices[0].message.content[:200]}...")
+    print(f"Tasks:   {', '.join(health.get('tasks', []))}")
 
 
 def main():
     """Run all examples."""
     print("""
-╔══════════════════════════════════════════════════════════════╗
-║                  FreeRouter Usage Examples                   ║
-╚══════════════════════════════════════════════════════════════╝
+========================================================
+  FreeRouter v3 Usage Examples
+========================================================
 
-Make sure FreeRouter is running: freerouter start
+Make sure FreeRouter is running:
+  python -m freerouter
 
 Available examples:
-  1. Basic Chat
-  2. Code Generation
-  3. Auto-Routing
-  4. Streaming
-  5. Multi-Turn Conversation
-  6. List Models
-  7. Health Check
-  8. Vision (requires Ollama with vision model)
+  1. Basic Chat (auto route)
+  2. Script Writing
+  3. Content Scoring
+  4. Topic Finding
+  5. Streaming
+  6. Visual Annotation
+  7. List Models
+  8. Health Check
   0. Run all examples
 
 """)
@@ -253,13 +215,13 @@ Available examples:
 
     examples = {
         '1': example_basic_chat,
-        '2': example_coding,
-        '3': example_auto_routing,
-        '4': example_streaming,
-        '5': example_conversation,
-        '6': example_list_models,
-        '7': example_health_check,
-        '8': example_vision,
+        '2': example_script_writing,
+        '3': example_scoring,
+        '4': example_topic_finding,
+        '5': example_streaming,
+        '6': example_annotator,
+        '7': example_list_models,
+        '8': example_health_check,
     }
 
     try:
@@ -274,7 +236,7 @@ Available examples:
     except Exception as e:
         print(f"\nError: {e}")
         print("\nMake sure FreeRouter is running:")
-        print("  freerouter start")
+        print("  python -m freerouter")
         return 1
 
     print("\n" + "=" * 60)

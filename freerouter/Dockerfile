@@ -45,4 +45,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:4000/health || exit 1
 
 # Default command
-CMD ["freerouter", "start", "--host", "0.0.0.0", "--port", "4000"]
+CMD ["python", "-m", "freerouter"]
