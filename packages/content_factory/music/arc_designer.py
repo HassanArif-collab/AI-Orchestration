@@ -37,7 +37,7 @@ class EmotionalArcDesigner:
                 energy_traj[i] = current_energy
                 # Strong anchor -> Peak
                 if i in draft_data.human_character_moments:
-                    peaks.append(RankedPeak(section_index=i, label=section.type, intensity=current_energy, timestamp_estimate=i*60))
+                    peaks.append(RankedPeak(section_index=i, label=section.section_label, intensity=current_energy, timestamp_estimate=i*60))
             
             elif section.section_label == "BRIDGE":
                 # Drop slightly for cognitive plateaus
