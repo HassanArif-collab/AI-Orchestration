@@ -28,7 +28,10 @@ def skip_if_no_env(env_var: str):
     """
     val = os.environ.get(env_var, "")
     if not val:
-        pytest.skip(f"{env_var} not configured in .env — skipping integration test")
+        pytest.skip(
+            f"{env_var} not configured in .env — skipping integration test",
+            allow_module_level=True,
+        )
 
 
 # ---------------------------------------------------------------------------
