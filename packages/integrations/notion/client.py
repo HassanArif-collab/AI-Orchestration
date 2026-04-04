@@ -417,10 +417,16 @@ class NotionScriptClient:
                 "url": page.get("url", ""),
             }
 
-            # Extract title
-            title_prop = page.get("properties", {}).get("title", {})
-            if title_prop.get("title"):
-                result["title"] = title_prop["title"][0].get("text", {}).get("content", "")
+            # Extract title — the column may be named "title", "Video name",
+            # "Name", etc.  Notion identifies the title column by type="title",
+            # so we iterate properties instead of hardcoding a key.
+            properties = page.get("properties", {})
+            for prop_key, prop_val in properties.items():
+                if isinstance(prop_val, dict) and prop_val.get("type") == "title":
+                    rich_texts = prop_val.get("title", [])
+                    if rich_texts:
+                        result["title"] = rich_texts[0].get("text", {}).get("content", "")
+                    break
 
             # Parse blocks into sections
             current_section = None
