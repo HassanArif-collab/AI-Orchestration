@@ -87,7 +87,7 @@ class ExaResearchClient:
                 message="EXA_API_KEY is not set. Add it to your .env file. "
                         "Get a free key from https://dashboard.exa.ai/api-keys",
                 code="EXA_NOT_CONFIGURED",
-                severity=ErrorSeverity.warning,
+                severity=ErrorSeverity.WARNING,
                 user_message="Web search service (Exa) is not configured. Topic discovery will use fallback mode.",
             )
 
@@ -135,7 +135,7 @@ class ExaResearchClient:
             return OperationResult.fail(
                 message=f"Exa search failed: {error_msg}",
                 code="EXA_SEARCH_FAILED",
-                severity=ErrorSeverity.warning,
+                severity=ErrorSeverity.WARNING,
                 user_message="Web search encountered an error. Topic discovery will use fallback mode.",
                 retryable=True,
                 details={"query": query[:100]},

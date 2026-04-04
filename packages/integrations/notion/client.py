@@ -75,7 +75,7 @@ class NotionScriptClient:
             return OperationResult.fail(
                 message="Notion client is not initialized. Check NOTION_API_KEY.",
                 code="NOTION_NOT_CONFIGURED",
-                severity=ErrorSeverity.critical,
+                severity=ErrorSeverity.CRITICAL,
                 user_message="Notion is not configured. Publishing features are unavailable.",
             )
         return OperationResult.ok(None)
@@ -104,7 +104,7 @@ class NotionScriptClient:
             return OperationResult.fail(
                 message=client_check.error_message or "Notion client unavailable",
                 code="NOTION_NOT_CONFIGURED",
-                severity=ErrorSeverity.critical,
+                severity=ErrorSeverity.CRITICAL,
                 user_message="Notion is not configured. Publishing features are unavailable.",
             )
 
@@ -113,7 +113,7 @@ class NotionScriptClient:
             return OperationResult.fail(
                 message="Notion database ID not configured. Set NOTION_DATABASE_ID.",
                 code="NOTION_NOT_CONFIGURED",
-                severity=ErrorSeverity.critical,
+                severity=ErrorSeverity.CRITICAL,
                 user_message="Notion database is not configured. Publishing features are unavailable.",
             )
 
@@ -168,7 +168,7 @@ class NotionScriptClient:
                  return OperationResult.fail(
                     message="Notion client became unavailable during operation.",
                     code="NOTION_NOT_CONFIGURED",
-                    severity=ErrorSeverity.critical,
+                    severity=ErrorSeverity.CRITICAL,
                     user_message="Notion connection lost during publishing.",
                  )
             
@@ -196,7 +196,7 @@ class NotionScriptClient:
 
             # Determine error code based on exception type
             error_code = "NOTION_PUBLISH_FAILED"
-            severity = ErrorSeverity.critical
+            severity = ErrorSeverity.CRITICAL
             retryable = True
             user_message = f"Failed to publish script to Notion: {error_msg}"
             
@@ -207,7 +207,7 @@ class NotionScriptClient:
                 user_message = "Notion authentication failed. Please check your API key."
             elif "rate" in error_msg.lower() or "429" in error_msg:
                 error_code = "NOTION_RATE_LIMIT"
-                severity = ErrorSeverity.warning
+                severity = ErrorSeverity.WARNING
                 retryable = True
                 user_message = "Notion rate limit exceeded. Please try again in a moment."
 
@@ -255,7 +255,7 @@ class NotionScriptClient:
             return OperationResult.fail(
                 message=client_check.error_message or "Notion client unavailable",
                 code="NOTION_NOT_CONFIGURED",
-                severity=ErrorSeverity.critical,
+                severity=ErrorSeverity.CRITICAL,
                 user_message="Notion is not configured. Publishing features are unavailable.",
             )
 
@@ -317,7 +317,7 @@ class NotionScriptClient:
             logger.error(f"notion_update_failed_after_retries: page_id={page_id} error={error_msg}")
 
             error_code = "NOTION_PUBLISH_FAILED"
-            severity = ErrorSeverity.critical
+            severity = ErrorSeverity.CRITICAL
             retryable = True
             user_message = f"Failed to update Notion page: {error_msg}"
 
@@ -327,7 +327,7 @@ class NotionScriptClient:
                 user_message = "Notion authentication failed. Please check your API key."
             elif "rate" in error_msg.lower() or "429" in error_msg:
                 error_code = "NOTION_RATE_LIMIT"
-                severity = ErrorSeverity.warning
+                severity = ErrorSeverity.WARNING
                 retryable = True
                 user_message = "Notion rate limit exceeded. Please try again in a moment."
 
@@ -366,7 +366,7 @@ class NotionScriptClient:
             return OperationResult.fail(
                 message=client_check.error_message or "Notion client unavailable",
                 code="NOTION_NOT_CONFIGURED",
-                severity=ErrorSeverity.critical,
+                severity=ErrorSeverity.CRITICAL,
                 user_message="Notion is not configured. Cannot retrieve script.",
             )
 
@@ -432,7 +432,7 @@ class NotionScriptClient:
             return OperationResult.fail(
                 message=f"Failed to retrieve script from Notion: {e}",
                 code="NOTION_PUBLISH_FAILED",
-                severity=ErrorSeverity.warning,
+                severity=ErrorSeverity.WARNING,
                 user_message="Could not load script from Notion.",
                 retryable=True,
             )
