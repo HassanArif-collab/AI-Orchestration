@@ -15,6 +15,7 @@ import os
 import uuid
 import asyncio
 import pytest
+import httpx
 
 from tests.integration.conftest import skip_if_no_env, is_service_running
 
@@ -43,6 +44,32 @@ def _get_zep_base_url() -> str:
     return os.environ.get("ZEP_BASE_URL", "https://api.getzep.com")
 
 
+async def _check_zep_reachable(base_url: str) -> bool:
+    """Check if Zep API is reachable.
+
+    Zep Cloud returns 401/403 for unauthenticated requests to the base URL,
+    which still proves the service is up. We also catch broader exceptions
+    since different network environments may block HTTPS in various ways.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(base_url)
+            # Any HTTP response (even 401/403/404) means the service is reachable
+            return True
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return False
+    except httpx.TimeoutException:
+        return False
+    except Exception:
+        # Network-level errors (DNS failure, SSL, etc.) — try a HEAD request
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.head(base_url)
+                return True
+        except Exception:
+            return False
+
+
 async def _create_async_client():
     """Create an AsyncZepMemoryClient from env vars.
 
@@ -55,10 +82,13 @@ async def _create_async_client():
         pytest.skip("zep-cloud package not installed — skipping integration test")
         return None  # unreachable
 
-    # Check service reachability
+    # Check service reachability with improved connectivity check
     base_url = _get_zep_base_url()
-    if not await is_service_running(base_url, timeout=5):
-        pytest.skip(f"Zep service at {base_url} is unreachable — skipping integration test")
+    if not await _check_zep_reachable(base_url):
+        pytest.skip(
+            f"Zep service at {base_url} is unreachable — skipping integration test. "
+            f"Check your network/firewall settings or try setting ZEP_BASE_URL if using a custom instance."
+        )
 
     try:
         client = AsyncZep(api_key=api_key)
@@ -72,8 +102,11 @@ async def _create_memory_client():
     api_key = _get_zep_env()
 
     base_url = _get_zep_base_url()
-    if not await is_service_running(base_url, timeout=5):
-        pytest.skip(f"Zep service at {base_url} is unreachable — skipping integration test")
+    if not await _check_zep_reachable(base_url):
+        pytest.skip(
+            f"Zep service at {base_url} is unreachable — skipping integration test. "
+            f"Check your network/firewall settings or try setting ZEP_BASE_URL if using a custom instance."
+        )
 
     from packages.memory.client import AsyncZepMemoryClient
     return AsyncZepMemoryClient(api_key=api_key)

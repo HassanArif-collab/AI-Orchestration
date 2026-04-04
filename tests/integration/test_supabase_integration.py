@@ -43,8 +43,13 @@ def _require_supabase_env() -> str:
     return os.environ["SUPABASE_URL"]
 
 
-def _create_test_client():
+def _create_test_client(use_service_role: bool = False):
     """Create a real Supabase client from env vars.
+
+    Args:
+        use_service_role: If True, use SUPABASE_SERVICE_ROLE_KEY which bypasses
+            Row-Level Security (RLS). Required for INSERT/DELETE operations.
+            Defaults to False (uses SUPABASE_ANON_KEY for read-only queries).
 
     Returns None (with skip) on ImportError (supabase-py not installed).
     """
@@ -55,7 +60,12 @@ def _create_test_client():
         return None  # unreachable, satisfies type checker
 
     url = _require_supabase_env()
-    key = os.environ["SUPABASE_ANON_KEY"]
+    if use_service_role:
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not key:
+            pytest.skip("SUPABASE_SERVICE_ROLE_KEY not configured — cannot perform write operations (RLS blocks anon inserts)")
+    else:
+        key = os.environ["SUPABASE_ANON_KEY"]
     return create_client(url, key)
 
 
@@ -128,7 +138,9 @@ class TestSupabaseConnection:
         if not await is_service_running(f"{url}/rest/v1/", timeout=5):
             pytest.skip("Supabase service is unreachable — skipping integration test")
 
-        client = _create_test_client()
+        # Use service_role key to bypass RLS for INSERT/DELETE operations.
+        # The anon key is blocked by Supabase Row-Level Security for writes.
+        client = _create_test_client(use_service_role=True)
         test_id = f"test_row_{uuid.uuid4().hex[:12]}"
         test_payload = {
             "id": test_id,

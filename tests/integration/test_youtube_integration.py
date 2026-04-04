@@ -565,12 +565,24 @@ class TestYouTubeAnalyticsClientReal:
 
 # ── Transcript/Caption Tests (no API key required) ────────────────────────────
 
+# Fallback video IDs known to have reliable English captions.
+# If the primary video fails, we try each in sequence.
+_TRANSCRIPT_VIDEO_IDS = [
+    "dQw4w9WgXcQ",   # Rick Astley - Never Gonna Give You Up (1.5B views)
+    "jNQXAC9IVRw",   # Me at the zoo (first YouTube video ever)
+    "9bZkp7q19f0",   # PSY - Gangnam Style (5B views, strong captions)
+    "kJQP7kiw5Fk",   # Luis Fonsi - Despacito (8B views, auto captions)
+    "JGwWNGJdvx8",   # Ed Sheeran - Shape of You (6B views)
+]
+
+
 class TestYouTubeTranscriptReal:
     """Integration tests for YouTube transcript extraction.
 
     These tests use youtube-transcript-api which does NOT require a YouTube
     API key. They may still fail if the library is not installed or the
-    video has no captions.
+    video has no captions. We try multiple fallback videos to increase
+    reliability.
     """
 
     def _build_client(self) -> "YouTubeClient":
@@ -582,7 +594,8 @@ class TestYouTubeTranscriptReal:
         """Real API call: extract transcript from a well-known video.
 
         Scenario: The pipeline extracts a transcript for script analysis.
-        We use a popular video known to have English captions.
+        We try multiple popular videos known to have English captions
+        (manual or auto-generated) to increase reliability.
 
         Verifies:
         - Returns a dict with 'segments' list and 'word_count' int
@@ -590,12 +603,23 @@ class TestYouTubeTranscriptReal:
         """
         try:
             client = self._build_client()
-            transcript = client.get_transcript("dQw4w9WgXcQ", languages=["en"])
         except ImportError:
             pytest.skip("youtube-transcript-api not installed")
 
+        transcript = None
+        tried_videos = []
+
+        for video_id in _TRANSCRIPT_VIDEO_IDS:
+            transcript = client.get_transcript(video_id, languages=["en"])
+            tried_videos.append(video_id)
+            if transcript:
+                break
+
         if not transcript:
-            pytest.skip("No transcript available for this video")
+            pytest.skip(
+                f"No transcript available for any of the tried videos: {tried_videos}. "
+                f"This may be a network issue, geo-restriction, or youtube-transcript-api version problem."
+            )
 
         assert isinstance(transcript, dict)
         assert "segments" in transcript
