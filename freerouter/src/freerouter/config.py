@@ -4,56 +4,52 @@ config.py — Task-to-model routing table.
 Each key is a task name (or "auto") that your app passes as the model field.
 Set your API keys in freerouter/.env:
 
-    OPENROUTER_API_KEY=sk-or-...
-    GROQ_API_KEY=gsk_...
-    OLLAMA_BASE_URL=http://localhost:11434   # optional
+    OPENROUTER_API_KEY=sk-or-...   # required — primary provider for all routes
 
 LiteLLM model string format:
     openrouter/<provider>/<model>   →  routes via OpenRouter
-    groq/<model>                    →  routes via Groq LPU
-    ollama/<model>                  →  routes via local Ollama
 """
 
 ROUTES: dict[str, dict[str, str]] = {
     # ── Generic fallback ─────────────────────────────────────────────────
     "auto": {
-        "model":    "openrouter/stepfun/step-3.5-flash:free",
-        "fallback": "groq/llama-3.3-70b-versatile",
+        "model":    "openrouter/qwen/qwen3.6-plus:free",
+        "fallback": "openrouter/meta-llama/llama-3.3-70b-instruct:free",
     },
 
-    # ── Task 1: Researcher (256K context, deep synthesis) ────────────────
+    # ── Task 1: Researcher (deep synthesis, long context) ───────────────
     "researcher": {
-        "model":    "openrouter/stepfun/step-3.5-flash:free",
-        "fallback": "openrouter/qwen/qwen3.6-plus:free",
+        "model":    "openrouter/qwen/qwen3.6-plus:free",
+        "fallback": "openrouter/meta-llama/llama-3.3-70b-instruct:free",
     },
 
     # ── Task 2: Topic Finder (creative ideation, gap analysis) ───────────
     "topic_finder": {
         "model":    "openrouter/qwen/qwen3.6-plus:free",
-        "fallback": "openrouter/stepfun/step-3.5-flash:free",
+        "fallback": "openrouter/meta-llama/llama-3.3-70b-instruct:free",
     },
 
-    # ── Task 3: Script Writer (1M context, creative prose) ───────────────
+    # ── Task 3: Script Writer (creative prose, long output) ──────────────
     "script_writer": {
         "model":    "openrouter/qwen/qwen3.6-plus:free",
-        "fallback": "openrouter/mistralai/mistral-small-3.1:free",
+        "fallback": "openrouter/google/gemma-3-27b-it:free",
     },
 
-    # ── Task 4: Scoring Engine (fast pass/fail loop, 70K TPM) ────────────
+    # ── Task 4: Scoring Engine (fast pass/fail loop) ────────────────────
     "scorer": {
-        "model":    "groq/compound-beta-mini",
-        "fallback": "groq/llama-3.1-8b-instant",
+        "model":    "openrouter/google/gemma-3-27b-it:free",
+        "fallback": "openrouter/qwen/qwen3.6-plus:free",
     },
 
-    # ── Task 5: Challenger Generator (JSON rewrite, structured output) ────
+    # ── Task 5: Challenger Generator (JSON rewrite, structured output) ──
     "challenger": {
-        "model":    "groq/llama-3.1-8b-instant",
-        "fallback": "groq/llama-3.3-70b-versatile",
+        "model":    "openrouter/qwen/qwen3.6-plus:free",
+        "fallback": "openrouter/google/gemma-3-27b-it:free",
     },
 
-    # ── Task 6: Visual Annotator (60 RPM, repetitive 1-sentence cues) ────
+    # ── Task 6: Visual Annotator (short cues, repetitive) ───────────────
     "annotator": {
-        "model":    "groq/qwen-qwq-32b",
-        "fallback": "groq/llama-3.1-8b-instant",
+        "model":    "openrouter/google/gemma-3-27b-it:free",
+        "fallback": "openrouter/qwen/qwen3.6-plus:free",
     },
 }

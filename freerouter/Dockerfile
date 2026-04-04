@@ -1,48 +1,35 @@
-# FreeRouter Dockerfile
-# Build: docker build -t freerouter .
-# Run: docker run -p 4000:4000 --env-file .env freerouter
+# FreeRouter v3 Dockerfile (optional — not required for local development)
+#
+# This project is designed to run with Python directly:
+#   pip install -e .
+#   python -m freerouter
+#
+# Only use Docker if you need containerized deployment.
 
 FROM python:3.11-slim
 
 LABEL maintainer="FreeRouter Team"
-LABEL description="Smart LLM proxy that always prefers free models"
+LABEL description="LiteLLM-based task router v3"
 
-# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
 WORKDIR /app
 
-# Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY src/ ./src/
-COPY config/ ./config/
 COPY pyproject.toml .
-
-# Install the package
 RUN pip install -e .
 
-# Create non-root user for security
-RUN useradd -m -u 1000 freerouter && \
-    chown -R freerouter:freerouter /app
-USER freerouter
-
-# Expose the proxy port
 EXPOSE 4000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:4000/health || exit 1
 
-# Default command
 CMD ["python", "-m", "freerouter"]

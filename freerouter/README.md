@@ -6,8 +6,8 @@ FreeRouter v3 is a slim OpenAI-compatible proxy built on [LiteLLM](https://githu
 
 ```
 ┌──────────────┐     ┌─────────────────┐     ┌──────────────────────────┐
-│  Your App    │────▶│   FreeRouter    │────▶│  openrouter/.../model:free│
-│  (OpenAI SDK)│     │  localhost:4000 │     │  groq/...                │
+│  Your App    │────▶│   FreeRouter    │────▶│  openrouter/qwen/...:free│
+│  (OpenAI SDK)│     │  localhost:4000 │     │  openrouter/google/...:free│
 └──────────────┘     └─────────────────┘     └──────────────────────────┘
 ```
 
@@ -15,13 +15,13 @@ FreeRouter v3 is a slim OpenAI-compatible proxy built on [LiteLLM](https://githu
 
 | Route | Primary Model | Fallback |
 |-------|--------------|----------|
-| `auto` | openrouter/stepfun/step-3.5-flash:free | groq/llama-3.3-70b-versatile |
-| `researcher` | openrouter/stepfun/step-3.5-flash:free | openrouter/qwen/qwen3.6-plus:free |
-| `topic_finder` | openrouter/qwen/qwen3.6-plus:free | openrouter/stepfun/step-3.5-flash:free |
-| `script_writer` | openrouter/qwen/qwen3.6-plus:free | openrouter/mistralai/mistral-small-3.1:free |
-| `scorer` | groq/compound-beta-mini | groq/llama-3.1-8b-instant |
-| `challenger` | groq/llama-3.1-8b-instant | groq/llama-3.3-70b-versatile |
-| `annotator` | groq/qwen-qwq-32b | groq/llama-3.1-8b-instant |
+| `auto` | openrouter/qwen/qwen3.6-plus:free | openrouter/meta-llama/llama-3.3-70b-instruct:free |
+| `researcher` | openrouter/qwen/qwen3.6-plus:free | openrouter/meta-llama/llama-3.3-70b-instruct:free |
+| `topic_finder` | openrouter/qwen/qwen3.6-plus:free | openrouter/meta-llama/llama-3.3-70b-instruct:free |
+| `script_writer` | openrouter/qwen/qwen3.6-plus:free | openrouter/google/gemma-3-27b-it:free |
+| `scorer` | openrouter/google/gemma-3-27b-it:free | openrouter/qwen/qwen3.6-plus:free |
+| `challenger` | openrouter/qwen/qwen3.6-plus:free | openrouter/google/gemma-3-27b-it:free |
+| `annotator` | openrouter/google/gemma-3-27b-it:free | openrouter/qwen/qwen3.6-plus:free |
 
 ## Quick Start
 
@@ -95,12 +95,12 @@ Response:
 Set API keys in `freerouter/.env`:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-v1-...   # required
-GROQ_API_KEY=gsk_...               # required
-OLLAMA_BASE_URL=http://localhost:11434   # optional
+OPENROUTER_API_KEY=sk-or-v1-...   # required — all routes use OpenRouter free models
+GROQ_API_KEY=gsk_...               # optional — currently not in routing table
+OLLAMA_BASE_URL=http://localhost:11434   # optional — for local Ollama models
 ```
 
-Only two providers are used: **OpenRouter** and **Groq**.
+Currently only **OpenRouter** free models are in the routing table. Groq key is kept for future use.
 
 ## Architecture
 
@@ -115,12 +115,24 @@ freerouter/
 
 ~200 lines total. Provider management, fallbacks, and rate limiting are all handled by LiteLLM.
 
-## Docker
+## Stopping the Server
 
+Press `Ctrl+C` in the terminal where freerouter is running.
+
+## Troubleshooting
+
+### Port already in use
 ```bash
-docker build -t freerouter .
-docker run -p 4000:4000 --env-file .env freerouter
+lsof -i :4000 && kill -9 <PID>
 ```
+
+### Check if running
+```bash
+curl http://localhost:4000/health
+```
+
+### Model fails / both primary and fallback down
+The server returns HTTP 503 and your app's RouterClient will automatically retry with `"auto"`.
 
 ## License
 
