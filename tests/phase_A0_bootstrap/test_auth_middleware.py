@@ -10,31 +10,32 @@ Covers:
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, patch
 from starlette.requests import Request
 from starlette.responses import Response
 
 
 def _make_request(path: str, headers: dict = None) -> Request:
-    """Create a mock Starlette Request for testing."""
+    """Create a Starlette Request for testing.
+
+    Starlette's Request.url is a read-only property computed from scope.
+    We build the scope correctly so request.url.path returns the right value.
+    """
+    # Build header list as (name_bytes, value_bytes) tuples
+    headers_list = []
+    if headers:
+        for k, v in headers.items():
+            headers_list.append((k.lower().encode(), v.encode()))
+
     scope = {
         "type": "http",
         "method": "GET",
         "path": path,
-        "headers": [],
+        "headers": headers_list,
         "query_string": b"",
         "server": ("localhost", 3000),
     }
-    request = Request(scope)
-    # Mock the headers
-    request._headers = MagicMock()
-    request._headers.get = lambda key, default=None: (headers or {}).get(key, default)
-    # Mock url
-    class MockURL:
-        def __init__(self, path):
-            self.path = path
-    request.url = MockURL(path)
-    return request
+    return Request(scope)
 
 
 class TestPublicPaths:
@@ -44,7 +45,11 @@ class TestPublicPaths:
     def _setup(self, monkeypatch):
         monkeypatch.setenv("API_AUTH_ENABLED", "true")
         monkeypatch.setenv("API_KEYS", "test-key-123")
+        # Clear settings cache so middleware picks up new env vars
+        from packages.core.config import get_settings
+        get_settings.cache_clear()
         yield
+        get_settings.cache_clear()
 
     @pytest.mark.asyncio
     async def test_health_path_is_public(self):
@@ -109,7 +114,10 @@ class TestAuthDisabled:
     def _setup(self, monkeypatch):
         monkeypatch.setenv("API_AUTH_ENABLED", "false")
         monkeypatch.setenv("API_KEYS", "test-key-123")
+        from packages.core.config import get_settings
+        get_settings.cache_clear()
         yield
+        get_settings.cache_clear()
 
     @pytest.mark.asyncio
     async def test_protected_path_passes_when_auth_disabled(self):
@@ -129,7 +137,10 @@ class TestAuthEnabled:
     def _setup(self, monkeypatch):
         monkeypatch.setenv("API_AUTH_ENABLED", "true")
         monkeypatch.setenv("API_KEYS", "test-key-123, another-key")
+        from packages.core.config import get_settings
+        get_settings.cache_clear()
         yield
+        get_settings.cache_clear()
 
     @pytest.mark.asyncio
     async def test_missing_key_returns_401(self):
@@ -211,7 +222,10 @@ class TestNoKeysConfigured:
     def _setup(self, monkeypatch):
         monkeypatch.setenv("API_AUTH_ENABLED", "true")
         monkeypatch.setenv("API_KEYS", "")
+        from packages.core.config import get_settings
+        get_settings.cache_clear()
         yield
+        get_settings.cache_clear()
 
     @pytest.mark.asyncio
     async def test_no_keys_means_auth_disabled(self):
