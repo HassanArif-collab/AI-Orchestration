@@ -257,13 +257,13 @@ class TestServiceValidation:
         assert status.value == "not_configured"
 
     def test_supabase_misconfigured_http(self):
-        s = make_settings(
-            FREEROUTER_URL="http://localhost:4000",
-            SUPABASE_URL="http://supabase.co",
-            SUPABASE_SERVICE_ROLE_KEY="some_key",
-        )
-        status = s.validate_service("supabase")
-        assert status.value == "misconfigured"
+        """http:// URLs are rejected by the field validator, never reaching validate_service."""
+        with pytest.raises(ValidationError, match="SUPABASE_URL"):
+            make_settings(
+                FREEROUTER_URL="http://localhost:4000",
+                SUPABASE_URL="http://supabase.co",
+                SUPABASE_SERVICE_ROLE_KEY="some_key",
+            )
 
     def test_supabase_available(self):
         s = make_settings(
