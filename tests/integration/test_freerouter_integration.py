@@ -11,7 +11,10 @@ Tests the full LLM routing stack:
 
 All tests use REAL credentials and services. Tests that require a running
 FreeRouter instance will PASS gracefully when it is unavailable, reporting
-what was missing. NO pytest.mark.skip is used anywhere.
+what was missing — AND will test actual error-handling behaviour (circuit
+breaker, error types, connection refusal) rather than using assert True.
+
+NO pytest.mark.skip is used anywhere.
 
 Run:
     pytest tests/integration/test_freerouter_integration.py -v
@@ -19,9 +22,10 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,10 +38,16 @@ FREEROUTER_SRC = str(REPO_ROOT / "freerouter" / "src")
 if FREEROUTER_SRC not in sys.path:
     sys.path.insert(0, FREEROUTER_SRC)
 
+# ─── Load freerouter/.env so provider API keys are available ────────────────────
+from dotenv import load_dotenv
+_freerouter_env_path = REPO_ROOT / "freerouter" / ".env"
+if _freerouter_env_path.exists():
+    load_dotenv(_freerouter_env_path, override=True)
+
 # ─── Imports ────────────────────────────────────────────────────────────────────
 
 from packages.core.config import Settings, ServiceStatus, get_settings
-from packages.core.errors import LLMClientError, RateLimitError
+from packages.core.errors import LLMClientError, RateLimitError, PipelineException
 from packages.core.circuit_breaker import CircuitBreaker, CircuitState
 from packages.router.client import (
     RouterClient,
@@ -76,27 +86,23 @@ def tracker(temp_db_path: Path) -> UsageTracker:
 
 
 @pytest.fixture()
-def skip_if_no_freerouter(freerouter_url: str):
-    """Yield a callable that returns True when FreeRouter is unreachable.
-
-    Tests that depend on a running FreeRouter should call this and *pass*
-    (not skip) when the service is down, with a clear diagnostic message.
-    """
+def freerouter_available(freerouter_url: str) -> bool:
+    """Check if FreeRouter is reachable. Returns True if up, False if down."""
     import httpx
-
-    def _check() -> bool:
-        try:
-            resp = httpx.get(f"{freerouter_url}/health", timeout=3.0)
-            return resp.status_code != 200
-        except Exception:
-            return True  # unreachable
-
-    return _check
+    try:
+        resp = httpx.get(f"{freerouter_url}/health", timeout=3.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
 
 
 @pytest.fixture()
 def has_any_provider_key() -> bool:
-    """Check whether at least one LLM provider API key is set."""
+    """Check whether at least one LLM provider API key is set.
+
+    NOTE: freerouter/.env is loaded at module level above, so these env vars
+    are available in os.environ.
+    """
     providers = [
         "GROQ_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY",
         "TOGETHER_API_KEY", "SAMBANOVA_API_KEY", "DEEPINFRA_API_KEY",
@@ -116,58 +122,65 @@ class TestRouterClientConnection:
 
     @pytest.mark.asyncio
     async def test_router_client_health_check(
-        self, freerouter_url: str, skip_if_no_freerouter
+        self, freerouter_url: str, freerouter_available: bool
     ):
         """If FreeRouter is running, health_check returns healthy=True.
 
-        PASSes with a diagnostic message when FreeRouter is not running.
+        If FreeRouter is NOT running, test that health_check correctly reports
+        healthy=False instead of using assert True pass-through.
         """
-        if skip_if_no_freerouter():
-            # FreeRouter not running — PASS with a clear message per requirements
-            assert True, (
-                "SKIPPED: FreeRouter not reachable at %s. Start it with "
-                "'cd freerouter && python -m freerouter proxy' before running "
-                "these integration tests for full coverage." % freerouter_url
-            )
-            return  # redundant but explicit
-
-        client = RouterClient(base_url=freerouter_url, startup_check=False)
-        try:
-            result = await client.health_check()
-            assert isinstance(result, dict), "health_check should return a dict"
-            assert "healthy" in result, "result must contain 'healthy' key"
-            assert result["healthy"] is True, (
-                f"Expected healthy=True but got {result}"
-            )
-        finally:
-            await client.close()
+        if freerouter_available:
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            try:
+                result = await client.health_check()
+                assert isinstance(result, dict), "health_check should return a dict"
+                assert "healthy" in result, "result must contain 'healthy' key"
+                assert result["healthy"] is True, (
+                    f"Expected healthy=True but got {result}"
+                )
+            finally:
+                await client.close()
+        else:
+            # FreeRouter not running — test that RouterClient correctly detects
+            # this instead of using assert True pass-through
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            try:
+                result = await client.health_check()
+                assert isinstance(result, dict), (
+                    "health_check should still return a dict when service is down"
+                )
+                assert result["healthy"] is False, (
+                    f"Expected healthy=False when FreeRouter unreachable, "
+                    f"got {result}. This tests that the client correctly detects "
+                    f"service unavailability."
+                )
+            finally:
+                await client.close()
 
     @pytest.mark.asyncio
     async def test_router_client_health_check_latency(
-        self, freerouter_url: str, skip_if_no_freerouter
+        self, freerouter_url: str, freerouter_available: bool
     ):
-        """Verify latency_ms is a positive number when FreeRouter is healthy.
-
-        PASSes with a diagnostic message when FreeRouter is not running.
-        """
-        if skip_if_no_freerouter():
-            assert True, (
-                "SKIPPED: FreeRouter not reachable at %s — cannot verify latency."
-                % freerouter_url
-            )
-            return
-
+        """Verify latency_ms when FreeRouter is healthy; verify None when down."""
         client = RouterClient(base_url=freerouter_url, startup_check=False)
         try:
             result = await client.health_check()
-            assert result["healthy"] is True
+            assert isinstance(result, dict)
             assert "latency_ms" in result
-            latency = result["latency_ms"]
-            assert latency is not None, "latency_ms should not be None when healthy"
-            assert isinstance(latency, (int, float)), (
-                f"latency_ms should be numeric, got {type(latency)}"
-            )
-            assert latency > 0, f"latency_ms should be > 0, got {latency}"
+
+            if freerouter_available:
+                assert result["healthy"] is True
+                latency = result["latency_ms"]
+                assert latency is not None, "latency_ms should not be None when healthy"
+                assert isinstance(latency, (int, float)), (
+                    f"latency_ms should be numeric, got {type(latency)}"
+                )
+                assert latency > 0, f"latency_ms should be > 0, got {latency}"
+            else:
+                # When service is down, latency should be None
+                assert result["latency_ms"] is None, (
+                    "latency_ms should be None when FreeRouter is unreachable"
+                )
         finally:
             await client.close()
 
@@ -201,33 +214,58 @@ class TestRouterClientConnection:
 
 
 class TestRouterClientCompletion:
-    """Test end-to-end LLM completion through RouterClient → FreeRouter."""
+    """Test end-to-end LLM completion through RouterClient → FreeRouter.
+
+    When FreeRouter is running: test real LLM calls with assertions on response.
+    When FreeRouter is NOT running: test that the client raises LLMClientError
+    and that the circuit breaker records failures correctly.
+    """
 
     @pytest.mark.asyncio
     async def test_complete_text_simple(
-        self, freerouter_url: str, skip_if_no_freerouter, has_any_provider_key
+        self, freerouter_url: str, freerouter_available: bool, has_any_provider_key: bool
     ):
         """Send 'Say hello' and verify response contains text.
 
-        PASSes with a diagnostic message when FreeRouter/keys are unavailable.
+        If FreeRouter is down, verify that LLMClientError is raised.
         """
-        if skip_if_no_freerouter():
-            assert True, (
-                "SKIPPED: FreeRouter not running — cannot test LLM completion."
-            )
-            return
-        if not has_any_provider_key:
-            assert True, (
-                "SKIPPED: No LLM provider API keys found in freerouter/.env. "
-                "At least one key (GROQ_API_KEY, OPENROUTER_API_KEY, etc.) "
-                "is required for completion tests."
-            )
+        RouterClient.reset_circuit_breaker()
+
+        if not freerouter_available:
+            # Test that the client correctly raises an error when service is down
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            client._healthy = True
+            try:
+                with pytest.raises(LLMClientError):
+                    await client.complete_text(
+                        "Reply with exactly: Hello World",
+                        model="auto",
+                        max_tokens=50,
+                        retries=0,  # No retries — fail fast
+                    )
+            finally:
+                await client.close()
             return
 
-        # Disable startup check for lazy init to work; set _healthy explicitly
-        RouterClient.reset_circuit_breaker()
+        if not has_any_provider_key:
+            # FreeRouter up but no provider keys — should also raise error
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            client._healthy = True
+            try:
+                with pytest.raises(LLMClientError):
+                    await client.complete_text(
+                        "Reply with exactly: Hello World",
+                        model="auto",
+                        max_tokens=50,
+                        retries=0,
+                    )
+            finally:
+                await client.close()
+            return
+
+        # FreeRouter is running with keys — make real LLM call
         client = RouterClient(base_url=freerouter_url, startup_check=False)
-        client._healthy = True  # skip the lazy init check in complete_text
+        client._healthy = True
         try:
             text = await client.complete_text(
                 "Reply with exactly: Hello World",
@@ -236,7 +274,6 @@ class TestRouterClientCompletion:
             )
             assert isinstance(text, str), "complete_text should return a string"
             assert len(text) > 0, "Response should not be empty"
-            # The response should contain some text — not necessarily exact match
             assert any(c.isalpha() for c in text), (
                 "Response should contain alphabetic characters"
             )
@@ -245,20 +282,31 @@ class TestRouterClientCompletion:
 
     @pytest.mark.asyncio
     async def test_complete_with_system_prompt(
-        self, freerouter_url: str, skip_if_no_freerouter, has_any_provider_key
+        self, freerouter_url: str, freerouter_available: bool, has_any_provider_key: bool
     ):
         """Send system prompt + user message; verify response follows instructions.
 
-        PASSes with a diagnostic message when FreeRouter/keys are unavailable.
+        If FreeRouter is down, verify error handling.
         """
-        if skip_if_no_freerouter():
-            assert True, "SKIPPED: FreeRouter not running — cannot test system prompt."
-            return
-        if not has_any_provider_key:
-            assert True, "SKIPPED: No LLM provider API keys configured."
+        RouterClient.reset_circuit_breaker()
+
+        if not freerouter_available or not has_any_provider_key:
+            # Test error handling when FreeRouter is unreachable or no keys
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            client._healthy = True
+            try:
+                with pytest.raises(LLMClientError):
+                    await client.complete_text(
+                        "Name one color.",
+                        system="You MUST reply with ONLY the word RED and nothing else.",
+                        model="auto",
+                        max_tokens=50,
+                        retries=0,
+                    )
+            finally:
+                await client.close()
             return
 
-        RouterClient.reset_circuit_breaker()
         client = RouterClient(base_url=freerouter_url, startup_check=False)
         client._healthy = True
         try:
@@ -271,7 +319,6 @@ class TestRouterClientCompletion:
             )
             assert isinstance(text, str)
             assert len(text) > 0
-            # The word RED should appear somewhere in the response
             assert "RED" in text.upper(), (
                 f"System prompt not followed. Expected RED, got: {text}"
             )
@@ -280,20 +327,34 @@ class TestRouterClientCompletion:
 
     @pytest.mark.asyncio
     async def test_complete_returns_usage_data(
-        self, freerouter_url: str, skip_if_no_freerouter, has_any_provider_key
+        self, freerouter_url: str, freerouter_available: bool, has_any_provider_key: bool
     ):
         """Verify usage dict has prompt_tokens and completion_tokens.
 
-        PASSes with a diagnostic message when FreeRouter/keys are unavailable.
+        If FreeRouter is down, verify error + circuit breaker state.
         """
-        if skip_if_no_freerouter():
-            assert True, "SKIPPED: FreeRouter not running — cannot test usage data."
-            return
-        if not has_any_provider_key:
-            assert True, "SKIPPED: No LLM provider API keys configured."
+        RouterClient.reset_circuit_breaker()
+
+        if not freerouter_available or not has_any_provider_key:
+            # When FreeRouter is down or no keys, verify error is raised
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            client._healthy = True
+            try:
+                await client.complete(
+                    messages=[{"role": "user", "content": "Say OK"}],
+                    model="auto",
+                    max_tokens=10,
+                    retries=0,
+                )
+                pytest.fail("Expected LLMClientError when FreeRouter is unavailable")
+            except LLMClientError as exc:
+                # Error message should be meaningful
+                err_str = str(exc)
+                assert len(err_str) > 0, "Error message should not be empty"
+            finally:
+                await client.close()
             return
 
-        RouterClient.reset_circuit_breaker()
         client = RouterClient(base_url=freerouter_url, startup_check=False)
         client._healthy = True
         try:
@@ -309,7 +370,6 @@ class TestRouterClientCompletion:
             assert isinstance(usage, dict), "usage should be a dict"
             assert "prompt_tokens" in usage, "usage must have prompt_tokens"
             assert "completion_tokens" in usage, "usage must have completion_tokens"
-            # Both should be non-negative integers
             assert isinstance(usage["prompt_tokens"], int)
             assert isinstance(usage["completion_tokens"], int)
             assert usage["prompt_tokens"] >= 0
@@ -319,20 +379,29 @@ class TestRouterClientCompletion:
 
     @pytest.mark.asyncio
     async def test_complete_returns_provider_info(
-        self, freerouter_url: str, skip_if_no_freerouter, has_any_provider_key
+        self, freerouter_url: str, freerouter_available: bool, has_any_provider_key: bool
     ):
         """Verify response includes 'provider' and 'model' keys.
 
-        PASSes with a diagnostic message when FreeRouter/keys are unavailable.
+        If FreeRouter is down, verify error is raised (not a silent pass).
         """
-        if skip_if_no_freerouter():
-            assert True, "SKIPPED: FreeRouter not running — cannot test provider info."
-            return
-        if not has_any_provider_key:
-            assert True, "SKIPPED: No LLM provider API keys configured."
+        RouterClient.reset_circuit_breaker()
+
+        if not freerouter_available or not has_any_provider_key:
+            client = RouterClient(base_url=freerouter_url, startup_check=False)
+            client._healthy = True
+            try:
+                with pytest.raises(LLMClientError):
+                    await client.complete(
+                        messages=[{"role": "user", "content": "Say OK"}],
+                        model="auto",
+                        max_tokens=10,
+                        retries=0,
+                    )
+            finally:
+                await client.close()
             return
 
-        RouterClient.reset_circuit_breaker()
         client = RouterClient(base_url=freerouter_url, startup_check=False)
         client._healthy = True
         try:
@@ -376,6 +445,21 @@ class TestProviderSystem:
             assert isinstance(is_configured, bool), (
                 f"is_configured should be bool for {provider_def.name}"
             )
+
+    def test_get_configured_providers_detects_real_keys(self):
+        """At least one provider should show as configured with real API keys.
+
+        The freerouter/.env is loaded at module level; this test verifies that
+        the provider detection actually picks up the keys from that file.
+        """
+        from freerouter.providers import get_configured_providers
+
+        result = get_configured_providers()
+        configured = [defn.name for defn, is_configured in result if is_configured]
+        assert len(configured) >= 1, (
+            f"Expected at least 1 configured provider from freerouter/.env, "
+            f"but none found. Configured: {configured}"
+        )
 
     def test_provider_definitions_exist(self):
         """All expected providers are present in KNOWN_PROVIDERS."""
@@ -426,6 +510,16 @@ class TestProviderSystem:
         assert connect > 0
         assert read > 0
 
+    def test_provider_priority_ordering(self):
+        """Providers are sorted by priority (lower number = higher priority)."""
+        from freerouter.providers import get_configured_providers
+
+        result = get_configured_providers()
+        priorities = [defn.priority for defn, _ in result]
+        assert priorities == sorted(priorities), (
+            f"Providers should be sorted by priority. Got: {priorities}"
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # D. Capabilities System Tests (3 tests)
@@ -436,22 +530,17 @@ class TestCapabilities:
     """Test model capability mapping system."""
 
     def test_get_model_for_capability_research(self):
-        """get_model_for_capability('research') returns the expected model."""
-        # Note: This tests the default; if capabilities.yaml override exists,
-        # it could differ. We test the core function works, not exact string match
-        # unless no override file exists.
+        """get_model_for_capability('research') returns a valid model string."""
+        result = get_model_for_capability("research")
+        assert isinstance(result, str), "Should return a string"
+        assert len(result) > 0, "Should not be empty"
+        # Without override file, should match the default
         override_path = Path(__file__).resolve().parents[2] / "packages" / "capabilities.yaml"
         if not override_path.exists():
-            result = get_model_for_capability("research")
             assert result == "groq/llama-3.3-70b-versatile", (
-                f"Expected 'groq/llama-3.3-70b-versatile' for research, got '{result}'. "
-                f"If capabilities.yaml exists, it may be overriding the default."
+                f"Expected 'groq/llama-3.3-70b-versatile' for research (no override file), "
+                f"got '{result}'."
             )
-        else:
-            # With override file, just verify it returns a string
-            result = get_model_for_capability("research")
-            assert isinstance(result, str), "Should return a string"
-            assert len(result) > 0, "Should not be empty"
 
     def test_get_model_for_capability_unknown(self):
         """get_model_for_capability returns 'auto' for unknown capability."""
@@ -476,6 +565,18 @@ class TestCapabilities:
         assert set(caps) == set(CAPABILITY_MODELS.keys()), (
             "list_capabilities should return exactly the keys from CAPABILITY_MODELS"
         )
+
+    def test_all_capabilities_return_valid_strings(self):
+        """Every capability should return a non-empty string with provider/model format."""
+        for cap in list_capabilities():
+            model = get_model_for_capability(cap)
+            assert isinstance(model, str), f"Capability '{cap}' should return string"
+            assert len(model) > 0, f"Capability '{cap}' should not return empty string"
+            if model != "auto":
+                assert "/" in model, (
+                    f"Model '{model}' for capability '{cap}' should contain '/' "
+                    f"(format: provider/model)"
+                )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -565,7 +666,7 @@ class TestUsageTracker:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# F. SSRF Prevention Tests (2 tests)
+# F. SSRF Prevention Tests (4 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -574,7 +675,6 @@ class TestSSRFPrevention:
 
     def test_validate_health_check_url_private_ip_blocked(self):
         """Private IPs (10.x, 192.168.x, 172.16.x) should be rejected."""
-        # These are private IPs NOT in the allowed hosts list
         private_urls = [
             "http://10.0.0.1/health",
             "http://192.168.1.100/health",
@@ -629,9 +729,21 @@ class TestSSRFPrevention:
         assert is_valid is False
         assert "scheme" in msg.lower()
 
+    def test_validate_health_check_url_custom_allowed_hosts(self):
+        """Custom allowed_hosts parameter should allow additional hosts."""
+        # 10.0.0.1 is normally blocked
+        is_valid, _ = validate_health_check_url("http://10.0.0.1/health")
+        assert is_valid is False
+
+        # But allowed via custom hosts list
+        is_valid, _ = validate_health_check_url(
+            "http://10.0.0.1/health", allowed_hosts={"10.0.0.1"}
+        )
+        assert is_valid is True, "Custom allowed hosts should override private IP block"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# G. Service Validation Tests (2 tests)
+# G. Service Validation Tests (3 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -643,8 +755,6 @@ class TestServiceValidation:
         settings = get_settings()
         result = settings.validate_service("freerouter")
 
-        # FREEROUTER_URL always has a default ("http://localhost:4000"),
-        # so it should always be AVAILABLE (unless explicitly empty)
         assert isinstance(result, ServiceStatus)
         assert settings.FREEROUTER_URL, "FREEROUTER_URL should not be empty"
         assert result == ServiceStatus.AVAILABLE, (
@@ -685,7 +795,6 @@ class TestServiceValidation:
         AVAILABLE (or MISCONFIGURED) — never NOT_CONFIGURED.
         """
         settings = get_settings()
-        # Bypass the pydantic field validator to test the underlying logic
         original_url = settings.FREEROUTER_URL
         try:
             object.__setattr__(settings, "FREEROUTER_URL", "")
@@ -698,7 +807,7 @@ class TestServiceValidation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# H. Circuit Breaker Integration Tests (2 tests)
+# H. Circuit Breaker Integration Tests (3 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -707,18 +816,11 @@ class TestCircuitBreakerIntegration:
 
     def test_circuit_breaker_resets_on_router_client_reset(self):
         """RouterClient.reset_circuit_breaker() resets the class-level breaker."""
-        # Record enough failures to trip the breaker
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        RouterClient._circuit_breaker.record_failure()
-        # Threshold is 10, so after 10 failures it should be OPEN
+        RouterClient.reset_circuit_breaker()  # Start clean
+        # Record enough failures to trip the breaker (threshold=10)
+        for _ in range(10):
+            RouterClient._circuit_breaker.record_failure()
+
         assert RouterClient._circuit_breaker.state == CircuitState.OPEN, (
             "Circuit breaker should be OPEN after 10 failures"
         )
@@ -750,9 +852,59 @@ class TestCircuitBreakerIntegration:
         assert status["state"] == "closed"
         assert status["failure_count"] == 0
 
+    def test_circuit_breaker_blocks_requests_when_open(self):
+        """When OPEN, circuit breaker should reject requests via allow_request."""
+        cb = CircuitBreaker(
+            name="block-test",
+            failure_threshold=2,
+            recovery_timeout=9999,  # Long recovery so it stays OPEN
+        )
+        # Trip the breaker
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+        # Should reject requests
+        assert cb.allow_request() is False, (
+            "Circuit breaker should block requests when OPEN"
+        )
+
+        # Reset should allow requests again
+        cb.reset()
+        assert cb.allow_request() is True
+
+    def test_circuit_breaker_recovers_after_success_in_half_open(self):
+        """After recovery_timeout, HALF_OPEN allows 1 request; success closes it."""
+        cb = CircuitBreaker(
+            name="recover-test",
+            failure_threshold=2,
+            recovery_timeout=0.01,  # Almost instant recovery
+        )
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+        # Wait for recovery timeout to transition to HALF_OPEN
+        time.sleep(0.02)
+        assert cb.state == CircuitState.HALF_OPEN, (
+            "Should transition to HALF_OPEN after recovery_timeout"
+        )
+
+        # Half-open allows one request
+        assert cb.allow_request() is True
+        # A second call should be blocked while the first is in-flight
+        assert cb.allow_request() is False, (
+            "HALF_OPEN should only allow 1 request at a time"
+        )
+
+        # Success should close the circuit
+        cb.record_success()
+        assert cb.state == CircuitState.CLOSED
+        assert cb.get_status()["failure_count"] == 0
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# I. Error Types Tests (2 tests)
+# I. Error Types Tests (3 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -765,9 +917,6 @@ class TestErrorTypes:
         assert str(err) == "FreeRouter not running"
         assert err.error_code == "LLM_UNAVAILABLE"
         assert err.get_error_code() == "LLM_UNAVAILABLE"
-
-        # Should be catchable as PipelineException (parent)
-        from packages.core.errors import PipelineException
         assert isinstance(err, PipelineException)
 
     def test_rate_limit_error_inherits_llm_client_error(self):
@@ -776,15 +925,31 @@ class TestErrorTypes:
         assert isinstance(err, LLMClientError)
         assert err.error_code == "LLM_RATE_LIMIT"
         assert err.get_error_code() == "LLM_RATE_LIMIT"
+        # Should also be catchable as PipelineException
+        assert isinstance(err, PipelineException)
 
     def test_error_code_override(self):
         """Instance-level error_code takes precedence over class-level."""
         err = LLMClientError("custom error", error_code="CUSTOM_CODE")
         assert err.get_error_code() == "CUSTOM_CODE"
 
+    def test_error_raised_and_caught(self):
+        """LLMClientError can be raised and caught correctly."""
+        with pytest.raises(LLMClientError) as exc_info:
+            raise LLMClientError("test error")
+        assert exc_info.value.error_code == "LLM_UNAVAILABLE"
+
+        # Catch as parent
+        with pytest.raises(PipelineException):
+            raise LLMClientError("test error")
+
+        # RateLimitError catchable as LLMClientError
+        with pytest.raises(LLMClientError):
+            raise RateLimitError("rate limited")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# J. Router Provider Map Consistency Tests (2 tests)
+# J. Router Provider Map Consistency Tests (4 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -809,13 +974,11 @@ class TestRouterProviderMap:
 
         router = Router()
         for provider_name, default_model in DEFAULT_MODELS.items():
-            # Only test providers that have keys configured or don't require auth
-            if provider_name == "ollama":
-                resolved = router._resolve_model(provider_name, "auto")
-                assert resolved == default_model, (
-                    f"auto for {provider_name} should resolve to {default_model}, "
-                    f"got {resolved}"
-                )
+            resolved = router._resolve_model(provider_name, "auto")
+            assert resolved == default_model, (
+                f"auto for {provider_name} should resolve to {default_model}, "
+                f"got {resolved}"
+            )
 
     def test_router_resolve_model_with_prefix(self):
         """Router._resolve_model strips correct provider prefix."""
@@ -830,24 +993,29 @@ class TestRouterProviderMap:
 
         # Wrong provider prefix should fall back to provider default
         resolved = router._resolve_model("openrouter", "groq/llama-3.3-70b")
-        assert resolved == "openrouter/stepfun/step-3.5-flash:free".split("/", 1)[1], (
+        assert resolved == "stepfun/step-3.5-flash:free", (
             f"Wrong provider prefix should return openrouter default, got '{resolved}'"
         )
 
     def test_router_ordered_providers(self):
-        """Router._get_ordered_providers() returns a list (may be empty if no keys)."""
+        """Router._get_ordered_providers() returns a list with real configured providers."""
         from freerouter.router import Router
 
         router = Router()
         providers = router._get_ordered_providers()
         assert isinstance(providers, list), "_get_ordered_providers should return a list"
+        # With real keys loaded, should have at least 1 provider
+        assert len(providers) >= 1, (
+            f"Expected at least 1 provider with real API keys. "
+            f"Got: {providers}. Check that freerouter/.env is loaded."
+        )
         # All returned names should be strings
         for p in providers:
             assert isinstance(p, str), f"Provider name should be str, got {type(p)}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# K. Proxy Server Tests (2 tests)
+# K. Proxy Server Tests (4 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -859,7 +1027,6 @@ class TestProxyServer:
         from freerouter.proxy_server import create_proxy_app
 
         app = create_proxy_app(api_key=None)
-        # Check it's a FastAPI app by verifying known attributes
         assert hasattr(app, "routes"), "FastAPI app should have .routes"
         assert hasattr(app, "add_middleware"), "FastAPI app should have .add_middleware"
 
@@ -896,9 +1063,19 @@ class TestProxyServer:
             f"/v1/messages route missing. Available: {route_paths}"
         )
 
+    def test_proxy_app_has_models_route(self):
+        """Proxy app should have /v1/models route."""
+        from freerouter.proxy_server import create_proxy_app
+
+        app = create_proxy_app(api_key=None)
+        route_paths = [r.path for r in app.routes]
+        assert "/v1/models" in route_paths, (
+            f"/v1/models route missing. Available: {route_paths}"
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# L. Anthropic-to-OpenAI Converter Tests (2 tests)
+# L. Format Converter Tests (3 tests)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -936,7 +1113,6 @@ class TestFormatConverters:
         ]
         openai_msgs = _anthropic_to_openai_messages(anthropic_msgs)
         assert len(openai_msgs) == 1
-        # Content blocks should be joined
         assert "First part" in openai_msgs[0]["content"]
         assert "Second part" in openai_msgs[0]["content"]
 
@@ -955,9 +1131,20 @@ class TestFormatConverters:
         assert anthropic_resp["role"] == "assistant"
         assert anthropic_resp["model"] == "groq/llama-3.3"
         assert anthropic_resp["type"] == "message"
-        # Content should be a list of blocks
         assert isinstance(anthropic_resp["content"], list)
         assert any(b.get("text") == "Hello!" for b in anthropic_resp["content"])
+
+    def test_anthropic_to_openai_without_system(self):
+        """Convert Anthropic messages without system prompt — no system message added."""
+        from freerouter.proxy_server import _anthropic_to_openai_messages
+
+        anthropic_msgs = [
+            {"role": "user", "content": "Hello"},
+        ]
+        openai_msgs = _anthropic_to_openai_messages(anthropic_msgs)
+        assert len(openai_msgs) == 1
+        assert openai_msgs[0]["role"] == "user"
+        assert openai_msgs[0]["content"] == "Hello"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -993,3 +1180,39 @@ class TestUsageTrackerEdgeCases:
         assert tracker.is_near_limit("ollama") is False, (
             "Ollama (unlimited) should not be near limit"
         )
+
+    def test_usage_tracker_failed_calls_not_counted(self, tracker: UsageTracker):
+        """Failed calls should not appear in get_all_usage_today aggregation."""
+        tracker.record_call("groq", "llama-3.3-70b", 50, 100, 200, False)
+        tracker.record_call("groq", "llama-3.3-70b", 30, 50, 300, False)
+        tracker.record_call("groq", "llama-3.3-70b", 10, 20, 100, True)
+
+        all_usage = tracker.get_all_usage_today()
+        assert len(all_usage) == 1, (
+            f"Should have 1 provider (groq), got {len(all_usage)}"
+        )
+        groq_entry = all_usage[0]
+        assert groq_entry["requests"] == 1, (
+            "Only the successful call should be counted"
+        )
+        assert groq_entry["total_tokens"] == 30, (
+            "Only successful call tokens (10+20) should be counted"
+        )
+
+    def test_usage_tracker_multiple_providers_isolated(self, tracker: UsageTracker):
+        """Usage from different providers is correctly isolated."""
+        tracker.record_call("groq", "model-a", 100, 200, 300, True)
+        tracker.record_call("openrouter", "model-b", 50, 150, 400, True)
+
+        groq_usage = tracker.get_daily_usage("groq")
+        assert groq_usage["total_tokens"] == 300
+        assert groq_usage["requests"] == 1
+
+        openrouter_usage = tracker.get_daily_usage("openrouter")
+        assert openrouter_usage["total_tokens"] == 200
+        assert openrouter_usage["requests"] == 1
+
+        # Non-existent provider
+        missing_usage = tracker.get_daily_usage("nonexistent")
+        assert missing_usage["requests"] == 0
+        assert missing_usage["total_tokens"] == 0

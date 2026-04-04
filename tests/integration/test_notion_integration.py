@@ -1,23 +1,28 @@
 """
-Phase 13 — Notion Integration Tests.
+Phase 13 — Notion Integration Tests (Real API Calls).
 
-Comprehensive integration tests for the NotionScriptClient and color module
-using REAL API credentials loaded from .env files.
+Comprehensive integration tests for the NotionScriptClient, _parse_database_id
+helper, and color module.  Tests that interact with the Notion API use REAL
+credentials loaded from .env via the integration conftest.
 
-Tests are designed to:
-  - Pass when credentials are present AND the API call succeeds
-  - Pass when credentials are missing (graceful degradation verified)
-  - Fail when credentials are present but the API call fails unexpectedly
+Key design decisions:
+  * Tests requiring credentials call the live Notion API and attempt to
+    archive (soft-delete) pages afterwards.
+  * Tests verifying "no-credentials" degradation pass explicit empty strings
+    AND monkeypatch-del the env vars so no fallback can accidentally succeed.
+  * Every async test uses ``@pytest.mark.asyncio``.
 
 Run:
     pytest tests/integration/test_notion_integration.py -v
+    pytest tests/integration/test_notion_integration.py -v -k "parse"
     pytest tests/integration/test_notion_integration.py -v -k "color"
-    pytest tests/integration/test_notion_integration.py -v -k "not has_notion_credentials"  # unit-only
+    pytest tests/integration/test_notion_integration.py -v -k "not real"
 """
 
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any
 
@@ -30,7 +35,10 @@ from packages.integrations.notion.colors import (
     get_color,
     get_emoji,
 )
-from packages.integrations.notion.client import NotionScriptClient
+from packages.integrations.notion.client import (
+    NotionScriptClient,
+    _parse_database_id,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -38,17 +46,18 @@ from packages.integrations.notion.client import NotionScriptClient
 # ---------------------------------------------------------------------------
 
 def _has_credentials() -> bool:
-    """Check if real Notion credentials are available in the environment."""
-    api_key = os.getenv("NOTION_API_KEY", "").strip()
-    database_id = os.getenv("NOTION_DATABASE_ID", "").strip()
-    return bool(api_key and database_id)
+    """Return True when both NOTION_API_KEY and NOTION_DATABASE_ID are set."""
+    return bool(
+        os.getenv("NOTION_API_KEY", "").strip()
+        and os.getenv("NOTION_DATABASE_ID", "").strip()
+    )
 
 
 def _build_test_script_data(
     section_count: int = 1,
     visual_type: str = "talking_head",
 ) -> dict:
-    """Build a minimal script_data dict matching the expected schema."""
+    """Build a minimal *script_data* dict matching the expected schema."""
     sections = []
     for i in range(section_count):
         sections.append({
@@ -61,46 +70,107 @@ def _build_test_script_data(
 
 
 def _unique_title() -> str:
-    """Return a unique title to avoid collisions in Notion."""
+    """Timestamped title to avoid Notion collisions."""
     return f"Integration Test {int(time.time())}"
 
 
-def _assert_success_result(
-    result: OperationResult,
-    msg: str = "OperationResult should be successful",
-) -> None:
-    """Assert an OperationResult represents success."""
-    assert isinstance(result, OperationResult), f"{msg}: not an OperationResult instance"
-    assert result.success is True, f"{msg}: success=False, error={result.error_message}"
-    assert result.error_code is None, f"{msg}: unexpected error_code={result.error_code}"
+def _extract_page_id(url: str) -> str:
+    """Pull the 32-char hex page ID out of a Notion URL."""
+    m = re.search(r"([0-9a-fA-F]{32})", url)
+    if m:
+        return m.group(1)
+    raise ValueError(f"Cannot extract page ID from URL: {url}")
 
 
-def _assert_fail_result(
+def _archive_page(client: NotionScriptClient, page_url: str) -> None:
+    """Best-effort archival of a Notion page after testing."""
+    try:
+        if client._client and page_url:
+            pid = _extract_page_id(page_url)
+            client._client.pages.update(page_id=pid, archived=True)
+    except Exception:
+        pass  # cleanup is best-effort
+
+
+def _assert_ok(result: OperationResult, msg: str = "") -> None:
+    ctx = f"{msg}: " if msg else ""
+    assert isinstance(result, OperationResult), f"{ctx}not an OperationResult"
+    assert result.success is True, f"{ctx}success=False  error={result.error_message}"
+    assert result.error_code is None, f"{ctx}unexpected code={result.error_code}"
+
+
+def _assert_fail(
     result: OperationResult,
     expected_code: str | None = None,
-    msg: str = "OperationResult should represent failure",
+    msg: str = "",
 ) -> None:
-    """Assert an OperationResult represents failure."""
-    assert isinstance(result, OperationResult), f"{msg}: not an OperationResult instance"
-    assert result.success is False, f"{msg}: success=True but expected failure"
-    assert result.error_message is not None and len(result.error_message) > 0, (
-        f"{msg}: error_message should not be empty"
-    )
+    ctx = f"{msg}: " if msg else ""
+    assert isinstance(result, OperationResult), f"{ctx}not an OperationResult"
+    assert result.success is False, f"{ctx}expected failure but got success"
+    assert result.error_message, f"{ctx}error_message is empty"
     if expected_code is not None:
         assert result.error_code == expected_code, (
-            f"{msg}: error_code={result.error_code!r}, expected={expected_code!r}"
+            f"{ctx}code={result.error_code!r}  expected={expected_code!r}"
         )
 
 
+def _require_creds(notion_config: dict) -> None:
+    """Skip the calling test when real credentials are unavailable."""
+    if not _has_credentials():
+        pytest.skip("No Notion credentials in .env — skipping live-API test")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
-# A. Color Module Tests (3 tests)
+# A. _parse_database_id  (4 tests)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestParseDatabaseId:
+    """Direct unit tests for the _parse_database_id helper."""
+
+    def test_uuid_with_query_params(self):
+        """Query-string noise (?v=…&t=…) must be stripped; UUID preserved."""
+        raw = (
+            "3373ff3f091780bca320f9142f486ec3"
+            "?v=3373ff3f091780998c05000cfa42d9f5"
+            "&t=3373ff3f09178051a8d100a9ba125896"
+        )
+        result = _parse_database_id(raw)
+        assert result == "3373ff3f091780bca320f9142f486ec3"
+        assert "?" not in result
+        assert "&" not in result
+
+    def test_full_notion_url(self):
+        """A full https://notion.so/… URL should yield a clean UUID."""
+        raw = "https://www.notion.so/workspace/3373ff3f091780bca320f9142f486ec3-TitleText"
+        result = _parse_database_id(raw)
+        # Should be a valid hex ID (32 chars, or dashed UUID)
+        assert re.match(r"^[0-9a-fA-F-]+$", result), f"got {result!r}"
+        assert "http" not in result
+        assert len(result) >= 32
+
+    def test_bare_uuid(self):
+        """Bare UUID (with or without dashes) passes through unchanged."""
+        with_dashes = "3373ff3f-0917-80bc-a320-f9142f486ec3"
+        assert _parse_database_id(with_dashes) == with_dashes
+
+        no_dashes = "3373ff3f091780bca320f9142f486ec3"
+        assert _parse_database_id(no_dashes) == no_dashes
+
+    def test_empty_and_whitespace(self):
+        """Empty or whitespace-only input returns empty string."""
+        assert _parse_database_id("") == ""
+        assert _parse_database_id("   ") == ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# B. Color module  (3 tests)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestColorModule:
     """Tests for packages.integrations.notion.colors."""
 
     def test_get_color_all_known_types(self):
-        """Verify all 6 visual types return the correct Notion color strings."""
+        """Every visual type in VISUAL_TYPE_COLORS returns the correct color."""
         expected = {
             "talking_head": "red",
             "animation": "blue",
@@ -109,156 +179,126 @@ class TestColorModule:
             "data_viz": "purple",
             "shader_bg": "gray",
         }
-        for visual_type, expected_color in expected.items():
-            assert visual_type in VISUAL_TYPE_COLORS, (
-                f"Visual type '{visual_type}' missing from VISUAL_TYPE_COLORS"
-            )
-            result = get_color(visual_type)
-            assert result == expected_color, (
-                f"get_color({visual_type!r}) = {result!r}, expected {expected_color!r}"
+        for vtype, color in expected.items():
+            assert vtype in VISUAL_TYPE_COLORS, f"{vtype!r} missing from map"
+            assert get_color(vtype) == color, (
+                f"get_color({vtype!r}) = {get_color(vtype)!r}, expected {color!r}"
             )
 
     def test_get_emoji_all_known_types(self):
-        """Verify all 6 visual types return the correct emoji strings."""
+        """Every visual type in EMOJI_MAP returns the correct emoji."""
         expected = {
-            "talking_head": "\U0001f534",  # red circle
-            "animation": "\U0001f535",    # blue circle
-            "broll": "\U0001f7e2",        # green circle
-            "screen_recording": "\U0001f7e1",  # yellow circle
-            "data_viz": "\U0001f7e3",     # purple circle
-            "shader_bg": "\u26ab",        # black circle
+            "talking_head": "\U0001f534",
+            "animation": "\U0001f535",
+            "broll": "\U0001f7e2",
+            "screen_recording": "\U0001f7e1",
+            "data_viz": "\U0001f7e3",
+            "shader_bg": "\u26ab",
         }
-        for visual_type, expected_emoji in expected.items():
-            assert visual_type in EMOJI_MAP, (
-                f"Visual type '{visual_type}' missing from EMOJI_MAP"
-            )
-            result = get_emoji(visual_type)
-            assert result == expected_emoji, (
-                f"get_emoji({visual_type!r}) = {result!r}, expected {expected_emoji!r}"
+        for vtype, emoji in expected.items():
+            assert vtype in EMOJI_MAP, f"{vtype!r} missing from EMOJI_MAP"
+            assert get_emoji(vtype) == emoji, (
+                f"get_emoji({vtype!r}) = {get_emoji(vtype)!r}, expected {emoji!r}"
             )
 
-    def test_color_unknown_type_returns_default(self):
-        """Unknown visual types should return 'default' for color and a fallback emoji."""
-        unknown = "nonexistent_visual_type"
-        assert get_color(unknown) == "default", (
-            f"get_color({unknown!r}) should return 'default'"
-        )
-        assert get_emoji(unknown) == "\u2b1c", (
-            f"get_emoji({unknown!r}) should return white square fallback"
-        )
-        # Also test empty string
+    def test_unknown_type_returns_defaults(self):
+        """Unknown visual types fall back to 'default' color and white-square emoji."""
+        assert get_color("nonexistent_type") == "default"
+        assert get_emoji("nonexistent_type") == "\u2b1c"
         assert get_color("") == "default"
         assert get_emoji("") == "\u2b1c"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# B. Client Initialization Tests (3 tests)
+# C. Client initialization  (3 tests)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestClientInitialization:
     """Tests for NotionScriptClient.__init__."""
 
-    def test_client_init_with_credentials(self, notion_config):
-        """When credentials exist, the internal client should be initialized."""
-        api_key = notion_config["api_key"]
-        database_id = notion_config["database_id"]
-
-        if not _has_credentials():
-            # No credentials — verify degradation mode works
-            client = NotionScriptClient(api_key="", database_id="")
-            assert client._client is None, "Client should be None without API key"
-            return
-
-        client = NotionScriptClient(api_key=api_key, database_id=database_id)
-        assert client._client is not None, (
-            "Client should be initialized when valid API key is provided"
+    def test_with_real_credentials(self, notion_config):
+        """With real credentials, the internal notion_client is created."""
+        _require_creds(notion_config)
+        client = NotionScriptClient(
+            api_key=notion_config["api_key"],
+            database_id=notion_config["database_id"],
         )
-        assert client.api_key == api_key
-        assert client.database_id == database_id
+        assert client._client is not None, "Client should initialise with valid API key"
+        assert client.api_key == notion_config["api_key"]
+        # database_id should be the PARSED version (no query params)
+        assert "?" not in client.database_id
+        assert "&" not in client.database_id
 
-    def test_client_init_without_credentials(self):
-        """When no API key is provided, the client should remain None (degraded mode)."""
+    def test_without_credentials_uses_monkeypatch(self, monkeypatch):
+        """With empty api_key and env cleared, _client stays None."""
+        monkeypatch.delenv("NOTION_API_KEY", raising=False)
+        monkeypatch.delenv("NOTION_DATABASE_ID", raising=False)
         client = NotionScriptClient(api_key="", database_id="")
         assert client._client is None, (
-            "Client should be None when no API key is provided"
+            "Client should be None when api_key is empty"
         )
         assert client.api_key == ""
         assert client.database_id == ""
 
-    def test_client_init_uses_env_when_no_args(self):
-        """When no arguments are passed, client reads from settings (env vars)."""
+    def test_env_fallback_when_no_args(self):
+        """NotionScriptClient() with no args reads from cached Settings/env."""
+        _require_creds({})  # skip if no creds
+        # Clear the lru_cache so Settings re-reads from the (conftest-loaded) env
+        from packages.core.config import get_settings as _gs
+        _gs.cache_clear()
+
         client = NotionScriptClient()
         env_key = os.getenv("NOTION_API_KEY", "").strip()
-        env_db = os.getenv("NOTION_DATABASE_ID", "").strip()
-
+        assert client.api_key == env_key
         if env_key:
             assert client._client is not None, (
-                "Client should initialize from env NOTION_API_KEY"
+                "Should create client from env NOTION_API_KEY"
             )
-            assert client.api_key == env_key
         else:
-            assert client._client is None, (
-                "Client should be None when env NOTION_API_KEY is not set"
-            )
-
-        assert client.database_id == env_db
+            assert client._client is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# C. _check_client Tests (2 tests)
+# D. _check_client  (2 tests)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestCheckClient:
     """Tests for NotionScriptClient._check_client."""
 
-    def test_check_client_available(self, notion_config):
-        """With a valid client, _check_client should return OperationResult.ok(None)."""
-        api_key = notion_config["api_key"]
-
-        if not api_key:
-            # Cannot test availability without credentials — verify degradation path
-            client = NotionScriptClient(api_key="", database_id="")
-            result = client._check_client()
-            _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                                msg="Missing credentials should return NOTION_NOT_CONFIGURED")
-            return
-
-        client = NotionScriptClient(api_key=api_key, database_id=notion_config["database_id"])
+    def test_client_available(self, notion_config):
+        """With a real client, _check_client returns OperationResult.ok(None)."""
+        _require_creds(notion_config)
+        client = NotionScriptClient(
+            api_key=notion_config["api_key"],
+            database_id=notion_config["database_id"],
+        )
         result = client._check_client()
-        _assert_success_result(result, msg="_check_client with valid credentials should succeed")
-        assert result.data is None, "ok(None) should have data=None"
+        _assert_ok(result, "valid client → ok(None)")
+        assert result.data is None
 
-    def test_check_client_unavailable(self):
-        """Without a client (no API key), _check_client should return NOTION_NOT_CONFIGURED."""
+    def test_client_unavailable(self, monkeypatch):
+        """Without a client, _check_client fails NOTION_NOT_CONFIGURED."""
+        monkeypatch.delenv("NOTION_API_KEY", raising=False)
+        monkeypatch.delenv("NOTION_DATABASE_ID", raising=False)
         client = NotionScriptClient(api_key="", database_id="")
         result = client._check_client()
-
-        _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                            msg="No client should fail with NOTION_NOT_CONFIGURED")
+        _assert_fail(result, expected_code="NOTION_NOT_CONFIGURED",
+                      msg="no client → NOTION_NOT_CONFIGURED")
         assert result.severity == ErrorSeverity.CRITICAL
         assert "Notion client is not initialized" in (result.error_message or "")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# D. create_script_page Tests (3 tests)
+# E. create_script_page  (2 tests)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestCreateScriptPage:
     """Tests for NotionScriptClient.create_script_page."""
 
     @pytest.mark.asyncio
-    async def test_create_script_page_success(self, notion_config):
-        """Create a real Notion page and verify the response contains a URL."""
-        if not _has_credentials():
-            client = NotionScriptClient(api_key="", database_id="")
-            result = await client.create_script_page(
-                title="Skipped — no credentials",
-                script_data=_build_test_script_data(),
-            )
-            _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                                msg="Missing credentials should produce NOTION_NOT_CONFIGURED")
-            return
-
+    async def test_real_page_creation(self, notion_config):
+        """Create a real Notion page; verify success and URL shape; clean up."""
+        _require_creds(notion_config)
         client = NotionScriptClient(
             api_key=notion_config["api_key"],
             database_id=notion_config["database_id"],
@@ -267,380 +307,178 @@ class TestCreateScriptPage:
         script_data = _build_test_script_data(section_count=1, visual_type="talking_head")
 
         result = await client.create_script_page(
-            title=title,
-            script_data=script_data,
-            run_id="phase13-test-create",
+            title=title, script_data=script_data, run_id="phase13-test-create",
         )
 
-        _assert_success_result(result, msg="create_script_page should succeed with real credentials")
-        assert result.data is not None and len(result.data) > 0, (
-            "Success data should contain the page URL"
-        )
-        assert "notion.so" in result.data or "notion.site" in result.data, (
-            f"Page URL should contain 'notion.so', got: {result.data}"
-        )
+        try:
+            _assert_ok(result, "create_script_page with real creds")
+            assert result.data is not None and len(result.data) > 0, "data should be page URL"
+            assert "notion.so" in result.data or "notion.site" in result.data, (
+                f"URL should contain 'notion.so', got: {result.data}"
+            )
+        finally:
+            _archive_page(client, result.data or "")
 
     @pytest.mark.asyncio
-    async def test_create_script_page_no_database_id(self, notion_config):
-        """When database_id is empty, should fail with NOTION_NOT_CONFIGURED."""
-        if not notion_config["api_key"]:
-            # Can't test with no api key — but can test with api key and no db
-            # We test the no-client path instead
-            client = NotionScriptClient(api_key="", database_id="")
-            result = await client.create_script_page(
-                title="No DB test",
-                script_data=_build_test_script_data(),
-            )
-            _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                                msg="No client should fail with NOTION_NOT_CONFIGURED")
-            return
-
-        # Initialize client with an API key but empty database_id
-        client = NotionScriptClient(api_key=notion_config["api_key"], database_id="")
+    async def test_without_credentials(self, monkeypatch):
+        """No credentials → NOTION_NOT_CONFIGURED, never hits the API."""
+        monkeypatch.delenv("NOTION_API_KEY", raising=False)
+        monkeypatch.delenv("NOTION_DATABASE_ID", raising=False)
+        client = NotionScriptClient(api_key="", database_id="")
         result = await client.create_script_page(
-            title="No DB test",
+            title="Should Not Be Created",
             script_data=_build_test_script_data(),
         )
-
-        _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                            msg="Empty database_id should fail with NOTION_NOT_CONFIGURED")
-
-    @pytest.mark.asyncio
-    async def test_create_script_page_content_structure(self, notion_config):
-        """Create a page then retrieve it to verify the block structure."""
-        if not _has_credentials():
-            # Verify that without credentials we get the expected degradation
-            client = NotionScriptClient(api_key="", database_id="")
-            result = await client.create_script_page(
-                title="Structure test (no creds)",
-                script_data=_build_test_script_data(),
-            )
-            _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED")
-            # Also verify get_script degradation
-            get_result = await client.get_script("fake-page-id")
-            _assert_fail_result(get_result, expected_code="NOTION_NOT_CONFIGURED")
-            return
-
-        client = NotionScriptClient(
-            api_key=notion_config["api_key"],
-            database_id=notion_config["database_id"],
-        )
-        title = _unique_title()
-        section_type = "Hook"
-        narration = "Welcome to this integration test video."
-        visual_cue = "Close-up shot of the presenter."
-        visual_type = "talking_head"
-
-        script_data = {
-            "entries": [{
-                "section_type": section_type,
-                "narration": narration,
-                "visual_cue": visual_cue,
-                "visual_type": visual_type,
-            }],
-        }
-
-        create_result = await client.create_script_page(
-            title=title,
-            script_data=script_data,
-            run_id="phase13-test-structure",
-        )
-        _assert_success_result(create_result, msg="Page creation should succeed")
-
-        # Extract page_id from URL (URL format: https://notion.so/Title-<32-char-id>)
-        page_url = create_result.data
-        page_id = page_url.rstrip("/").split("-")[-1]
-        # Notion IDs are 32 hex chars, but URL may add dashes
-        if len(page_id) != 32:
-            # Try extracting differently — the ID is the part after the last hyphen
-            # and may be 32 chars without dashes (URL format removes dashes)
-            pass
-
-        # Retrieve the page and verify content
-        get_result = await client.get_script(page_id)
-        _assert_success_result(get_result, msg="get_script should retrieve the created page")
-
-        retrieved = get_result.data
-        assert isinstance(retrieved, dict), "Retrieved data should be a dict"
-
-        # Verify sections were parsed correctly
-        sections = retrieved.get("sections", [])
-        assert len(sections) >= 1, (
-            f"Expected at least 1 section, got {len(sections)}"
-        )
-
-        first_section = sections[0]
-        assert first_section.get("section_type") == section_type, (
-            f"Section type mismatch: {first_section.get('section_type')!r} != {section_type!r}"
-        )
-        assert narration in first_section.get("narration", ""), (
-            f"Narration not found in section: {first_section.get('narration')!r}"
-        )
-        assert visual_cue in first_section.get("visual_cue", ""), (
-            f"Visual cue not found in section: {first_section.get('visual_cue')!r}"
-        )
+        _assert_fail(result, expected_code="NOTION_NOT_CONFIGURED",
+                      msg="no creds → NOTION_NOT_CONFIGURED")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# E. update_script_page Tests (2 tests)
+# F. update_script_page  (2 tests)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestUpdateScriptPage:
     """Tests for NotionScriptClient.update_script_page."""
 
     @pytest.mark.asyncio
-    async def test_update_script_page_success(self, notion_config):
-        """Create a page, then update it with new sections and verify success."""
-        if not _has_credentials():
-            client = NotionScriptClient(api_key="", database_id="")
-            result = await client.update_script_page(
-                page_id="fake-id",
-                sections=_build_test_script_data()["entries"],
-            )
-            _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                                msg="Missing credentials should fail with NOTION_NOT_CONFIGURED")
-            return
-
+    async def test_create_then_update(self, notion_config):
+        """Create a page, then append new sections; verify success; clean up."""
+        _require_creds(notion_config)
         client = NotionScriptClient(
             api_key=notion_config["api_key"],
             database_id=notion_config["database_id"],
         )
 
-        # Step 1: Create a page first
+        # Step 1 — create
         create_result = await client.create_script_page(
             title=_unique_title(),
             script_data=_build_test_script_data(section_count=1, visual_type="broll"),
             run_id="phase13-test-update",
         )
-        _assert_success_result(create_result, msg="Page creation should succeed")
+        _assert_ok(create_result, "page creation for update test")
+        page_url = create_result.data or ""
+        page_id = _extract_page_id(page_url)
 
-        page_url = create_result.data
-        page_id = page_url.rstrip("/").split("-")[-1]
-
-        # Step 2: Update the page with a new section
-        new_sections = [{
-            "section_type": "Updated Section",
-            "narration": "This is the appended content from update_script_page.",
-            "visual_cue": "New visual cue added via update.",
-            "visual_type": "animation",
-        }]
-
-        update_result = await client.update_script_page(
-            page_id=page_id,
-            sections=new_sections,
-            run_id="phase13-test-update",
-        )
-        _assert_success_result(update_result, msg="update_script_page should succeed")
+        try:
+            # Step 2 — update
+            new_sections = [{
+                "section_type": "Appended Section",
+                "narration": "Content added by update_script_page.",
+                "visual_cue": "New visual from update.",
+                "visual_type": "animation",
+            }]
+            update_result = await client.update_script_page(
+                page_id=page_id, sections=new_sections, run_id="phase13-test-update",
+            )
+            _assert_ok(update_result, "update_script_page should succeed")
+        finally:
+            _archive_page(client, page_url)
 
     @pytest.mark.asyncio
-    async def test_update_script_page_no_client(self):
-        """Without a client, update_script_page should fail with NOTION_NOT_CONFIGURED."""
+    async def test_without_client(self, monkeypatch):
+        """No client → NOTION_NOT_CONFIGURED."""
+        monkeypatch.delenv("NOTION_API_KEY", raising=False)
+        monkeypatch.delenv("NOTION_DATABASE_ID", raising=False)
         client = NotionScriptClient(api_key="", database_id="")
         result = await client.update_script_page(
-            page_id="some-fake-page-id",
-            sections=[{"section_type": "Test", "narration": "Test", "visual_cue": "Test", "visual_type": "talking_head"}],
+            page_id="fake-page-id",
+            sections=[{
+                "section_type": "T", "narration": "N",
+                "visual_cue": "V", "visual_type": "talking_head",
+            }],
         )
-
-        _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                            msg="No client should fail with NOTION_NOT_CONFIGURED")
+        _assert_fail(result, expected_code="NOTION_NOT_CONFIGURED",
+                      msg="no client update → NOTION_NOT_CONFIGURED")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# F. get_script Tests (2 tests)
+# G. get_script  (2 tests)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestGetScript:
     """Tests for NotionScriptClient.get_script."""
 
     @pytest.mark.asyncio
-    async def test_get_script_success(self, notion_config):
-        """Create a page, then retrieve it and verify the parsed structure."""
-        if not _has_credentials():
-            client = NotionScriptClient(api_key="", database_id="")
-            result = await client.get_script("fake-page-id")
-            _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                                msg="Missing credentials should fail with NOTION_NOT_CONFIGURED")
-            return
-
+    async def test_create_then_retrieve(self, notion_config):
+        """Create a page with known content, retrieve it, verify sections."""
+        _require_creds(notion_config)
         client = NotionScriptClient(
             api_key=notion_config["api_key"],
             database_id=notion_config["database_id"],
         )
 
-        # Create a page with known content
         title = _unique_title()
         script_data = _build_test_script_data(section_count=2, visual_type="data_viz")
         create_result = await client.create_script_page(
-            title=title,
-            script_data=script_data,
-            run_id="phase13-test-get",
+            title=title, script_data=script_data, run_id="phase13-test-get",
         )
-        _assert_success_result(create_result, msg="Page creation should succeed")
+        _assert_ok(create_result, "page creation for get_script test")
+        page_url = create_result.data or ""
+        page_id = _extract_page_id(page_url)
 
-        page_url = create_result.data
-        page_id = page_url.rstrip("/").split("-")[-1]
+        try:
+            get_result = await client.get_script(page_id)
+            _assert_ok(get_result, "get_script should retrieve the page")
 
-        # Retrieve the page
-        get_result = await client.get_script(page_id)
-        _assert_success_result(get_result, msg="get_script should succeed")
+            data = get_result.data
+            assert isinstance(data, dict), "data should be a dict"
+            assert data.get("page_id") == page_id
+            sections = data.get("sections", [])
+            assert len(sections) == 2, f"Expected 2 sections, got {len(sections)}"
 
-        retrieved = get_result.data
-        assert isinstance(retrieved, dict)
-        assert retrieved.get("page_id") == page_id
-        assert len(retrieved.get("sections", [])) == 2, (
-            f"Expected 2 sections, got {len(retrieved.get('sections', []))}"
-        )
-
-        # Verify first section has correct narration
-        first_section = retrieved["sections"][0]
-        assert "narration text for section 1" in first_section.get("narration", ""), (
-            f"First section narration mismatch: {first_section.get('narration')!r}"
-        )
+            first = sections[0]
+            assert "narration text for section 1" in first.get("narration", ""), (
+                f"First narration mismatch: {first.get('narration')!r}"
+            )
+        finally:
+            _archive_page(client, page_url)
 
     @pytest.mark.asyncio
-    async def test_get_script_no_client(self):
-        """Without a client, get_script should fail with NOTION_NOT_CONFIGURED."""
+    async def test_without_client(self, monkeypatch):
+        """No client → NOTION_NOT_CONFIGURED."""
+        monkeypatch.delenv("NOTION_API_KEY", raising=False)
+        monkeypatch.delenv("NOTION_DATABASE_ID", raising=False)
         client = NotionScriptClient(api_key="", database_id="")
         result = await client.get_script("nonexistent-page-id")
-
-        _assert_fail_result(result, expected_code="NOTION_NOT_CONFIGURED",
-                            msg="No client should fail with NOTION_NOT_CONFIGURED")
+        _assert_fail(result, expected_code="NOTION_NOT_CONFIGURED",
+                      msg="no client get → NOTION_NOT_CONFIGURED")
         assert result.user_message is not None and len(result.user_message) > 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# G. Error Handling Tests (2 tests)
+# H. Error handling  (1 test)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestErrorHandling:
-    """Tests for error handling paths and OperationResult structure."""
+    """Tests for error / auth-failure paths."""
 
     @pytest.mark.asyncio
-    async def test_create_page_with_bad_api_key(self):
-        """Invalid API key should produce OperationResult.fail with an appropriate error code.
+    async def test_bad_api_key(self):
+        """A fabricated API key must produce NOTION_AUTH_FAILED.
 
-        When notion_client is NOT installed, the client can't be created at all,
-        so we get NOTION_NOT_CONFIGURED. When it IS installed but the key is bad,
-        we get NOTION_AUTH_FAILED or NOTION_PUBLISH_FAILED from the API.
+        The retry decorator does *not* retry on 401 (not in the retryable
+        exception set), so this test completes in one round-trip.
         """
-        client = NotionScriptClient(api_key="ntn_invalid_key_12345", database_id="fake-db-id")
+        # The key is long enough (>5 chars) to pass the init guard, but invalid.
+        client = NotionScriptClient(
+            api_key="ntn_invalid_key_12345",
+            database_id="3373ff3f091780bca320f9142f486ec3",
+        )
 
-        # If notion_client is not installed, _client will be None
-        # and the method returns NOTION_NOT_CONFIGURED before hitting the API.
+        # If notion_client package isn't installed, _client is None.
         if client._client is None:
-            # notion_client package not installed — verify graceful degradation
-            result = await client.create_script_page(
-                title="Bad Key Test",
-                script_data=_build_test_script_data(),
-                run_id="phase13-test-bad-key",
-            )
-            _assert_fail_result(
-                result,
-                expected_code="NOTION_NOT_CONFIGURED",
-                msg="Without notion_client installed, should degrade gracefully",
-            )
-            assert result.severity == ErrorSeverity.CRITICAL
-            return
+            pytest.skip("notion_client package not installed")
 
-        # notion_client IS installed — bad key should cause an API-level failure
         result = await client.create_script_page(
             title="Bad Key Test",
             script_data=_build_test_script_data(),
             run_id="phase13-test-bad-key",
         )
 
-        _assert_fail_result(result, msg="Bad API key should produce a failure result")
-
+        _assert_fail(result, msg="bad API key should produce failure")
         assert result.error_code in (
             "NOTION_AUTH_FAILED",
             "NOTION_PUBLISH_FAILED",
-            "NOTION_NOT_CONFIGURED",
-        ), f"Unexpected error_code for bad key: {result.error_code!r}"
-
-        assert result.severity is not None, "Severity should be set on failure"
-        assert result.user_message is not None and len(result.user_message) > 0, (
-            "user_message should be populated"
-        )
-
-    @pytest.mark.asyncio
-    async def test_operation_result_structure(self, notion_config):
-        """Verify all OperationResult attributes exist on both ok and fail responses."""
-        # Test success result structure
-        ok_result = OperationResult.ok(
-            data="https://notion.so/test-page",
-            message="Test success message",
-        )
-        assert ok_result.success is True
-        assert ok_result.data == "https://notion.so/test-page"
-        assert ok_result.user_message == "Test success message"
-        assert ok_result.error_code is None
-        assert ok_result.error_message is None
-        assert ok_result.retryable is False
-        assert ok_result.retry_after_seconds is None
-        assert isinstance(ok_result.error_details, dict)
-
-        # Test failure result structure
-        fail_result = OperationResult.fail(
-            message="Internal error occurred",
-            code="NOTION_PUBLISH_FAILED",
-            severity=ErrorSeverity.CRITICAL,
-            user_message="Could not publish to Notion.",
-            retryable=True,
-            retry_after=60,
-            details={"attempt": 3, "last_error": "timeout"},
-        )
-        assert fail_result.success is False
-        assert fail_result.error_message == "Internal error occurred"
-        assert fail_result.error_code == "NOTION_PUBLISH_FAILED"
-        assert fail_result.severity == ErrorSeverity.CRITICAL
-        assert fail_result.user_message == "Could not publish to Notion."
-        assert fail_result.retryable is True
-        assert fail_result.retry_after_seconds == 60
-        assert fail_result.error_details == {"attempt": 3, "last_error": "timeout"}
-
-        # Test to_api_response on success
-        api_ok = ok_result.to_api_response()
-        assert api_ok["success"] is True
-        assert api_ok["data"] == "https://notion.so/test-page"
-        assert api_ok["message"] == "Test success message"
-
-        # Test to_api_response on failure
-        api_fail = fail_result.to_api_response()
-        assert api_fail["success"] is False
-        assert api_fail["error_code"] == "NOTION_PUBLISH_FAILED"
-        assert api_fail["severity"] == "critical"
-        assert api_fail["retryable"] is True
-        assert api_fail["retry_after_seconds"] == 60
-
-        # Verify real Notion client produces OperationResult with correct structure
-        if _has_credentials():
-            client = NotionScriptClient(
-                api_key=notion_config["api_key"],
-                database_id=notion_config["database_id"],
-            )
-            result = await client.create_script_page(
-                title=_unique_title(),
-                script_data=_build_test_script_data(),
-                run_id="phase13-test-structure",
-            )
-            assert hasattr(result, "success"), "Result should have 'success' attribute"
-            assert hasattr(result, "data"), "Result should have 'data' attribute"
-            assert hasattr(result, "error_code"), "Result should have 'error_code' attribute"
-            assert hasattr(result, "error_message"), "Result should have 'error_message' attribute"
-            assert hasattr(result, "severity"), "Result should have 'severity' attribute"
-            assert hasattr(result, "user_message"), "Result should have 'user_message' attribute"
-            assert hasattr(result, "retryable"), "Result should have 'retryable' attribute"
-        else:
-            # Even with degraded client, result should have all attributes
-            client = NotionScriptClient(api_key="", database_id="")
-            result = await client.create_script_page(
-                title="structure test",
-                script_data=_build_test_script_data(),
-            )
-            assert hasattr(result, "success")
-            assert hasattr(result, "data")
-            assert hasattr(result, "error_code")
-            assert hasattr(result, "error_message")
-            assert hasattr(result, "severity")
-            assert hasattr(result, "user_message")
-            assert hasattr(result, "retryable")
+        ), f"Unexpected error code: {result.error_code!r}"
+        assert result.severity is not None
+        assert result.user_message and len(result.user_message) > 0

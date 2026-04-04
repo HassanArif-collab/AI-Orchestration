@@ -7,6 +7,8 @@ All methods now return OperationResult[T] instead of raw types,
 providing structured error context for the frontend.
 """
 
+import re
+
 from packages.core.config import get_settings
 from packages.core.logger import get_logger
 from packages.core.retry import retry_with_backoff
@@ -15,6 +17,31 @@ from packages.core.operation_result import OperationResult, ErrorSeverity
 from packages.integrations.notion.colors import get_color, get_emoji
 
 logger = get_logger(__name__)
+
+
+def _parse_database_id(raw_id: str) -> str:
+    """Extract a pure 32-char hex UUID from a Notion database ID or URL.
+
+    Users often paste the full Notion URL which includes query parameters:
+        3373ff3f091780bca320f9142f486ec3?v=...&t=...
+    or:
+        https://www.notion.so/workspace/3373ff3f091780bca320f9142f486ec3-...
+
+    Notion API requires a plain UUID without query params.
+    """
+    if not raw_id:
+        return ""
+    # Strip query parameters
+    raw_id = raw_id.split("?")[0]
+    # Extract the 32-char hex UUID (with or without dashes)
+    match = re.search(r'([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})', raw_id)
+    if match:
+        return match.group(1)
+    # Also try matching bare 32-char hex (without dashes)
+    match = re.search(r'([0-9a-fA-F]{32})', raw_id)
+    if match:
+        return match.group(1)
+    return raw_id.strip()
 
 # Exception types from notion_client that we want to retry on
 # These are imported lazily to avoid import errors when notion_client isn't installed
@@ -48,15 +75,21 @@ class NotionScriptClient:
             database_id: Optional database ID for script pages. Falls back to
                 settings.NOTION_DATABASE_ID.
         """
-        self.api_key = api_key or get_settings().NOTION_API_KEY
-        self.database_id = database_id or get_settings().NOTION_DATABASE_ID
+        self.api_key = api_key if api_key is not None else get_settings().NOTION_API_KEY
+        # Parse database_id: strip query params, extract UUID from URLs
+        raw_db_id = database_id if database_id is not None else get_settings().NOTION_DATABASE_ID
+        self.database_id = _parse_database_id(raw_db_id)
         self._client = None
 
-        if self.api_key:
+        # Only create notion_client if api_key is non-empty and looks valid
+        # (notion_client.Client(auth="") still creates a client object, so we
+        #  must explicitly check for empty/whitespace keys)
+        api_key_stripped = self.api_key.strip() if self.api_key else ""
+        if api_key_stripped and len(api_key_stripped) > 5:
             try:
                 from notion_client import Client
 
-                self._client = Client(auth=self.api_key)
+                self._client = Client(auth=api_key_stripped)
             except Exception as e:
                 logger.warning(f"notion_init_failed: {e}")
                 self._client = None
@@ -175,7 +208,7 @@ class NotionScriptClient:
             response = self._client.pages.create(
                 parent={"database_id": self.database_id},
                 properties={
-                    "Name": { # Standard Notion DB title column name is often Name
+                    "Video name": { # Title column in the Video Scripts database
                         "title": [{"type": "text", "text": {"content": title}}]
                     }
                 },
