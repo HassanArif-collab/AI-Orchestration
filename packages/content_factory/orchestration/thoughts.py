@@ -56,6 +56,23 @@ AGENT_COLORS = {
 }
 
 
+# Maps application-level thought_type values to DB-level CHECK constraint values.
+# The DB CHECK constraint only allows: thinking, search, output, error,
+# memory_read, memory_write. Application code uses broader categories
+# (info, success, milestone) which we map here.
+_THOUGHT_TYPE_MAP = {
+    "info": "thinking",
+    "thinking": "thinking",
+    "success": "output",
+    "milestone": "output",
+    "error": "error",
+    "search": "search",
+    "memory_read": "memory_read",
+    "memory_write": "memory_write",
+    "output": "output",
+}
+
+
 async def report_thought(
     card_id: str,
     agent_name: str,
@@ -84,14 +101,15 @@ async def report_thought(
     try:
         from packages.core.supabase_client import get_supabase
         sb = get_supabase()
+
+        # Map application thought types to DB CHECK constraint values
+        db_thought_type = _THOUGHT_TYPE_MAP.get(thought_type, "thinking")
         
         sb.table("agent_thoughts").insert({
             "card_id": card_id,
             "agent_name": agent_name,
-            "thought_type": thought_type,
+            "thought_type": db_thought_type,
             "content": thought,
-            "metadata": metadata or {},
-            "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
         
         logger.debug(f"thought_reported: agent={agent_name} type={thought_type}")

@@ -28,14 +28,14 @@ _ENV_FILE = _PROJECT_ROOT / ".env"
 if _ENV_FILE.exists():
     from dotenv import load_dotenv
 
-    load_dotenv(_ENV_FILE, override=False)
+    load_dotenv(_ENV_FILE, override=True)
 else:
     # Fallback: try the repo root one level up
     _ENV_FILE_ALT = Path(__file__).resolve().parents[3] / ".env"
     if _ENV_FILE_ALT.exists():
         from dotenv import load_dotenv
 
-        load_dotenv(_ENV_FILE_ALT, override=False)
+        load_dotenv(_ENV_FILE_ALT, override=True)
 
 
 # ---------------------------------------------------------------------------
@@ -116,5 +116,5 @@ def _ensure_env_loaded():
     _ENV_FILE = _PROJECT_ROOT / ".env"
     if _ENV_FILE.exists():
         from dotenv import load_dotenv
-        load_dotenv(_ENV_FILE, override=False)
+        load_dotenv(_ENV_FILE, override=True)
     yield

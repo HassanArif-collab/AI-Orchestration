@@ -141,39 +141,49 @@ class TestSupabaseConnection:
         # Use service_role key to bypass RLS for INSERT/DELETE operations.
         # The anon key is blocked by Supabase Row-Level Security for writes.
         client = _create_test_client(use_service_role=True)
-        test_id = f"test_row_{uuid.uuid4().hex[:12]}"
+
+        # Match the REAL schema from 001_initial_schema.sql:
+        #   id UUID (auto-generated), card_id UUID (nullable FK),
+        #   agent_name TEXT, thought_type TEXT (CHECK constraint),
+        #   content TEXT, created_at TIMESTAMPTZ (auto)
+        # We omit id (auto-generated) and created_at (auto).
+        # card_id is nullable so we can skip it for the test.
         test_payload = {
-            "id": test_id,
             "agent_name": "integration_test_agent",
-            "thought": "Phase 12 integration test — safe to delete",
-            "status": "info",
+            "thought_type": "thinking",  # Must match CHECK constraint values
+            "content": "Phase 12 integration test — safe to delete",
         }
         inserted = False
+        inserted_id = None
 
         try:
             # Insert
             resp = client.table("agent_thoughts").insert(test_payload).execute()
             assert resp is not None
             assert resp.data is not None
+            assert len(resp.data) >= 1
+            inserted_id = resp.data[0]["id"]
             inserted = True
 
-            # Read back
+            # Read back using the server-generated UUID
             read = (
                 client.table("agent_thoughts")
                 .select("*")
-                .eq("id", test_id)
+                .eq("id", inserted_id)
                 .execute()
             )
             assert read is not None
             assert read.data is not None
             assert len(read.data) >= 1
-            assert read.data[0]["id"] == test_id
+            assert read.data[0]["agent_name"] == "integration_test_agent"
+            assert read.data[0]["thought_type"] == "thinking"
+            assert read.data[0]["content"] == "Phase 12 integration test — safe to delete"
         except Exception as exc:
-            pytest.skip(f"Supabase insert/read failed (RLS or schema mismatch): {exc}")
+            pytest.skip(f"Supabase insert/read failed: {exc}")
         finally:
-            if inserted:
+            if inserted and inserted_id:
                 try:
-                    client.table("agent_thoughts").delete().eq("id", test_id).execute()
+                    client.table("agent_thoughts").delete().eq("id", inserted_id).execute()
                 except Exception:
                     pass  # best-effort cleanup
 

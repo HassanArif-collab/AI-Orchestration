@@ -232,7 +232,8 @@ class TestZepConnection:
                 assert result.data == [], f"Expected empty results for obscure query, got: {result.data}"
             else:
                 # Failure is acceptable — the client degrades gracefully
-                assert result.message is not None
+                # OperationResult uses error_message (not message)
+                assert result.error_message is not None, "OperationResult should have error_message on failure"
         except Exception as exc:
             pytest.skip(f"Zep search failed: {exc}")
 
