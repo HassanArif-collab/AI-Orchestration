@@ -100,17 +100,24 @@ class TestPreviewShader:
     """Tests for GET /api/visual/radiant/preview/{shader_name}."""
 
     @pytest.mark.asyncio
-    async def test_preview_404_not_found(self, auth_client):
+    async def test_preview_404_not_found(self, client):
         mod = _mod()
         mock_path = MagicMock()
         mock_path.exists.return_value = False
         mock_path.resolve.return_value = mock_path
         mock_path.__truediv__ = MagicMock(return_value=mock_path)
 
+        # Bypass auth middleware by patching get_settings at the auth module.
+        # This makes the test self-contained regardless of the user's .env
+        # or system environment variables (API_AUTH_ENABLED, API_KEYS).
+        mock_settings = MagicMock()
+        mock_settings.is_auth_enabled.return_value = False
+
         original_base = mod.SHADER_BASE_DIR
         try:
             mod.SHADER_BASE_DIR = Path("/fake/shaders")
-            resp = await auth_client.get("/api/visual/radiant/preview/test_shader")
+            with patch("apps.api.middleware.auth.get_settings", return_value=mock_settings):
+                resp = await client.get("/api/visual/radiant/preview/test_shader")
             assert resp.status_code == 404
         finally:
             mod.SHADER_BASE_DIR = original_base
