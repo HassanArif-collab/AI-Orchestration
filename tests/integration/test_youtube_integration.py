@@ -628,17 +628,36 @@ class TestYouTubeTranscriptReal:
 
             # Method 2: Fallback to direct API (more reliable on some platforms)
             try:
-                raw_segments = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
-                if raw_segments and len(raw_segments) > 0:
-                    # Convert to our expected format
-                    full_text = " ".join(s.get("text", "") for s in raw_segments)
-                    transcript = {
-                        "segments": raw_segments,
-                        "caption_type": "direct_api_fallback",
-                        "language": "en",
-                        "word_count": len(full_text.split()),
-                    }
-                    break
+                _ytt_api = YouTubeTranscriptApi()
+                if hasattr(_ytt_api, 'fetch'):
+                    # v1.x API: YouTubeTranscriptApi().fetch(video_id)
+                    fetched = _ytt_api.fetch(video_id, languages=["en"])
+                    if fetched:
+                        # v1.x returns FetchedTranscript — convert to dict list
+                        raw_segments = [
+                            {"text": seg.text, "start": seg.start, "duration": seg.duration}
+                            for seg in fetched
+                        ]
+                        full_text = " ".join(s["text"] for s in raw_segments)
+                        transcript = {
+                            "segments": raw_segments,
+                            "caption_type": "direct_api_fallback_v1",
+                            "language": getattr(fetched, 'language_code', "en"),
+                            "word_count": len(full_text.split()),
+                        }
+                        break
+                elif hasattr(YouTubeTranscriptApi, 'get_transcript'):
+                    # v0.x API: YouTubeTranscriptApi.get_transcript(video_id)
+                    raw_segments = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
+                    if raw_segments and len(raw_segments) > 0:
+                        full_text = " ".join(s.get("text", "") for s in raw_segments)
+                        transcript = {
+                            "segments": raw_segments,
+                            "caption_type": "direct_api_fallback_v0",
+                            "language": "en",
+                            "word_count": len(full_text.split()),
+                        }
+                        break
             except Exception as e:
                 last_error = e
 
