@@ -3,8 +3,12 @@ conftest.py — Shared fixtures for integration tests (Phases 11-17).
 
 Integration tests hit REAL services (Supabase, Zep, FreeRouter, YouTube, etc.)
 and require a valid .env file with real credentials.  On startup this conftest
-loads the project .env file into os.environ so that skip_if_no_env() can see
+loads ALL .env files into os.environ so that skip_if_no_env() can see
 the values without requiring the user to manually export them.
+
+Env files loaded (in order, each overriding the previous):
+  1. <project_root>/.env          — main pipeline config (Supabase, Zep, Exa, etc.)
+  2. <project_root>/freerouter/.env — FreeRouter provider keys (YouTube OAuth, LLM keys)
 
 Contrast with tests/phase_A0_bootstrap/conftest.py which creates Settings with
 _env_file=None to isolate unit tests from the .env file.
@@ -21,21 +25,29 @@ import httpx
 # Bootstrap: load .env into os.environ for integration tests
 # ---------------------------------------------------------------------------
 
-# Walk up from this file to find the project root (where .env lives)
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ENV_FILE = _PROJECT_ROOT / ".env"
+def _load_env_files():
+    """Load all .env files into os.environ.
 
-if _ENV_FILE.exists():
-    from dotenv import load_dotenv
+    Integration tests need credentials from multiple .env files:
+    - Main .env: Supabase, Zep, Exa, Notion, YouTube API key
+    - freerouter/.env: YouTube OAuth, LLM provider keys (OpenRouter, Groq, etc.)
+    """
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    env_files = [
+        _PROJECT_ROOT / ".env",                    # Main pipeline config
+        _PROJECT_ROOT / "freerouter" / ".env",     # FreeRouter provider keys
+        Path(__file__).resolve().parents[3] / ".env",  # Repo root fallback
+    ]
 
-    load_dotenv(_ENV_FILE, override=True)
-else:
-    # Fallback: try the repo root one level up
-    _ENV_FILE_ALT = Path(__file__).resolve().parents[3] / ".env"
-    if _ENV_FILE_ALT.exists():
-        from dotenv import load_dotenv
+    for env_file in env_files:
+        if env_file.exists():
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(env_file, override=True)
+            except ImportError:
+                pass
 
-        load_dotenv(_ENV_FILE_ALT, override=True)
+_load_env_files()
 
 
 # ---------------------------------------------------------------------------
@@ -108,13 +120,10 @@ async def is_service_running(url: str, timeout: float = 5) -> bool:
 
 @pytest.fixture(autouse=True)
 def _ensure_env_loaded():
-    """Re-load .env before every integration test.
+    """Re-load .env files before every integration test.
 
     Phase A10 conftest clears env vars for isolation. Integration tests need
     them back. This fixture runs for every test in tests/integration/.
     """
-    _ENV_FILE = _PROJECT_ROOT / ".env"
-    if _ENV_FILE.exists():
-        from dotenv import load_dotenv
-        load_dotenv(_ENV_FILE, override=True)
+    _load_env_files()
     yield

@@ -154,10 +154,14 @@ class TestExaClientReal:
             # If no API key is configured, data will be None — that's acceptable
             if not result.success:
                 pytest.skip(f"Exa not configured or error: {result.error_message}")
-            assert isinstance(result.data, list)
+            # With a valid key, obscure queries should return an empty list
+            assert isinstance(result.data, list), f"Expected list, got {type(result.data)}"
 
         except ConnectionError as exc:
             pytest.skip(f"Exa API unreachable: {exc}")
+        except OSError as exc:
+            # On Windows, SSL/connection errors may surface as OSError subclasses
+            pytest.skip(f"Exa API connection error: {exc}")
         except Exception as exc:
             err_str = str(exc).lower()
             if any(kw in err_str for kw in ("unauthorized", "invalid", "401", "403", "rate", "quota")):
