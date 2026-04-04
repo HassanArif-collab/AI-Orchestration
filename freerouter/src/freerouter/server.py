@@ -1,5 +1,5 @@
 """
-server.py — Minimal LiteLLM-backed proxy.
+server.py — LiteLLM-backed proxy with multi-fallback chains.
 
 Accepts POST /v1/chat/completions with model= set to either:
   - A task name:  "researcher", "scorer", "auto", etc.
@@ -11,11 +11,10 @@ Returns standard OpenAI-compatible JSON + two headers:
 
 Run:  python -m freerouter
 
-v3 FIXES applied:
-  - GAP 1: HTTPException(503) instead of RuntimeError (critical for RouterClient retry)
-  - GAP 2: .env path resolves to freerouter/.env correctly
-  - Added /v1/models endpoint (was missing from v2)
-  - Added version "3.0.0" to health response
+v3.1 changes:
+  - Multi-fallback chains: primary → fallback → fallback2
+  - Ollama Cloud support (ollama_chat/ prefix + api_base + api_key)
+  - 3 providers: OpenRouter, Groq, Ollama Cloud
 """
 
 import json
@@ -33,9 +32,7 @@ from .config import ROUTES
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-# GAP FIX 2: Load from freerouter/.env
-# __file__ = freerouter/src/freerouter/server.py
-# Go up two levels to reach freerouter/.env
+# Load from freerouter/.env
 _env_candidates = [
     os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # freerouter/.env
     os.path.join(os.path.dirname(__file__), ".env"),               # freerouter/src/freerouter/.env
@@ -52,48 +49,89 @@ litellm.set_verbose = False
 log = logging.getLogger("freerouter")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
-app = FastAPI(title="FreeRouter", version="3.0.0")
+app = FastAPI(title="FreeRouter", version="3.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ── Ollama Cloud config ───────────────────────────────────────────────────────
+
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "https://ollama.com")
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
 
 
 # ── Routing helpers ───────────────────────────────────────────────────────────
 
-def _resolve(model: str) -> tuple[str, str]:
-    """Return (primary, fallback) LiteLLM model strings for a task name or pass-through."""
+def _resolve(model: str) -> list[str]:
+    """Return ordered list of LiteLLM model strings to try.
+
+    For a task name, returns [primary, fallback, fallback2].
+    For a direct litellm string, returns [model, auto_fallback].
+    """
     route = ROUTES.get(model)
     if route:
-        return route["model"], route["fallback"]
+        # Build list from route keys (model, fallback, fallback2) — skip missing
+        models = []
+        for key in ("model", "fallback", "fallback2"):
+            val = route.get(key)
+            if val:
+                models.append(val)
+        return models
     # Already a litellm string like "groq/llama-3.3-70b-versatile" — pass through
-    return model, ROUTES["auto"]["fallback"]
+    return [model, ROUTES["auto"]["model"]]
 
 
 def _provider(model_str: str) -> str:
-    return model_str.split("/")[0]
+    """Extract provider name from litellm model string."""
+    prefix = model_str.split("/")[0]
+    # Normalize ollama_chat → ollama
+    if prefix.startswith("ollama"):
+        return "ollama"
+    return prefix
+
+
+def _build_call_kwargs(model_str: str) -> dict:
+    """Build extra kwargs for litellm.acompletion based on provider."""
+    kwargs = {}
+    if model_str.startswith("ollama"):
+        kwargs["api_base"] = OLLAMA_API_BASE
+        if OLLAMA_API_KEY:
+            kwargs["api_key"] = OLLAMA_API_KEY
+    return kwargs
 
 
 # ── Core call (non-streaming) ─────────────────────────────────────────────────
 
-async def _complete(primary: str, fallback: str, messages: list, params: dict):
-    for model in [primary, fallback]:
+async def _complete(model_chain: list[str], messages: list, params: dict):
+    """Try each model in the chain until one succeeds."""
+    last_error = None
+    for model in model_chain:
         try:
-            resp = await litellm.acompletion(model=model, messages=messages, **params)
+            extra = _build_call_kwargs(model)
+            resp = await litellm.acompletion(model=model, messages=messages, **params, **extra)
             resp._used_model = model
             return resp
         except Exception as exc:
-            log.warning("model_failed model=%s error=%s trying_fallback=%s", model, exc, fallback)
+            last_error = exc
+            log.warning(
+                "model_failed model=%s error=%s remaining=%d",
+                model, exc, len(model_chain) - model_chain.index(model) - 1,
+            )
 
-    # GAP FIX 1: Return 503 so RouterClient retries with "auto"
-    # RouterClient only retries on 503 — returning 500 would break fallback logic
-    raise HTTPException(status_code=503, detail=f"Both {primary!r} and {fallback!r} failed")
+    # Return 503 so RouterClient retries with "auto"
+    raise HTTPException(
+        status_code=503,
+        detail=f"All models failed: {[m for m in model_chain]}. Last error: {last_error}",
+    )
 
 
 # ── Core call (streaming) ─────────────────────────────────────────────────────
 
-async def _stream(primary: str, fallback: str, messages: list, params: dict) -> AsyncIterator[str]:
-    for model in [primary, fallback]:
+async def _stream(model_chain: list[str], messages: list, params: dict) -> AsyncIterator[str]:
+    """Try each model in the chain for streaming."""
+    for model in model_chain:
         try:
+            extra = _build_call_kwargs(model)
             resp = await litellm.acompletion(
-                model=model, messages=messages, stream=True, **params
+                model=model, messages=messages, stream=True, **params, **extra,
             )
             async for chunk in resp:
                 yield f"data: {chunk.model_dump_json()}\n\n"
@@ -111,16 +149,17 @@ async def _stream(primary: str, fallback: str, messages: list, params: dict) -> 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
-    primary, fallback = _resolve(body.get("model", "auto"))
+    model_chain = _resolve(body.get("model", "auto"))
 
     messages = body["messages"]
     params = {k: v for k, v in body.items() if k not in ("model", "messages")}
 
-    log.info("request task=%s → model=%s", body.get("model", "auto"), primary)
+    primary = model_chain[0]
+    log.info("request task=%s → primary=%s chain_len=%d", body.get("model", "auto"), primary, len(model_chain))
 
     if params.pop("stream", False):
         return StreamingResponse(
-            _stream(primary, fallback, messages, params),
+            _stream(model_chain, messages, params),
             media_type="text/event-stream",
             headers={
                 "x-freerouter-model":    primary,
@@ -128,11 +167,21 @@ async def chat_completions(request: Request):
             },
         )
 
-    resp = await _complete(primary, fallback, messages, params)
+    resp = await _complete(model_chain, messages, params)
     used = getattr(resp, "_used_model", primary)
 
+    # Normalize response for reasoning models (e.g., StepFun):
+    # Some models put output in reasoning_content with content=null.
+    # Fix: copy reasoning_content into content so all clients work.
+    data = resp.model_dump()
+    for choice in data.get("choices", []):
+        msg = choice.get("message", {})
+        if not msg.get("content") and msg.get("reasoning_content"):
+            msg["content"] = msg["reasoning_content"]
+            log.info("reasoning_model_content_fix model=%s", used)
+
     return JSONResponse(
-        content=resp.model_dump(),
+        content=data,
         headers={
             "x-freerouter-model":    used,
             "x-freerouter-provider": _provider(used),
@@ -142,15 +191,22 @@ async def chat_completions(request: Request):
 
 @app.get("/v1/models")
 async def list_models():
-    """Return available models from ROUTES config."""
+    """Return available models from ROUTES config with full chain info."""
     models = []
     for task_name, route in ROUTES.items():
+        chain = []
+        for key in ("model", "fallback", "fallback2"):
+            val = route.get(key)
+            if val:
+                chain.append(val)
         models.append({
             "id": task_name,
             "object": "model",
             "owned_by": _provider(route["model"]),
             "primary": route["model"],
-            "fallback": route["fallback"],
+            "fallback": route.get("fallback", ""),
+            "fallback2": route.get("fallback2", ""),
+            "chain": chain,
         })
     return {"object": "list", "data": models}
 
@@ -160,6 +216,12 @@ async def health():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "version": "3.0.0",
+        "version": "3.1.0",
+        "providers": {
+            "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
+            "groq": bool(os.getenv("GROQ_API_KEY")),
+            "ollama": bool(OLLAMA_API_KEY),
+        },
+        "ollama_base": OLLAMA_API_BASE,
         "tasks": list(ROUTES.keys()),
     }

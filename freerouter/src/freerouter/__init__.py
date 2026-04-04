@@ -1,15 +1,18 @@
 """
-FreeRouter — LiteLLM-based task router v3.
+FreeRouter — LiteLLM-based task router v3.1.
 
-Slimmed-down version that delegates provider management to LiteLLM.
+3 providers (OpenRouter, Groq, Ollama Cloud), 7 named routes with
+multi-fallback chains. Delegates provider management to LiteLLM.
 Keeps only the task-based routing logic and pipeline task storage.
 
-v3 Migration: providers.py, router.py, circuit_breaker.py, rate_limit_store.py,
-cli.py, proxy_server.py, exceptions.py, adapters/ all deleted.
-Only config.py, server.py, and storage.py remain.
+v3.1 Changes:
+  - Added Groq as a provider (scorer, challenger, annotator tasks)
+  - Added Ollama Cloud as a provider (researcher/topic_finder fallbacks)
+  - Multi-fallback chains: primary → fallback → fallback2
+  - StepFun 3.5 Flash as primary for researcher/auto
 """
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 __author__ = "FreeRouter"
 
 from freerouter.config import ROUTES
