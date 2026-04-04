@@ -25,10 +25,10 @@ class TestReportThought:
         result = report_thought(card_id="", agent_name="test", thought_type="thinking", content="test")
         assert result is False
 
-    def test_returns_false_when_supabase_not_configured(self, mock_settings):
+    @patch("packages.core.supabase_client.get_supabase", return_value=None)
+    def test_returns_false_when_supabase_not_configured(self, _mock_sb):
         from packages.core.thoughts import report_thought
         result = report_thought(card_id="card-1", agent_name="test", thought_type="thinking", content="test")
-        # Without real settings, SUPABASE_URL will be empty → returns False
         assert result is False
 
     def test_invalid_thought_type_defaults_to_thinking(self):
