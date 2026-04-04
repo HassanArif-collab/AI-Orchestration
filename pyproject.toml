@@ -107,3 +107,8 @@ testpaths = ["tests"]
 markers = [
     "integration: tests requiring real services and .env credentials",
 ]
+filterwarnings = [
+    # supabase-py v2.x triggers DeprecationWarning internally for timeout/verify params.
+    # This is a known issue in the library — our code never passes these params.
+    "ignore::DeprecationWarning:supabase",
+]
