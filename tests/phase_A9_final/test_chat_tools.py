@@ -112,15 +112,18 @@ class TestToolDecorator:
                 MagicMock(side_effect=Exception("no yt"))
             ),
         }):
-            for fn in [query_kanban, query_memory, search_web, query_youtube, query_research]:
-                try:
-                    result = await _call_tool(fn, question="test query")
-                except TypeError:
-                    # search_web/query_research use different param names
-                    try:
-                        result = await _call_tool(fn, query="test query")
-                    except TypeError:
-                        result = await _call_tool(fn, topic="test query")
+            # Each tool declares its own parameter name via the @tool signature.
+            # When HAS_LANGCHAIN=True, ainvoke() validates the dict against the
+            # auto-generated Pydantic schema, so we must use the exact key.
+            tool_params = {
+                query_kanban: {"question": "test query"},
+                query_memory: {"question": "test query"},
+                query_youtube: {"question": "test query"},
+                search_web: {"query": "test query"},
+                query_research: {"topic": "test query"},
+            }
+            for fn, kwargs in tool_params.items():
+                result = await _call_tool(fn, **kwargs)
                 assert isinstance(result, str)
 
 
