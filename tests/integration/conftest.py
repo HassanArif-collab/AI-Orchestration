@@ -106,13 +106,15 @@ async def is_service_running(url: str, timeout: float = 5) -> bool:
 # Session-scoped fixture: _integration_settings
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session")
-def _integration_settings():
-    """Load Settings WITH the real .env file.
+@pytest.fixture(autouse=True)
+def _ensure_env_loaded():
+    """Re-load .env before every integration test.
 
-    Unlike unit tests which pass ``_env_file=None`` to isolate from the
-    environment, integration tests need the real credentials to talk to
-    live services.
+    Phase A10 conftest clears env vars for isolation. Integration tests need
+    them back. This fixture runs for every test in tests/integration/.
     """
-    from packages.core.config import Settings
-    return Settings()
+    _ENV_FILE = _PROJECT_ROOT / ".env"
+    if _ENV_FILE.exists():
+        from dotenv import load_dotenv
+        load_dotenv(_ENV_FILE, override=False)
+    yield
