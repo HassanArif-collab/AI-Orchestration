@@ -38,7 +38,9 @@ class YouTubeClient:
                 settings.YOUTUBE_API_KEY. If no key is available, the client
                 will operate in degraded mode (all methods return defaults).
         """
-        self.api_key = api_key or get_settings().YOUTUBE_API_KEY
+        # Use api_key if explicitly provided (even empty string = degraded mode).
+        # Fall back to settings only when no argument is passed (api_key is None).
+        self.api_key = api_key if api_key is not None else get_settings().YOUTUBE_API_KEY
         self._service = None
 
         if self.api_key:

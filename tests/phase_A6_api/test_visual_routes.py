@@ -100,7 +100,7 @@ class TestPreviewShader:
     """Tests for GET /api/visual/radiant/preview/{shader_name}."""
 
     @pytest.mark.asyncio
-    async def test_preview_404_not_found(self, client):
+    async def test_preview_404_not_found(self, auth_client):
         mod = _mod()
         mock_path = MagicMock()
         mock_path.exists.return_value = False
@@ -110,7 +110,7 @@ class TestPreviewShader:
         original_base = mod.SHADER_BASE_DIR
         try:
             mod.SHADER_BASE_DIR = Path("/fake/shaders")
-            resp = await client.get("/api/visual/radiant/preview/test_shader")
+            resp = await auth_client.get("/api/visual/radiant/preview/test_shader")
             assert resp.status_code == 404
         finally:
             mod.SHADER_BASE_DIR = original_base

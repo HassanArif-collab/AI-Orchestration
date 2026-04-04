@@ -183,7 +183,7 @@ class FileCache:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(envelope, f, indent=2, ensure_ascii=False, default=str)
 
-            temp_file.rename(cache_file)
+            temp_file.replace(cache_file)
             log.debug(f"cache_set: key_components={key_components}")
 
         except Exception as e:
