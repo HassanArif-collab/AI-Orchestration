@@ -7,14 +7,14 @@ Accepts POST /v1/chat/completions with model= set to either:
 
 Returns standard OpenAI-compatible JSON + two headers:
   x-freerouter-model     — actual model used
-  x-freerouter-provider  — provider (groq / openrouter / ollama)
+  x-freerouter-provider  — provider (openrouter / ollama)
 
 Run:  python -m freerouter
 
 v3.1 changes:
   - Multi-fallback chains: primary → fallback → fallback2
   - Ollama Cloud support (ollama_chat/ prefix + api_base + api_key)
-  - 3 providers: OpenRouter, Groq, Ollama Cloud
+  - 2 providers: OpenRouter, Ollama Cloud
 """
 
 import json
@@ -219,7 +219,6 @@ async def health():
         "version": "3.1.0",
         "providers": {
             "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
-            "groq": bool(os.getenv("GROQ_API_KEY")),
             "ollama": bool(OLLAMA_API_KEY),
         },
         "ollama_base": OLLAMA_API_BASE,
