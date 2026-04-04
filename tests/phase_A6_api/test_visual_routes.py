@@ -100,32 +100,29 @@ class TestPreviewShader:
     """Tests for GET /api/visual/radiant/preview/{shader_name}."""
 
     @pytest.mark.asyncio
-    async def test_preview_404_not_found(self, client):
+    async def test_preview_404_not_found(self):
+        """Non-existent shader returns 404. Tests the router in isolation
+        to avoid interference from auth middleware, which may be enabled
+        by the developer's local .env or system environment variables."""
+        from fastapi import FastAPI
+        from httpx import AsyncClient, ASGITransport
+
         mod = _mod()
-        mock_path = MagicMock()
-        mock_path.exists.return_value = False
-        mock_path.resolve.return_value = mock_path
-        mock_path.__truediv__ = MagicMock(return_value=mock_path)
-
         original_base = mod.SHADER_BASE_DIR
-        # Save original dispatch and replace with a pass-through so auth
-        # middleware is fully bypassed.  Required because Starlette >=0.27
-        # runs BaseHTTPMiddleware.dispatch inside an internal task group,
-        # making patch() on get_settings unreliable across all environments.
-        from apps.api.middleware.auth import AuthMiddleware
-        original_dispatch = AuthMiddleware.dispatch
-
-        async def _passthrough(self, request, call_next):
-            return await call_next(request)
-
         try:
-            mod.SHADER_BASE_DIR = Path("/fake/shaders")
-            AuthMiddleware.dispatch = _passthrough
-            resp = await client.get("/api/visual/radiant/preview/test_shader")
+            # Point to a non-existent directory so .exists() returns False
+            mod.SHADER_BASE_DIR = Path("/fake/shaders").resolve()
+
+            test_app = FastAPI()
+            test_app.include_router(mod.router, prefix="/api/visual")
+            async with AsyncClient(
+                transport=ASGITransport(app=test_app),
+                base_url="http://test",
+            ) as ac:
+                resp = await ac.get("/api/visual/radiant/preview/test_shader")
             assert resp.status_code == 404
         finally:
             mod.SHADER_BASE_DIR = original_base
-            AuthMiddleware.dispatch = original_dispatch
 
     @pytest.mark.asyncio
     async def test_preview_400_invalid_name(self, client):
