@@ -15,6 +15,7 @@ _env_file=None to isolate unit tests from the .env file.
 """
 
 import os
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,81 @@ def _load_env_files():
                 pass
 
 _load_env_files()
+
+
+# ---------------------------------------------------------------------------
+# Pytest configuration
+# ---------------------------------------------------------------------------
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line("markers", "integration: mark test as integration test (real APIs)")
+    config.addinivalue_line("markers", "slow: mark test as slow running")
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped fixtures: event loop
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create a single event loop for the entire test session."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped fixtures: credential helpers
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def notion_config():
+    """Provide Notion API credentials if configured."""
+    return {
+        "api_key": os.getenv("NOTION_API_KEY", ""),
+        "database_id": os.getenv("NOTION_DATABASE_ID", ""),
+    }
+
+
+@pytest.fixture(scope="session")
+def freerouter_config():
+    """Provide FreeRouter configuration."""
+    return {
+        "url": os.getenv("FREEROUTER_URL", "http://localhost:4000"),
+        "startup_check": os.getenv("FREEROUTER_STARTUP_CHECK", "false").lower() == "false",
+    }
+
+
+@pytest.fixture(scope="session")
+def has_notion_credentials():
+    """Check if Notion API credentials are available."""
+    api_key = os.getenv("NOTION_API_KEY", "")
+    database_id = os.getenv("NOTION_DATABASE_ID", "")
+    return bool(api_key and database_id)
+
+
+@pytest.fixture(scope="session")
+def has_freerouter():
+    """Check if FreeRouter is accessible."""
+    url = os.getenv("FREEROUTER_URL", "http://localhost:4000")
+    try:
+        resp = httpx.get(f"{url}/health", timeout=5.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def has_any_llm_provider():
+    """Check if at least one LLM provider API key is configured."""
+    providers = [
+        "GROQ_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY",
+        "TOGETHER_API_KEY", "SAMBANOVA_API_KEY", "DEEPINFRA_API_KEY",
+        "CEREBRAS_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN",
+        "ANTHROPIC_API_KEY", "APIFREELLM_API_KEY", "ZAI_API_KEY",
+    ]
+    return any(os.getenv(p, "").strip() for p in providers)
 
 
 # ---------------------------------------------------------------------------
