@@ -125,15 +125,15 @@ class TestSaveJsonFile:
         assert p.exists()
 
     def test_save_handles_permission_error(self, tmp_path):
-        p = tmp_path / "readonly_dir" / "out.json"
-        p.parent.mkdir()
-        # Make the directory read-only
-        p.parent.chmod(0o444)
-        try:
+        """_save_json_file should return False when open() raises PermissionError.
+
+        On Windows, chmod(0o444) does NOT restrict writes on NTFS, so we
+        mock builtins.open directly to simulate the OS-level error.
+        """
+        p = tmp_path / "out.json"
+        with patch("builtins.open", side_effect=PermissionError("Access denied")):
             ok = _save_json_file(p, {"x": 1})
-            assert ok is False
-        finally:
-            p.parent.chmod(0o755)  # restore for cleanup
+        assert ok is False
 
 
 # ─── Topic Status Update ─────────────────────────────────────────────────

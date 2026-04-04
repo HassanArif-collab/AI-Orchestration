@@ -32,6 +32,22 @@ def _make_mock_supabase_module(get_supabase_fn):
     return mod
 
 
+async def _call_tool(tool_fn, **kwargs):
+    """Invoke a LangChain StructuredTool or call a plain async function.
+
+    When HAS_LANGCHAIN is True the @tool decorator wraps the async def
+    into a StructuredTool instance which is not directly awaitable.
+    We must use .ainvoke(dict) in that case.  When langchain is absent
+    the decorator is a no-op and the raw async function accepts a single
+    positional argument.
+    """
+    if HAS_LANGCHAIN:
+        return await tool_fn.ainvoke(kwargs)
+    else:
+        arg = list(kwargs.values())[0]
+        return await tool_fn(arg)
+
+
 def _make_mock_zep_module(get_client_fn):
     """Create a mock module for packages.memory.client."""
     mod = ModuleType("mock_memory_client")
@@ -98,10 +114,13 @@ class TestToolDecorator:
         }):
             for fn in [query_kanban, query_memory, search_web, query_youtube, query_research]:
                 try:
-                    result = await fn("test query")
+                    result = await _call_tool(fn, question="test query")
                 except TypeError:
-                    # Some tools have positional-only issues when called directly
-                    continue
+                    # search_web/query_research use different param names
+                    try:
+                        result = await _call_tool(fn, query="test query")
+                    except TypeError:
+                        result = await _call_tool(fn, topic="test query")
                 assert isinstance(result, str)
 
 
@@ -127,7 +146,7 @@ class TestQueryKanban:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_kanban("what is on the board?")
+            result = await _call_tool(query_kanban, question="what is on the board?")
 
         assert isinstance(result, str)
         assert "AI Trends 2025" in result
@@ -142,7 +161,7 @@ class TestQueryKanban:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_kanban("show board")
+            result = await _call_tool(query_kanban, question="show board")
 
         assert "empty" in result.lower()
 
@@ -155,7 +174,7 @@ class TestQueryKanban:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_kanban("status?")
+            result = await _call_tool(query_kanban, question="status?")
 
         assert "empty" in result.lower()
 
@@ -171,7 +190,7 @@ class TestQueryKanban:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_kanban("board")
+            result = await _call_tool(query_kanban, question="board")
 
         assert isinstance(result, str)
         assert "Untitled" in result  # brief becomes {} -> title is Untitled
@@ -183,7 +202,7 @@ class TestQueryKanban:
                 lambda: (_ for _ in ()).throw(Exception("DB connection failed"))
             ),
         }):
-            result = await query_kanban("anything")
+            result = await _call_tool(query_kanban, question="anything")
 
         assert isinstance(result, str)
         assert "Could not query Kanban" in result
@@ -215,7 +234,7 @@ class TestQueryMemory:
             "packages.memory.client": _make_mock_zep_module(lambda: mock_ctx),
             "packages.core.config": MagicMock(get_settings=lambda: mock_settings),
         }):
-            result = await query_memory("what hooks work?")
+            result = await _call_tool(query_memory, question="what hooks work?")
 
         assert isinstance(result, str)
         # audience_results (2) + learning_results (2) = 4 total
@@ -239,7 +258,7 @@ class TestQueryMemory:
             "packages.memory.client": _make_mock_zep_module(lambda: mock_ctx),
             "packages.core.config": MagicMock(get_settings=lambda: mock_settings),
         }):
-            result = await query_memory("obscure topic")
+            result = await _call_tool(query_memory, question="obscure topic")
 
         assert "No relevant memories" in result
 
@@ -253,7 +272,7 @@ class TestQueryMemory:
                 get_settings=MagicMock(side_effect=Exception("config error"))
             ),
         }):
-            result = await query_memory("something")
+            result = await _call_tool(query_memory, question="something")
 
         assert isinstance(result, str)
         assert "Could not query Zep" in result
@@ -278,7 +297,7 @@ class TestQueryMemory:
             "packages.memory.client": _make_mock_zep_module(lambda: mock_ctx),
             "packages.core.config": MagicMock(get_settings=lambda: mock_settings),
         }):
-            result = await query_memory("test")
+            result = await _call_tool(query_memory, question="test")
 
         assert isinstance(result, str)
         assert "Learned content text" in result
@@ -309,7 +328,7 @@ class TestSearchWeb:
         with patch.dict("sys.modules", {
             "packages.router.web_search": _make_mock_web_search_module(MockWSC),
         }):
-            result = await search_web("AI trends 2025")
+            result = await _call_tool(search_web, query="AI trends 2025")
 
         assert isinstance(result, str)
         assert "AI in 2025" in result
@@ -329,7 +348,7 @@ class TestSearchWeb:
         with patch.dict("sys.modules", {
             "packages.router.web_search": _make_mock_web_search_module(MockWSC),
         }):
-            result = await search_web("very obscure query xyz")
+            result = await _call_tool(search_web, query="very obscure query xyz")
 
         assert isinstance(result, str)
         assert "No web results" in result
@@ -341,7 +360,7 @@ class TestSearchWeb:
                 MagicMock(side_effect=Exception("Web search service down"))
             ),
         }):
-            result = await search_web("test")
+            result = await _call_tool(search_web, query="test")
 
         assert isinstance(result, str)
         assert "Web search failed" in result
@@ -366,7 +385,7 @@ class TestSearchWeb:
         with patch.dict("sys.modules", {
             "packages.router.web_search": _make_mock_web_search_module(MockWSC),
         }):
-            result = await search_web("test")
+            result = await _call_tool(search_web, query="test")
 
         # The snippet is sliced to [:200] in the tool
         assert "xxx" in result  # first 200 chars
@@ -396,7 +415,7 @@ class TestQueryYouTube:
             "packages.integrations.youtube.client": _make_mock_youtube_module(MockYT),
             "packages.core.config": MagicMock(get_settings=lambda: mock_settings),
         }):
-            result = await query_youtube("competitor analysis")
+            result = await _call_tool(query_youtube, question="competitor analysis")
 
         assert isinstance(result, str)
         assert "Viral Video 1" in result
@@ -416,7 +435,7 @@ class TestQueryYouTube:
             "packages.integrations.youtube.client": _make_mock_youtube_module(MockYT),
             "packages.core.config": MagicMock(get_settings=lambda: mock_settings),
         }):
-            result = await query_youtube("what's trending")
+            result = await _call_tool(query_youtube, question="what's trending")
 
         assert isinstance(result, str)
         assert "No YouTube data" in result
@@ -431,7 +450,7 @@ class TestQueryYouTube:
                 get_settings=MagicMock(side_effect=Exception("config error"))
             ),
         }):
-            result = await query_youtube("channels")
+            result = await _call_tool(query_youtube, question="channels")
 
         assert isinstance(result, str)
         assert "YouTube query failed" in result
@@ -457,7 +476,7 @@ class TestQueryYouTube:
             "packages.integrations.youtube.client": _make_mock_youtube_module(MockYT),
             "packages.core.config": MagicMock(get_settings=lambda: mock_settings),
         }):
-            result = await query_youtube("test")
+            result = await _call_tool(query_youtube, question="test")
 
         assert isinstance(result, str)
         assert "YouTube query failed" in result
@@ -486,7 +505,7 @@ class TestQueryResearch:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_research("AI healthcare")
+            result = await _call_tool(query_research, topic="AI healthcare")
 
         assert isinstance(result, str)
         assert "1 research dossiers" in result
@@ -503,7 +522,7 @@ class TestQueryResearch:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_research("obscure topic xyz123")
+            result = await _call_tool(query_research, topic="obscure topic xyz123")
 
         assert isinstance(result, str)
         assert "No research dossiers found" in result
@@ -518,7 +537,7 @@ class TestQueryResearch:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_research("test")
+            result = await _call_tool(query_research, topic="test")
 
         assert "No research dossiers found" in result
 
@@ -540,7 +559,7 @@ class TestQueryResearch:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_research("AI")
+            result = await _call_tool(query_research, topic="AI")
 
         assert isinstance(result, str)
         assert "AI Trends" in result
@@ -563,7 +582,7 @@ class TestQueryResearch:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_research("test")
+            result = await _call_tool(query_research, topic="test")
 
         assert isinstance(result, str)
         assert "Empty" in result
@@ -576,7 +595,7 @@ class TestQueryResearch:
                 lambda: (_ for _ in ()).throw(Exception("Supabase down"))
             ),
         }):
-            result = await query_research("anything")
+            result = await _call_tool(query_research, topic="anything")
 
         assert isinstance(result, str)
         assert "Research query failed" in result
@@ -599,7 +618,7 @@ class TestQueryResearch:
         with patch.dict("sys.modules", {
             "packages.core.supabase_client": _make_mock_supabase_module(lambda: mock_sb),
         }):
-            result = await query_research("long")
+            result = await _call_tool(query_research, topic="long")
 
         assert "..." in result
         assert "Long Topic" in result
