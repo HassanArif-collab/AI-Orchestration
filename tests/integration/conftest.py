@@ -1,18 +1,41 @@
 """
-conftest.py — Shared fixtures for integration tests (Phases 11-16).
+conftest.py — Shared fixtures for integration tests (Phases 11-17).
 
-Integration tests hit REAL services (Supabase, Zep, FreeRouter, etc.)
-and require a valid .env file with real credentials. These helpers
-ensure tests are skipped gracefully when services are unavailable
-or credentials are missing.
+Integration tests hit REAL services (Supabase, Zep, FreeRouter, YouTube, etc.)
+and require a valid .env file with real credentials.  On startup this conftest
+loads the project .env file into os.environ so that skip_if_no_env() can see
+the values without requiring the user to manually export them.
 
-Contrast with tests/phase_A0_bootstrap/conftest.py which creates
-Settings with _env_file=None to isolate unit tests from the .env file.
+Contrast with tests/phase_A0_bootstrap/conftest.py which creates Settings with
+_env_file=None to isolate unit tests from the .env file.
 """
 
 import os
+from pathlib import Path
+
 import pytest
 import httpx
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap: load .env into os.environ for integration tests
+# ---------------------------------------------------------------------------
+
+# Walk up from this file to find the project root (where .env lives)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
+if _ENV_FILE.exists():
+    from dotenv import load_dotenv
+
+    load_dotenv(_ENV_FILE, override=False)
+else:
+    # Fallback: try the repo root one level up
+    _ENV_FILE_ALT = Path(__file__).resolve().parents[3] / ".env"
+    if _ENV_FILE_ALT.exists():
+        from dotenv import load_dotenv
+
+        load_dotenv(_ENV_FILE_ALT, override=False)
 
 
 # ---------------------------------------------------------------------------
