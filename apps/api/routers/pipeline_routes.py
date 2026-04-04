@@ -312,6 +312,8 @@ async def produce_content(
             raise HTTPException(404, f"Card {card_id} not found")
 
         card = result.data[0]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Failed to fetch card: {e}")
 
