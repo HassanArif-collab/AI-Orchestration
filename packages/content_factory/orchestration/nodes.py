@@ -267,15 +267,17 @@ async def grade_viability_node(state: DiscoveryState) -> dict:
                     sb = get_supabase()
                     sb.table("kanban_cards").insert({
                         "title": title,
-                        "topic_brief": {
-                            **topic,
-                            "viability_score": score,
-                            "score_breakdown": scores,
-                            "passed": score >= 60,
-                        },
-                        "column": 2,  # Suggested Topics
+                        "column_index": 2,  # Suggested Topics
                         "status": "suggested",
-                        "viability_score": score,
+                        "metadata": {
+                            "topic_brief": {
+                                **topic,
+                                "viability_score": score,
+                                "score_breakdown": scores,
+                                "passed": score >= 60,
+                            },
+                            "viability_score": score,
+                        },
                         "expires_at": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }).execute()
@@ -327,10 +329,12 @@ async def save_topics_node(state: DiscoveryState) -> dict:
         for topic in passing_topics:
             result = sb.table("kanban_cards").insert({
                 "title": topic.get("title", "Untitled"),
-                "topic_brief": topic,
                 "column_index": 2,  # Suggested Topics
                 "status": "suggested",
-                "viability_score": topic.get("viability_score", 0),
+                "metadata": {
+                    "topic_brief": topic,
+                    "viability_score": topic.get("viability_score", 0),
+                },
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }).execute()

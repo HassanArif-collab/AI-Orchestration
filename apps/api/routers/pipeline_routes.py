@@ -291,7 +291,7 @@ async def produce_content(
     """
     Start the LangGraph production pipeline for an approved topic card.
 
-    The card must exist in kanban_cards with a topic_brief.
+    The card must exist in kanban_cards with topic_brief in metadata.
     Returns immediately — progress streams via Supabase WebSocket.
     The graph will pause at human_review and wait for /langgraph/resume.
     """
@@ -312,6 +312,12 @@ async def produce_content(
             raise HTTPException(404, f"Card {card_id} not found")
 
         card = result.data[0]
+        metadata = card.get("metadata", {}) or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
     except HTTPException:
         raise
     except Exception as e:
@@ -319,7 +325,7 @@ async def produce_content(
 
     initial_state = {
         "card_id": card_id,
-        "topic_brief": card.get("topic_brief", {"title": card.get("title", "Unknown")}),
+        "topic_brief": metadata.get("topic_brief", {"title": card.get("title", "Unknown")}),
         "research_dossier": "",
         "research_sources": [],
         "zep_learnings": "",

@@ -66,17 +66,19 @@ async def repurpose_competitor_video(body: RepurposeRequest):
         raise HTTPException(500, "Supabase not configured")
 
     card_data = {
-        "topic_brief": {
-            "title": f"[Repurpose] {body.title}",
-            "description": f"Adapted from competitor video: {body.channel}",
-            "angle": "adaptation",
-            "source_video_id": body.video_id,
-            "source_url": f"https://youtube.com/watch?v={body.video_id}",
-            "original_views": body.views,
-        },
+        "title": f"[Repurpose] {body.title}",
         "column_index": 2,
         "status": "suggested",
-        "viability_score": None,
+        "metadata": {
+            "topic_brief": {
+                "title": f"[Repurpose] {body.title}",
+                "description": f"Adapted from competitor video: {body.channel}",
+                "angle": "adaptation",
+                "source_video_id": body.video_id,
+                "source_url": f"https://youtube.com/watch?v={body.video_id}",
+                "original_views": body.views,
+            },
+        },
         "expires_at": None,  # Repurposed cards don't auto-expire
     }
 
