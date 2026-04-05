@@ -14,13 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
 def test_version():
-    """Test that __version__ is 3.0.0."""
+    """Test that __version__ is 3.1.0."""
     print("\n" + "=" * 60)
     print("Testing Version")
     print("=" * 60)
 
     import freerouter
-    assert freerouter.__version__ == "3.0.0", f"Expected 3.0.0, got {freerouter.__version__}"
+    assert freerouter.__version__ == "3.1.0", f"Expected 3.1.0, got {freerouter.__version__}"
     print(f"  [PASS] freerouter.__version__ = {freerouter.__version__}")
     return True
 
@@ -69,8 +69,8 @@ def test_resolve():
 
     # Known task name
     primary, fallback = _resolve("scorer")
-    expected_primary = "groq/compound-beta-mini"
-    expected_fallback = "groq/llama-3.1-8b-instant"
+    expected_primary = "openrouter/stepfun/step-3.5-flash:free"
+    expected_fallback = "openrouter/qwen/qwen3.6-plus:free"
     if primary == expected_primary and fallback == expected_fallback:
         print(f"  [PASS] _resolve('scorer') -> ({primary}, {fallback})")
     else:
@@ -79,16 +79,16 @@ def test_resolve():
 
     # Auto route
     primary, fallback = _resolve("auto")
-    if primary == "openrouter/stepfun/step-3.5-flash:free" and fallback == "groq/llama-3.3-70b-versatile":
+    if primary == "openrouter/stepfun/step-3.5-flash:free" and fallback == "openrouter/qwen/qwen3.6-plus:free":
         print(f"  [PASS] _resolve('auto') -> ({primary}, {fallback})")
     else:
         print(f"  [FAIL] _resolve('auto') unexpected result: ({primary}, {fallback})")
         all_passed = False
 
     # Direct litellm string (pass-through)
-    direct = "groq/llama-3.3-70b-versatile"
+    direct = "openrouter/qwen/qwen3.6-plus:free"
     primary, fallback = _resolve(direct)
-    if primary == direct and fallback == "groq/llama-3.3-70b-versatile":
+    if primary == direct and fallback == "openrouter/stepfun/step-3.5-flash:free":
         print(f"  [PASS] _resolve('{direct}') -> pass-through with auto fallback")
     else:
         print(f"  [FAIL] _resolve('{direct}') expected pass-through, got ({primary}, {fallback})")
@@ -129,7 +129,7 @@ def test_health_endpoint():
     data = response.json()
 
     assert data["status"] == "ok", f"Expected status='ok', got {data['status']}"
-    assert data["version"] == "3.0.0", f"Expected version='3.0.0', got {data['version']}"
+    assert data["version"] == "3.1.0", f"Expected version='3.1.0', got {data['version']}"
     assert isinstance(data["tasks"], list), f"Expected tasks to be list, got {type(data['tasks'])}"
 
     print(f"  [PASS] GET /health -> 200")

@@ -15,10 +15,10 @@ FreeRouter v3.1 is a slim OpenAI-compatible proxy built on [LiteLLM](https://git
 
 | Route | Primary | Fallback | Provider |
 |-------|---------|----------|----------|
-| `auto` | qwen/qwen3.6-plus:free | stepfun/step-3.5-flash:free | OR → OR |
+| `auto` | stepfun/step-3.5-flash:free | qwen/qwen3.6-plus:free | OR → OR |
 | `researcher` | qwen/qwen3.6-plus:free | stepfun/step-3.5-flash:free | OR → OR |
 | `topic_finder` | ollama/gemma4:26b | qwen/qwen3.6-plus:free | OC → OR |
-| `script_writer` | qwen/qwen3.6-plus:free | mistral/mistral-small-3.1:free | OR → OR |
+| `script_writer` | qwen/qwen3.6-plus:free | stepfun/step-3.5-flash:free | OR → OR |
 | `scorer` | stepfun/step-3.5-flash:free | qwen/qwen3.6-plus:free | OR → OR |
 | `challenger` | ollama/nemotron-cascade-2:30b | qwen/qwen3.6-plus:free | OC → OR |
 | `annotator` | qwen/qwen3.6-plus:free | stepfun/step-3.5-flash:free | OR → OR |

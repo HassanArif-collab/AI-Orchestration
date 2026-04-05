@@ -144,6 +144,12 @@ async def lifespan(app: FastAPI):
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
+    # Stop the expired card cleanup task
+    try:
+        from apps.api.background_tasks import stop_cleanup_task
+        await stop_cleanup_task()
+    except Exception as e:
+        print(f"Warning: Cleanup task stop failed (non-fatal): {e}")
     await close_all()
 
 
@@ -186,7 +192,6 @@ app.include_router(dlq_routes, tags=["dlq"])
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])
 
 # Static frontend — MUST be last
-import os
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")
 

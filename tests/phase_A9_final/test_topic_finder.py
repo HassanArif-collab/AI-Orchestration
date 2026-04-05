@@ -149,7 +149,7 @@ class TestEvaluateViability:
 
         await agent._evaluate_viability("My Topic", ["Anchor"], router)
         call_kwargs = router.complete_text.call_args
-        assert call_kwargs[1]["model"] == "openrouter/google/gemini-2.0-flash-001"
+        assert call_kwargs[1]["model"] == "topic_finder"
 
 
 # ══════════════════════════════════════════════════════════════

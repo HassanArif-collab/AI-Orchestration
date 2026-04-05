@@ -1,6 +1,6 @@
 # FreeRouter Usage Guide
 
-> **How to use FreeRouter v3 — a slim LiteLLM task router**
+> **How to use FreeRouter v3.1 — a slim LiteLLM task router**
 
 ## Quick Start
 
@@ -12,7 +12,7 @@ pip install -e .
 cp .env.example .env
 # Edit .env and add your API keys:
 #   OPENROUTER_API_KEY=sk-or-v1-...
-#   GROQ_API_KEY=gsk_...
+#   OLLAMA_API_KEY=...
 
 # 3. Start
 python -m freerouter
@@ -29,15 +29,15 @@ Create/edit `freerouter/.env`:
 ```bash
 # Required — get free keys at:
 #   OpenRouter: https://openrouter.ai/keys
-#   Groq:       https://console.groq.com/keys
+#   Ollama Cloud: https://ollama.com/settings/api-keys
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
-GROQ_API_KEY=gsk_your-key-here
+OLLAMA_API_KEY=your-ollama-key-here
 
-# Optional — for local models via Ollama
-OLLAMA_BASE_URL=http://localhost:11434
+# Optional — Ollama Cloud base URL (default: https://ollama.com)
+OLLAMA_API_BASE=https://ollama.com
 ```
 
-Only two providers are needed: **OpenRouter** and **Groq**.
+Two providers are needed: **OpenRouter** and **Ollama Cloud**.
 
 ### Named Routes
 
@@ -46,14 +46,14 @@ Use any of these as the `model` parameter:
 | Route | Use Case | Primary Model | Provider |
 |-------|----------|--------------|----------|
 | `auto` | General purpose fallback | step-3.5-flash:free | OpenRouter |
-| `researcher` | Deep research, synthesis | step-3.5-flash:free | OpenRouter |
-| `topic_finder` | Creative ideation, gap analysis | qwen3.6-plus:free | OpenRouter |
+| `researcher` | Deep research, synthesis | qwen3.6-plus:free | OpenRouter |
+| `topic_finder` | Creative ideation, gap analysis | gemma4:26b | Ollama Cloud |
 | `script_writer` | Script writing, creative prose | qwen3.6-plus:free | OpenRouter |
-| `scorer` | Fast pass/fail scoring | compound-beta-mini | Groq |
-| `challenger` | JSON rewrite, structured output | llama-3.1-8b-instant | Groq |
-| `annotator` | Visual cue generation | qwen-qwq-32b | Groq |
+| `scorer` | Fast pass/fail scoring | step-3.5-flash:free | OpenRouter |
+| `challenger` | JSON rewrite, structured output | nemotron-cascade-2:30b | Ollama Cloud |
+| `annotator` | Visual cue generation | qwen3.6-plus:free | OpenRouter |
 
-You can also pass a direct LiteLLM model string (e.g., `groq/llama-3.3-70b-versatile`) — it will pass through with `auto` fallback.
+You can also pass a direct LiteLLM model string (e.g., `openrouter/qwen/qwen3.6-plus:free`) — it will pass through with `auto` fallback.
 
 ## Using with Applications
 
@@ -193,7 +193,7 @@ client.chat.completions.create(
 
 Response includes headers:
 - `x-freerouter-model` — actual model used
-- `x-freerouter-provider` — provider (groq / openrouter)
+- `x-freerouter-provider` — provider (openrouter / ollama)
 
 ### GET /v1/models
 
@@ -208,7 +208,7 @@ Returns all available task routes:
       "object": "model",
       "owned_by": "openrouter",
       "primary": "openrouter/stepfun/step-3.5-flash:free",
-      "fallback": "groq/llama-3.3-70b-versatile"
+      "fallback": "openrouter/qwen/qwen3.6-plus:free"
     }
   ]
 }
@@ -219,7 +219,7 @@ Returns all available task routes:
 ```json
 {
   "status": "ok",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "tasks": ["auto", "researcher", "topic_finder", "script_writer", "scorer", "challenger", "annotator"]
 }
 ```

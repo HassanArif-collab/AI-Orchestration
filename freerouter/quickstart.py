@@ -81,7 +81,7 @@ def check_api_keys():
     load_dotenv()
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    groq_key = os.getenv("GROQ_API_KEY")
+    ollama_key = os.getenv("OLLAMA_API_KEY")
 
     keys_found = []
 
@@ -89,14 +89,14 @@ def check_api_keys():
         print("✓ OPENROUTER_API_KEY is set")
         keys_found.append("openrouter")
 
-    if groq_key and groq_key != "your_groq_api_key_here":
-        print("✓ GROQ_API_KEY is set")
-        keys_found.append("groq")
+    if ollama_key and ollama_key != "your_ollama_api_key_here":
+        print("✓ OLLAMA_API_KEY is set")
+        keys_found.append("ollama")
 
     if not keys_found:
         print("⚠ No API keys found. Edit .env file to add:")
         print("  - OPENROUTER_API_KEY (get free key at https://openrouter.ai/keys)")
-        print("  - GROQ_API_KEY (get free key at https://console.groq.com/keys)")
+        print("  - OLLAMA_API_KEY (get free key at https://ollama.com/settings/api-keys)")
         return False
 
     return True
@@ -117,7 +117,7 @@ def install_dependencies():
 
 def pull_ollama_models():
     """Pull recommended Ollama models."""
-    print("\nOllama is optional — v3 routes through OpenRouter and Groq.")
+    print("\nOllama Cloud is used for topic_finder and challenger routes.")
     print("If you want local models, run: ollama pull qwen2.5:7b")
 
 

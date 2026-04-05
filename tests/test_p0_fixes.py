@@ -62,12 +62,12 @@ class TestP01_APIAuthentication:
         from packages.core.config import Settings
         
         # Test with empty keys
-        settings = Settings(API_KEYS="")
+        settings = Settings(API_KEYS="", API_AUTH_ENABLED=True)
         assert settings.valid_api_keys == set()
         assert not settings.is_auth_enabled()
         
-        # Test with keys
-        settings = Settings(API_KEYS="key1,key2,key3")
+        # Test with keys (explicitly enable auth to avoid .env override)
+        settings = Settings(API_KEYS="key1,key2,key3", API_AUTH_ENABLED=True)
         assert settings.valid_api_keys == {"key1", "key2", "key3"}
         assert settings.is_auth_enabled()
 
@@ -356,7 +356,8 @@ class TestP06_WebSearchNoHallucinations:
         client._zai = None  # Simulate SDK not available
         
         # Should return empty list, not fake URLs
-        result = asyncio.get_event_loop().run_until_complete(client.search("test query"))
+        import asyncio
+        result = asyncio.run(client.search("test query"))
         
         assert isinstance(result, list)
         assert len(result) == 0
@@ -429,17 +430,9 @@ class TestP07_CORSWildcard:
     def test_cors_not_wildcard_in_main(self):
         """Verify main.py uses configured origins, not wildcard."""
         import inspect
-        from apps.api.main import app
+        import apps.api.main as main_module
         
-        # Get the CORS middleware
-        for middleware in app.user_middleware:
-            if hasattr(middleware, 'cls') and 'CORS' in str(middleware.cls):
-                # Verify it's configured with specific origins
-                # The middleware should not use ["*"]
-                pass
-        
-        # Check that main.py imports settings for CORS
-        source = inspect.getsource(app)
+        source = inspect.getsource(main_module)
         assert "cors_origins_list" in source or "CORSMiddleware" in source
 
 

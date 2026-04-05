@@ -30,10 +30,17 @@ def _mock_get_settings(monkeypatch):
 
     Prevents the real .env from leaking into tests and ensures
     NotionScriptClient.__init__ gets predictable defaults.
+
+    We patch both the source and the consumer module because
+    `from X import Y` creates a local binding that won't update
+    when the source module's attribute is patched.
     """
-    with patch("packages.core.config.get_settings") as mock_gs:
-        mock_gs.return_value = make_settings()
-        yield mock_gs
+    clean_settings = make_settings()
+    with (
+        patch("packages.core.config.get_settings", return_value=clean_settings),
+        patch("packages.integrations.notion.client.get_settings", return_value=clean_settings),
+    ):
+        yield
 
 
 @pytest.fixture()

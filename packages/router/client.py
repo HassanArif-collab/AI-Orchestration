@@ -39,7 +39,6 @@ from typing import Any, Optional, Type, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-import requests
 
 from packages.core.circuit_breaker import CircuitBreaker
 from packages.core.config import get_settings

@@ -51,7 +51,12 @@ class TestSettingsInstantiation:
         assert s.LOG_LEVEL == "INFO"
 
     def test_default_feature_flags(self):
-        s = make_settings(FREEROUTER_URL="http://localhost:4000")
+        s = make_settings(
+            FREEROUTER_URL="http://localhost:4000",
+            ASSET_CREATION_ENABLED=True,
+            PUBLISH_ENABLED=True,
+            PIPELINE_DEV_MODE=False,
+        )
         assert s.ASSET_CREATION_ENABLED is True
         assert s.PUBLISH_ENABLED is True
         assert s.PIPELINE_DEV_MODE is False

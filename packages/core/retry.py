@@ -18,6 +18,7 @@ Imported by: packages/integrations/
 
 import asyncio
 import random
+import time
 from functools import wraps
 from typing import Callable, ParamSpec, TypeVar, Awaitable
 
@@ -210,7 +211,6 @@ def retry_with_backoff_sync(
                         extra={"error": str(e), "error_type": type(e).__name__}
                     )
 
-                    import time
                     time.sleep(delay)
 
             if last_exception:

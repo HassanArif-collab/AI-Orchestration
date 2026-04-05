@@ -113,15 +113,17 @@ class TestGetSessionMemory:
         mod = _mod()
         mock_client = AsyncMock()
         mock_client._client = MagicMock()
-        mock_client.get_memory = AsyncMock(return_value={"summary": "Test summary"})
-        mock_client.get_facts = AsyncMock(return_value=[{"fact": "Learned fact 1"}])
+        # search_memory now returns OperationResult with .success and .data
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = [{"fact": "Learned fact 1"}]
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
         mock_client._client.message.list.return_value = [MagicMock(), MagicMock()]
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await client.get("/api/memory/sessions/test-session")
             assert resp.status_code == 200
             data = resp.json()
-            assert data["summary"] == "Test summary"
             assert len(data["facts"]) == 1
             assert data["message_count"] == 2
 
@@ -131,8 +133,11 @@ class TestGetSessionMemory:
         mod = _mod()
         mock_client = AsyncMock()
         mock_client._client = MagicMock()
-        mock_client.get_memory = AsyncMock(return_value={"summary": "Summary"})
-        mock_client.get_facts = AsyncMock(return_value=[])
+        # search_memory returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = []
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
         mock_client._client.message.list.side_effect = Exception("msg error")
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
@@ -159,9 +164,11 @@ class TestSearchMemory:
         """Should return search results."""
         mod = _mod()
         mock_client = AsyncMock()
-        mock_client.search_memory = AsyncMock(return_value=[
-            {"fact": "AI topic trending", "score": 0.9}
-        ])
+        # search_memory returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = [{"fact": "AI topic trending", "score": 0.9}]
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await client.post("/api/memory/search", params={"query": "AI trends"})
@@ -175,7 +182,11 @@ class TestSearchMemory:
         """Should pass session_id to the memory client."""
         mod = _mod()
         mock_client = AsyncMock()
-        mock_client.search_memory = AsyncMock(return_value=[])
+        # search_memory returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = []
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await client.post(
@@ -190,7 +201,11 @@ class TestSearchMemory:
         """Should handle empty query string."""
         mod = _mod()
         mock_client = AsyncMock()
-        mock_client.search_memory = AsyncMock(return_value=[])
+        # search_memory returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = []
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await client.post("/api/memory/search", params={"query": ""})
@@ -201,7 +216,11 @@ class TestSearchMemory:
         """Should return 200 when authenticated."""
         mod = _mod()
         mock_client = AsyncMock()
-        mock_client.search_memory = AsyncMock(return_value=[])
+        # search_memory returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = []
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await auth_client.post("/api/memory/search", params={"query": "test"})
             assert resp.status_code == 200
@@ -230,10 +249,14 @@ class TestGetFacts:
         """Should return facts for a session."""
         mod = _mod()
         mock_client = AsyncMock()
-        mock_client.get_facts = AsyncMock(return_value=[
+        # search_memory now returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = [
             {"fact": "Pakistani audience prefers Urdu"},
             {"fact": "Trending topic: AI in education"},
-        ])
+        ]
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await client.get("/api/memory/facts/test-session")
@@ -247,7 +270,11 @@ class TestGetFacts:
         """Should return empty list for session with no facts."""
         mod = _mod()
         mock_client = AsyncMock()
-        mock_client.get_facts = AsyncMock(return_value=[])
+        # search_memory returns OperationResult
+        mock_op_result = MagicMock()
+        mock_op_result.success = True
+        mock_op_result.data = []
+        mock_client.search_memory = AsyncMock(return_value=mock_op_result)
 
         with patch.object(mod, "get_memory_client", return_value=mock_client):
             resp = await client.get("/api/memory/facts/empty-session")

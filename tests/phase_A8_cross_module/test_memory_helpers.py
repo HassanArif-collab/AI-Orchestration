@@ -120,10 +120,9 @@ class TestRecallStyle:
         assert call_args[0][0] == "user-123_style"
         assert "content style preferences" in call_args[0][1]
         assert call_args.kwargs["limit"] == 5
-        # The code returns {"facts": results} where results is the OperationResult
-        # This is the actual behavior of the function
+        # The code returns {"facts": result.data} (extracted from OperationResult)
         assert "facts" in result
-        assert result["facts"] is mock_result
+        assert result["facts"] == mock_result.data
 
     @pytest.mark.asyncio
     @patch("packages.memory.helpers._get_client")
@@ -137,8 +136,8 @@ class TestRecallStyle:
 
         from packages.memory.helpers import recall_style
         result = await recall_style("user-123")
-        # OperationResult is always truthy, so the function returns facts
-        assert "facts" in result
+        # When result.data is [], the function returns empty dict (falsy data)
+        assert result == {}
 
 
 class TestRecallVideoPerformance:
@@ -165,8 +164,8 @@ class TestRecallVideoPerformance:
         assert call_args[0][0] == "user-456_analytics"
         assert call_args[0][1] == "best performing videos"
         assert call_args.kwargs["limit"] == 10
-        # Function returns results directly (OperationResult)
-        assert result is mock_result
+        # Function returns result.data (extracted from OperationResult)
+        assert result == mock_result.data
 
     @pytest.mark.asyncio
     @patch("packages.memory.helpers._get_client")
@@ -180,8 +179,8 @@ class TestRecallVideoPerformance:
 
         from packages.memory.helpers import recall_video_performance
         result = await recall_video_performance("user-456", "test query")
-        # Returns the OperationResult directly
-        assert result is mock_result
+        # When result.data is [], the function returns empty list (falsy data)
+        assert result == []
 
 
 class TestGetClient:

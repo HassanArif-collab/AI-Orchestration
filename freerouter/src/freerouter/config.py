@@ -5,7 +5,7 @@ config.py — Task-to-model routing table (v3.1).
 7 routes with multi-fallback chains.
 
 Providers:
-    OpenRouter   — free tier models (Qwen 3.6, StepFun 3.5 Flash, Mistral)
+    OpenRouter   — free tier models (Qwen 3.6, StepFun 3.5 Flash)
     Ollama Cloud — creative models (gemma4, nemotron-cascade-2)
 
 Set your API keys in freerouter/.env:
@@ -23,8 +23,8 @@ server.py tries them in order: model → fallback → fallback2.
 ROUTES: dict[str, dict[str, str]] = {
     # ── Generic fallback ─────────────────────────────────────────────────
     "auto": {
-        "model":      "openrouter/qwen/qwen3.6-plus:free",
-        "fallback":   "openrouter/stepfun/step-3.5-flash:free",
+        "model":      "openrouter/stepfun/step-3.5-flash:free",
+        "fallback":   "openrouter/qwen/qwen3.6-plus:free",
     },
 
     # ── Task 1: Researcher (deep synthesis, 1M context) ─────────────────
@@ -35,9 +35,9 @@ ROUTES: dict[str, dict[str, str]] = {
     },
 
     # ── Task 2: Topic Finder (creative ideation, gap analysis) ────────────
-    # Ollama gemma4: frontier-level creative agentic ideation (31b cloud variant)
+    # Ollama gemma4: frontier-level creative agentic ideation (26b cloud variant)
     "topic_finder": {
-        "model":      "ollama_chat/gemma4:31b",
+        "model":      "ollama_chat/gemma4:26b",
         "fallback":   "openrouter/qwen/qwen3.6-plus:free",
     },
 
@@ -45,7 +45,7 @@ ROUTES: dict[str, dict[str, str]] = {
     # Qwen 3.6 Plus: strong creative writing, style adherence, 1M context
     "script_writer": {
         "model":      "openrouter/qwen/qwen3.6-plus:free",
-        "fallback":   "openrouter/mistral/mistral-small-3.1:free",
+        "fallback":   "openrouter/stepfun/step-3.5-flash:free",
     },
 
     # ── Task 4: Scoring Engine (fast pass/fail, logical precision) ───────
@@ -56,10 +56,10 @@ ROUTES: dict[str, dict[str, str]] = {
     },
 
     # ── Task 5: Challenger Generator (JSON rewrite, structured output) ───
-    # Ollama nemotron-3-nano: frontier reasoning, structured rewriting
-    # Note: nemotron-cascade-2 not available on Ollama Cloud; using nemotron-3-nano
+    # Ollama nemotron-cascade-2: frontier reasoning, structured rewriting
+    # Note: nemotron-cascade-2:30b may not exist on Ollama Cloud; fallback handles failure
     "challenger": {
-        "model":      "ollama_chat/nemotron-3-nano:30b",
+        "model":      "ollama_chat/nemotron-cascade-2:30b",
         "fallback":   "openrouter/qwen/qwen3.6-plus:free",
     },
 

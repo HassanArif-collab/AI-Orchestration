@@ -92,10 +92,10 @@ class TestNotionClientInit:
         assert nc.database_id == "db_123"
 
     def test_init_without_api_key(self, _mock_get_settings):
-        """When no api_key is provided, _client stays None."""
+        """When no api_key is provided and settings has no key, _client stays None."""
         from packages.integrations.notion.client import NotionScriptClient
 
-        nc = NotionScriptClient(api_key=None, database_id="db_123")
+        nc = NotionScriptClient(api_key="", database_id="db_123")
         assert nc._client is None
 
     def test_init_import_error(self, _mock_get_settings):
@@ -188,7 +188,7 @@ class TestCreateScriptPage:
         mock_api.pages.create.assert_called_once()
         call_kwargs = mock_api.pages.create.call_args[1]
         assert call_kwargs["parent"]["database_id"] == "test_db_id"
-        assert "Name" in call_kwargs["properties"]
+        assert "Video name" in call_kwargs["properties"]
         # Verify children were built (heading + narration + callout per entry = 6 blocks)
         assert len(call_kwargs["children"]) == 6
         mock_dlq.assert_not_called()
@@ -381,6 +381,7 @@ class TestGetScript:
             "url": "https://notion.so/page_abc",
             "properties": {
                 "title": {
+                    "type": "title",
                     "title": [{"text": {"content": "My Great Video"}}],
                 },
             },

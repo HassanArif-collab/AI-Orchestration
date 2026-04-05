@@ -3,7 +3,7 @@ server.py — LiteLLM-backed proxy with multi-fallback chains.
 
 Accepts POST /v1/chat/completions with model= set to either:
   - A task name:  "researcher", "scorer", "auto", etc.
-  - A direct LiteLLM string: "groq/llama-3.3-70b-versatile" (passed through)
+  - A direct LiteLLM string: "openrouter/qwen/qwen3.6-plus:free" (passed through)
 
 Returns standard OpenAI-compatible JSON + two headers:
   x-freerouter-model     — actual model used
@@ -75,7 +75,7 @@ def _resolve(model: str) -> list[str]:
             if val:
                 models.append(val)
         return models
-    # Already a litellm string like "groq/llama-3.3-70b-versatile" — pass through
+    # Already a litellm string — pass through with auto fallback
     return [model, ROUTES["auto"]["model"]]
 
 

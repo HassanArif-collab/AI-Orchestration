@@ -71,16 +71,24 @@ async def get_session_memory(session_id: str):
     client = get_memory_client()
     if not client:
         return {"summary": "", "facts": [], "message_count": 0}
-    memory = await client.get_memory(session_id)
-    facts = await client.get_facts(session_id)
-    # Fetch actual message count from Zep
-    message_count = 0
     try:
-        messages = client._client.message.list(session_id=session_id)
-        message_count = len(messages) if messages else 0
+        # search_memory returns OperationResult[list[dict]]
+        result = await client.search_memory(session_id, "*", limit=10)
+        facts = result.data if result.success else []
+
+        # Fetch actual message count from Zep
+        message_count = 0
+        try:
+            if client._client:
+                messages = client._client.message.list(session_id=session_id)
+                message_count = len(messages) if messages else 0
+        except Exception as e:
+            logger.warning(f"count_messages_failed: {e}")
+
+        return {"summary": "", "facts": facts, "message_count": message_count}
     except Exception as e:
-        logger.warning(f"count_messages_failed: {e}")
-    return {"summary": memory.get("summary", ""), "facts": facts, "message_count": message_count}
+        logger.warning(f"get_session_memory_failed: {e}")
+        return {"summary": "", "facts": [], "message_count": 0}
 
 @router.post("/search")
 async def search_memory(query: str, session_id: str = None):
@@ -96,8 +104,9 @@ async def search_memory(query: str, session_id: str = None):
     client = get_memory_client()
     if not client:
         return []
-    results = await client.search_memory(session_id or "", query)
-    return results
+    result = await client.search_memory(session_id or "", query)
+    # Unwrap OperationResult to return plain list
+    return result.data if result.success else []
 
 @router.get("/facts/{session_id}")
 async def get_facts(session_id: str):
@@ -112,4 +121,6 @@ async def get_facts(session_id: str):
     client = get_memory_client()
     if not client:
         return []
-    return await client.get_facts(session_id)
+    # Use search_memory with wildcard to retrieve all facts for a session
+    result = await client.search_memory(session_id, "*", limit=50)
+    return result.data if result.success else []

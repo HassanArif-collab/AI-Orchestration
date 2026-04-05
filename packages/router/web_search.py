@@ -98,9 +98,12 @@ class WebSearchClient:
     async def _init_client(self) -> None:
         """Initialize the z-ai-web-dev-sdk client."""
         try:
-            # Lazy import to avoid errors if SDK not installed
-            ZAI = __import__("z-ai-web-dev-sdk").ZAI
-            self._zai = await ZAI.create()
+            # Lazy import to avoid errors if SDK not installed.
+            # Use importlib because the package name contains hyphens
+            # which __import__ handles unreliably across Python versions.
+            import importlib
+            sdk = importlib.import_module("z-ai-web-dev-sdk")
+            self._zai = await sdk.ZAI.create()
             log.debug("web_search_client_initialized")
         except Exception as e:
             log.warning(f"web_search_sdk_init_failed: {e}")

@@ -316,8 +316,6 @@ async def config_health_check(request: Request):
         - missing_optional: List of missing optional keys
         - summary: Dict with configured/missing counts
     """
-    from fastapi import Request as _Request
-
     # Try to get pre-computed config status from app.state
     try:
         config_status = getattr(request.app.state, "config_status", None)

@@ -193,7 +193,7 @@ class ProgressTracker:
         """
         return self.finish(message)
 
-    def start_stage(self, stage_name: str, message: str = "", metadata: dict = None) -> ProgressEvent:
+    def start_stage(self, stage_name: str, message: str = "", metadata: dict | None = None) -> ProgressEvent:
         """Begin a new stage with progress tracking."""
         self._stage_start_time = time.monotonic()
 
@@ -234,7 +234,7 @@ class ProgressTracker:
         self._emit_event(event)
         return event
 
-    def update_stage(self, message: str, percent: int = None, metadata: dict = None) -> ProgressEvent:
+    def update_stage(self, message: str, percent: int = None, metadata: dict | None = None) -> ProgressEvent:
         """Update progress within the current stage."""
         if percent is not None:
             # Blend stage-internal percent with overall progress
@@ -302,7 +302,7 @@ class ProgressTracker:
         self._emit_event(event)
         return event
 
-    def fail(self, message: str, error_details: dict = None) -> ProgressEvent:
+    def fail(self, message: str, error_details: dict | None = None) -> ProgressEvent:
         """Mark the operation as failed with explanation."""
         elapsed = time.monotonic() - self._operation_start_time
 

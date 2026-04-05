@@ -115,7 +115,7 @@ def test_gap_fix_3_models_endpoint():
 
 
 def test_gap_fix_4_version_in_health():
-    """GAP FIX 4: Health response includes version 3.0.0."""
+    """GAP FIX 4: Health response includes version 3.1.0."""
     print("\n" + "=" * 60)
     print("GAP FIX 4: Version in Health Response")
     print("=" * 60)
@@ -135,8 +135,8 @@ def test_gap_fix_4_version_in_health():
         print(f"  [FAIL] No 'version' key in health response")
         return False
 
-    if data["version"] != "3.0.0":
-        print(f"  [FAIL] Expected version='3.0.0', got {data['version']}")
+    if data["version"] != "3.1.0":
+        print(f"  [FAIL] Expected version='3.1.0', got {data['version']}")
         return False
 
     print(f"  [PASS] GET /health -> 200")

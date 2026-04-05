@@ -17,17 +17,15 @@ Imported by: evaluation/loop.py
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Callable
 import asyncio
-import logging
 
-# These will be imported from the packages when the module is used
-# For now, we'll use standard logging to avoid circular imports
-logger = logging.getLogger(__name__)
+from packages.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class EscalationLevel(str, Enum):
@@ -89,14 +87,6 @@ class EscalationHandler:
 
 class LogHandler(EscalationHandler):
     """Handler that logs escalation events."""
-
-    def __init__(self, log_level: int = logging.WARNING):
-        """Initialize the log handler.
-
-        Args:
-            log_level: The logging level to use (default: WARNING)
-        """
-        self.log_level = log_level
 
     async def handle(self, event: EscalationEvent) -> bool:
         """Log the escalation event."""

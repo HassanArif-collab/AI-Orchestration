@@ -221,10 +221,14 @@ class TestQueryMemory:
     @pytest.mark.asyncio
     async def test_returns_memories(self):
         mock_zep = MagicMock()
-        mock_zep.search_memory = AsyncMock(return_value=[
+        # search_memory returns OperationResult, so mock must have .success and .data
+        _mock_op_result = MagicMock()
+        _mock_op_result.success = True
+        _mock_op_result.data = [
             {"fact": "Audience prefers listicle formats"},
             {"fact": "Hook within first 3 seconds boosts retention"},
-        ])
+        ]
+        mock_zep.search_memory = AsyncMock(return_value=_mock_op_result)
 
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(return_value=mock_zep)
@@ -248,7 +252,11 @@ class TestQueryMemory:
     @pytest.mark.asyncio
     async def test_no_results(self):
         mock_zep = MagicMock()
-        mock_zep.search_memory = AsyncMock(return_value=[])
+        # search_memory returns OperationResult with empty data
+        _mock_op_result = MagicMock()
+        _mock_op_result.success = True
+        _mock_op_result.data = []
+        mock_zep.search_memory = AsyncMock(return_value=_mock_op_result)
 
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(return_value=mock_zep)
@@ -285,9 +293,13 @@ class TestQueryMemory:
     async def test_memory_uses_content_fallback(self):
         """Results without 'fact' key should use 'content' key."""
         mock_zep = MagicMock()
-        mock_zep.search_memory = AsyncMock(return_value=[
+        # search_memory returns OperationResult with content-style data
+        _mock_op_result = MagicMock()
+        _mock_op_result.success = True
+        _mock_op_result.data = [
             {"content": "Learned content text"},
-        ])
+        ]
+        mock_zep.search_memory = AsyncMock(return_value=_mock_op_result)
 
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(return_value=mock_zep)

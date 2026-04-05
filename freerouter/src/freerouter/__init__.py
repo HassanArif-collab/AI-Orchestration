@@ -1,15 +1,15 @@
 """
 FreeRouter — LiteLLM-based task router v3.1.
 
-3 providers (OpenRouter, Groq, Ollama Cloud), 7 named routes with
+2 providers (OpenRouter, Ollama Cloud), 7 named routes with
 multi-fallback chains. Delegates provider management to LiteLLM.
 Keeps only the task-based routing logic and pipeline task storage.
 
 v3.1 Changes:
-  - Added Groq as a provider (scorer, challenger, annotator tasks)
-  - Added Ollama Cloud as a provider (researcher/topic_finder fallbacks)
+  - Removed Groq as a provider
+  - 2 providers remaining: OpenRouter (primary) + Ollama Cloud (creative)
   - Multi-fallback chains: primary → fallback → fallback2
-  - StepFun 3.5 Flash as primary for researcher/auto
+  - StepFun 3.5 Flash as primary for auto/scorer
 """
 
 __version__ = "3.1.0"

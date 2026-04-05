@@ -28,7 +28,7 @@ class TestCapabilityModels:
 
     def test_research_capability(self):
         from packages.router.capabilities import CAPABILITY_MODELS
-        assert CAPABILITY_MODELS["research"] == "openrouter/stepfun/step-3.5-flash:free"
+        assert CAPABILITY_MODELS["research"] == "openrouter/qwen/qwen3.6-plus:free"
 
     def test_scripting_capability(self):
         from packages.router.capabilities import CAPABILITY_MODELS
@@ -82,7 +82,7 @@ class TestGetModelForCapability:
     def test_known_capability(self, mock_load):
         from packages.router.capabilities import get_model_for_capability
         model = get_model_for_capability("research")
-        assert model == "openrouter/stepfun/step-3.5-flash:free"
+        assert model == "openrouter/qwen/qwen3.6-plus:free"
 
     @patch("packages.router.capabilities._load_overrides", return_value={})
     def test_unknown_capability_falls_back_to_auto(self, mock_load):
