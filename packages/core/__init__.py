@@ -26,7 +26,6 @@ from packages.core.errors import (
 )
 from packages.core.logger import get_logger
 from packages.core.cache import FileCache
-from packages.core.llm import freerouter_llm
 from packages.core.operation_result import OperationResult, ErrorSeverity
 from packages.core.error_codes import (
     get_user_friendly_error, get_error_response,
@@ -43,7 +42,6 @@ __all__ = [
     # Config & logging
     "Settings", "get_settings",
     "get_logger", "FileCache",
-    "freerouter_llm",
     # Errors
     "PipelineException",
     "PipelineError", "LLMClientError", "RateLimitError",

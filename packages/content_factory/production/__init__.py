@@ -1,10 +1,10 @@
 """
 Mode B Pipeline — Original Pakistani Investigative Content.
 
-Takes a TopicBrief and produces an original DualColumnScript using three
-CrewAI agents working in sequence with iterative self-correction rounds.
+Takes a TopicBrief and produces an original DualColumnScript using
+LangGraph pipeline nodes with iterative self-correction rounds.
 
-Agents: Researcher → Visual Director → Writer (defined in agents.py)
+Pipeline: Research → Draft → Score → Mutate Loop → Visuals → Review → Publish
 Entry point: orchestration/graphs.py → LangGraph production graph
 
 Genres supported: history, current_situation, tech_systems, comparison,

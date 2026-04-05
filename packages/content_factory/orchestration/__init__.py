@@ -1,9 +1,9 @@
 """
-Orchestration System — LangGraph State Machine (Phase 4).
+Orchestration System — LangGraph State Machine.
 
-The orchestration system now uses LangGraph for crash-proof, checkpointed
-pipeline execution. Each node does ONE thing, ONE time. LangGraph handles
-all flow control, conditional edges, and human gates.
+Crash-proof, checkpointed pipeline execution. Each node does ONE thing,
+ONE time. LangGraph handles all flow control, conditional edges, and
+human gates.
 
 TWO GRAPHS:
   1. Discovery Graph: Find topics → Grade → Save to Kanban
@@ -15,12 +15,6 @@ KEY COMPONENTS:
   - graphs.py: Graph assembly with conditional edges
   - thoughts.py: Thought streaming infrastructure
   - checkpointer.py: Supabase PostgreSQL checkpointer
-
-DEPRECATED FILES (kept for reference):
-  - master.py: Old orchestration master
-  - scheduler.py: Old cron-like job runner
-  - synthesis.py: Old weekly learning engine
-  - These will be removed after Phase 5 frontend is confirmed working.
 
 USAGE:
     from packages.content_factory.orchestration import (
@@ -40,9 +34,21 @@ USAGE:
     await close_checkpointer()
 """
 
-from .checkpointer import get_checkpointer, close_checkpointer, get_memory_saver
-from .graphs import build_discovery_graph, build_production_graph
+# Non-langgraph imports (pure Python, always available)
 from .state import DiscoveryState, ProductionState
+from .thoughts import report_thought, pipeline_node, update_card_stage
+from .checkpointer import get_checkpointer, close_checkpointer, get_memory_saver
+
+# Lazy imports for graph assembly (requires langgraph at runtime)
+def build_discovery_graph():
+    """Import and return the discovery graph builder. Requires langgraph."""
+    from .graphs import build_discovery_graph as _build
+    return _build()
+
+def build_production_graph():
+    """Import and return the production graph builder. Requires langgraph."""
+    from .graphs import build_production_graph as _build
+    return _build()
 
 
 async def get_discovery_graph():

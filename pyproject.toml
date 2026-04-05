@@ -2,7 +2,7 @@
 name = "ai-orchestration"
 version = "0.1.0"
 description = "Multi-agent YouTube video production pipeline"
-requires-python = ">=3.10,<3.14"  # CrewAI requires Python <=3.13
+requires-python = ">=3.10"
 dependencies = [
     # Web framework
     "fastapi>=0.111.0",
@@ -26,6 +26,17 @@ dependencies = [
     
     # Search
     "exa-py>=1.0.0",
+
+    # LangGraph state machine (core pipeline engine)
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph-checkpoint>=2.0.0",
+    "langsmith>=0.1.0",
+    "psycopg[binary]>=3.1.0",
+    "psycopg-pool>=3.2.0",
+    "youtube-transcript-api>=0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -59,31 +70,9 @@ pipeline = [
     "rich>=13.0.0",
 ]
 
-# LangGraph state machine with PostgreSQL checkpointer
-# NOTE: LangGraph works with Python 3.10-3.14+
-langgraph-deps = [
-    "langgraph>=0.2.0",
-    "langchain-core>=0.3.0",
-    "langchain>=0.3.0",
-    "langchain-openai>=0.2.0",
-    "psycopg[binary]>=3.1.0",
-    "psycopg-pool>=3.2.0",
-]
-
-# CrewAI agents - multi-agent framework
-# WARNING: CrewAI requires Python <=3.13 (NOT compatible with Python 3.14+)
-# If you're on Python 3.14+, use langgraph-deps only
-crewai-deps = [
-    "crewai>=1.0.0",
-    "crewai-tools>=0.14.0",
-    "litellm>=1.52.0",
-]
-
-# Full installation with BOTH CrewAI and LangGraph
-# WARNING: This will FAIL on Python 3.14+ because CrewAI requires Python <=3.13
-# For Python 3.14+: use pip install -e ".[dev,memory,youtube,notion,pipeline,langgraph-deps]"
+# Full installation with all integrations
 all = [
-    "ai-orchestration[dev,memory,youtube,notion,pipeline,langgraph-deps,crewai-deps]",
+    "ai-orchestration[dev,memory,youtube,notion,pipeline]",
 ]
 
 [build-system]

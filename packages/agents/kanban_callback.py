@@ -43,7 +43,7 @@ VALID_ARTIFACT_KEYS = {"research", "script", "visual_cues", "notion_url", "conte
 
 
 class KanbanCallbackHandler:
-    """Bridge between CrewAI agents and the Kanban dashboard.
+    """Bridge between pipeline agents and the Kanban dashboard.
 
     This class provides a clean interface for agents to report their
     progress directly to Supabase. No HTTP round-trip needed.
