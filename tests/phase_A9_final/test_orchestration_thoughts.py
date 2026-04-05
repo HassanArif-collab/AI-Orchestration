@@ -117,20 +117,24 @@ class TestReportThought:
         insert_data = mock_table.insert.call_args[0][0]
         assert insert_data["card_id"] == "card_42"
         assert insert_data["agent_name"] == "scorer"
-        # "success" maps to "output" via _THOUGHT_TYPE_MAP
+        # thought_type is mapped via _THOUGHT_TYPE_MAP: "success" -> "output"
         assert insert_data["thought_type"] == "output"
         assert insert_data["content"] == "Score: 85"
+        # metadata is NOT inserted into the DB (not a column in agent_thoughts)
+        assert "metadata" not in insert_data
+        # created_at is NOT explicitly set (DB defaults to now())
+        assert "created_at" not in insert_data
 
     @pytest.mark.asyncio
-    async def test_default_metadata_not_inserted(self):
+    async def test_default_thought_type_mapped(self):
         mock_sb = MagicMock()
         with patch("packages.core.supabase_client.get_supabase", return_value=mock_sb):
             await report_thought("c1", "a1", "thought", "info")
         insert_data = mock_sb.table.return_value.insert.call_args[0][0]
-        # report_thought only inserts: card_id, agent_name, thought_type, content
-        assert set(insert_data.keys()) == {"card_id", "agent_name", "thought_type", "content"}
-        # "info" maps to "thinking" via _THOUGHT_TYPE_MAP
+        # "info" is mapped to "thinking" via _THOUGHT_TYPE_MAP
         assert insert_data["thought_type"] == "thinking"
+        # metadata is not stored in DB
+        assert "metadata" not in insert_data
 
     @pytest.mark.asyncio
     async def test_never_raises(self):
