@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { AgentThought } from '../types';
+import { supabase } from '@/lib/supabase';
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { AgentThought } from '@/lib/schema';
 
 /**
  * Subscribes to real-time agent thoughts for a specific card via Supabase Realtime.
@@ -13,6 +14,8 @@ import type { AgentThought } from '../types';
  * - Shows reconnection state (connecting/reconnecting/failed)
  * - Deduplicates thoughts by ID to prevent duplicates on reconnect
  * - Properly cleans up channels before reconnecting
+ *
+ * NOTE: Uses `thought.content` (matching DB column name), NOT `thought.thought`.
  */
 export function useAgentStream(cardId: string | null) {
   const [thoughts, setThoughts] = useState<AgentThought[]>([]);
@@ -24,11 +27,10 @@ export function useAgentStream(cardId: string | null) {
 
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cardIdRef = useRef<string | null>(cardId);
-  const channelNameRef = useRef<string | null>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
   /** Track IDs we've already seen to prevent duplicates on reconnect */
   const seenIdsRef = useRef<Set<string>>(new Set());
 
-  // Keep cardIdRef in sync
   useEffect(() => {
     cardIdRef.current = cardId;
   }, [cardId]);
@@ -51,26 +53,24 @@ export function useAgentStream(cardId: string | null) {
     }
 
     let cancelled = false;
-
     const MAX_RECONNECTS = 5;
     const BASE_DELAY = 1000;
 
     const connect = (attempt: number) => {
       if (cancelled) return;
-      if (!isSupabaseConfigured() || !supabase) return;
 
       const currentCardId = cardIdRef.current;
       if (!currentCardId) return;
 
-      // Remove old channel before creating a new one (prevents channel leaks)
-      if (channelNameRef.current) {
-        supabase.removeChannel(channelNameRef.current);
+      // Remove old channel before creating a new one
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
 
-      const channelName = `thoughts-${currentCardId}`;
-      channelNameRef.current = channelName;
+      // Unique channel name prevents React StrictMode double-mount collisions
+      const channelName = `thoughts-${currentCardId}-${Date.now()}`;
 
-      // Status updates
       if (attempt > 0) {
         setReconnectAttempt(attempt);
         setConnectionError(`Reconnecting... (${attempt}/${MAX_RECONNECTS})`);
@@ -79,7 +79,6 @@ export function useAgentStream(cardId: string | null) {
         setConnectionError(null);
       }
 
-      // Step 1: Load history FIRST
       const loadHistory = async () => {
         if (cancelled) return;
         const id = cardIdRef.current;
@@ -94,16 +93,15 @@ export function useAgentStream(cardId: string | null) {
         if (cancelled) return;
 
         if (data) {
-          const thoughts = data as AgentThought[];
-          setThoughts(thoughts);
-          seenIdsRef.current = new Set(thoughts.map((t) => t.id));
+          const loadedThoughts = data as AgentThought[];
+          setThoughts(loadedThoughts);
+          seenIdsRef.current = new Set(loadedThoughts.map((t) => t.id));
         }
         if (error) {
           console.warn('Failed to load thought history:', error);
         }
       };
 
-      // Step 2: Subscribe to new thoughts (called AFTER history loads)
       const subscribe = () => {
         if (cancelled) return;
 
@@ -128,7 +126,7 @@ export function useAgentStream(cardId: string | null) {
               setThoughts((prev) => [...prev, thought]);
             },
           )
-          .subscribe((status, _err) => {
+          .subscribe((status) => {
             if (cancelled) return;
             if (status === 'SUBSCRIBED') {
               setIsConnected(true);
@@ -153,10 +151,10 @@ export function useAgentStream(cardId: string | null) {
               }
             }
           });
+
+        channelRef.current = channel;
       };
 
-      // Load history first, THEN subscribe (prevents race condition where
-      // a new INSERT arrives between subscription and history load)
       loadHistory().then(() => subscribe());
     };
 
@@ -165,27 +163,23 @@ export function useAgentStream(cardId: string | null) {
     return () => {
       cancelled = true;
       cleanup();
-      if (channelNameRef.current && supabase) {
-        supabase.removeChannel(channelNameRef.current);
-        channelNameRef.current = null;
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
       setIsConnected(false);
     };
   }, [cardId, reconnectKey, cleanup]);
 
-  // Auto-scroll to bottom when new thoughts arrive
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [thoughts.length]);
 
-  // Manual reconnect — removes the current channel, clears timers and state,
-  // then increments reconnectKey which is in the effect's dependency array,
-  // causing the effect to tear down and re-run from scratch.
   const forceReconnect = useCallback(() => {
     cleanup();
-    if (channelNameRef.current && supabase) {
-      supabase.removeChannel(channelNameRef.current);
-      channelNameRef.current = null;
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
     }
     setIsConnected(false);
     setReconnectAttempt(0);

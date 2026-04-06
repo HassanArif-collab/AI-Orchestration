@@ -1,25 +1,11 @@
 import { useState, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { api } from '../../lib/api';
+import { getSkills } from '@/lib/api';
 
 interface SkillFile {
   name: string;
   content: string;
 }
 
-/**
- * Displays the data/skills/*.md files as read-only documents.
- *
- * CRITICAL UX RULE: "Code is Truth"
- * These prompts are loaded from Git-tracked .md files.
- * The UI explicitly shows them as READ-ONLY with a warning
- * that edits must happen in VS Code / Git — not through the UI.
- *
- * This prevents the old anti-pattern where someone edits a prompt
- * in the dashboard, it gets overwritten on next deploy, and they
- * wonder why their changes disappeared.
- */
 export function SkillViewer() {
   const [skills, setSkills] = useState<SkillFile[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
@@ -27,7 +13,7 @@ export function SkillViewer() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getSkills()
+    getSkills()
       .then((res) => {
         setSkills(res.files);
         if (res.files.length > 0) setSelectedSkill(res.files[0].name);
@@ -46,18 +32,15 @@ export function SkillViewer() {
 
   return (
     <div className="p-4">
-      {/* Warning banner */}
       <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 mb-4">
         <p className="text-xs text-amber-400 font-medium">
           ⚠ Code is Truth — These files are read-only.
         </p>
         <p className="text-xs text-amber-400/70 mt-1">
           Edit in <code className="bg-gray-800 px-1 rounded">data/skills/*.md</code> via Git.
-          Changes here would be overwritten on deploy.
         </p>
       </div>
 
-      {/* Skill file tabs */}
       <div className="flex flex-wrap gap-2 mb-4">
         {skills.map((s) => (
           <button
@@ -74,13 +57,10 @@ export function SkillViewer() {
         ))}
       </div>
 
-      {/* Markdown content */}
       {activeSkill && (
-        <div className="prose prose-sm prose-invert max-w-none bg-gray-800 rounded-lg p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {activeSkill.content}
-          </ReactMarkdown>
-        </div>
+        <pre className="whitespace-pre-wrap font-mono bg-gray-800 rounded-lg p-4 max-h-[60vh] overflow-y-auto scrollbar-thin text-xs text-gray-300">
+          {activeSkill.content}
+        </pre>
       )}
     </div>
   );

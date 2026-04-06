@@ -1,0 +1,63 @@
+@import 'geist/dist/geist.css';
+
+@import "tailwindcss";
+
+@theme {
+  /* --- HSL Base Ramp --- */
+  --neutral-950: 220 14% 4%;
+  --neutral-900: 220 14% 6%;
+  --neutral-800: 220 12% 12%;
+  --neutral-700: 220 13% 18%;
+  --neutral-400: 220 10% 65%;
+  --neutral-100: 220 14% 96%;
+
+  /* --- Brand & Lineage Colors --- */
+  --brand-900: 230 60% 15%;
+  --brand-500: 230 72% 55%;
+  --brand-300: 230 85% 75%;
+  --lineage-emerald: 150 60% 50%;
+  --lineage-amber: 35 80% 50%;
+  --lineage-rose: 350 70% 60%;
+  --lineage-indigo: 250 80% 60%;
+  --lineage-cyan: 190 80% 50%;
+
+  /* --- Glass Surface Materials --- */
+  --surface-glass: 220 10% 15% / 0.4;
+  --surface-sunken: 220 14% 9% / 0.5;
+  --surface-glass-border: 220 13% 84% / 0.08;
+  --surface-glass-glow: 230 72% 55% / 0.2; /* Dynamic outline on active elements */
+
+  /* --- Z-Index Hierarchy Matrix --- */
+  /* Do not use random z-50s scattered around. Stick to these layers. */
+  --z-background: -10;
+  --z-base: 0;
+  --z-board-item: 10;
+  --z-drag-overlay: 20;
+  --z-header: 30;
+  --z-sidebar: 30;
+  --z-drawer-overlay: 40;
+  --z-drawer: 50;
+  --z-toast: 100;
+
+  /* --- Physics & Motion Config --- */
+  /* Never use "linear" or "ease". These supply weight and mass to UI scaling. */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-drawer: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration-default: 300ms;
+
+  /* --- Shadows --- */
+  --shadow-glass: inset 0 1px 0 0 hsl(0 0% 100% / 0.05), 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.3);
+  --shadow-glow: 0 0 20px -2px hsl(var(--brand-500) / 0.3);
+
+  /* --- Typography --- */
+  --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    background-color: hsl(var(--neutral-950));
+    color: hsl(var(--neutral-100));
+    font-family: var(--font-sans);
+    overflow: hidden; /* Desktop app strict rule */
+  }
+}

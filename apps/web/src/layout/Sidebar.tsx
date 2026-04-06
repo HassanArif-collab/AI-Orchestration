@@ -42,8 +42,8 @@ export function Sidebar() {
 
     // Focus the new tab button
     const tabButtons = tablistRef.current?.querySelectorAll('[role="tab"]');
-    if (tabButtons && tabButtons[nextIndex] instanceof HTMLElement) {
-      tabButtons[nextIndex].focus();
+    if (tabButtons && tabButtons[nextIndex]) {
+      (tabButtons[nextIndex] as HTMLElement).focus();
     }
   }, [activeTab, tabs]);
 

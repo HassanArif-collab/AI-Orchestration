@@ -1,7 +1,6 @@
 import useSWR from 'swr';
-import { api } from '../lib/api';
-import type { QuotaResponse } from '../types';
-import { POLL_INTERVAL_MS } from '../lib/constants';
+import { getQuota } from '@/lib/api';
+import type { QuotaResponse } from '@/lib/api';
 
 /**
  * Fetches live provider quotas every 5 seconds.
@@ -13,9 +12,9 @@ import { POLL_INTERVAL_MS } from '../lib/constants';
 export function useQuota() {
   const { data, error, isLoading } = useSWR<QuotaResponse>(
     'provider-quota',
-    () => api.getQuota(),
+    () => getQuota(),
     {
-      refreshInterval: POLL_INTERVAL_MS,
+      refreshInterval: 5_000,
       revalidateOnFocus: true,
     }
   );

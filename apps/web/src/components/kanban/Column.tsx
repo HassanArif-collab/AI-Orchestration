@@ -1,4 +1,5 @@
-import type { KanbanCard, ColumnDef } from '../../types';
+import type { KanbanCard } from '@/lib/schema';
+import type { ColumnDef } from '@/types';
 import { Card } from './Card';
 import { EmptyState } from '../common/EmptyState';
 import { useDroppable } from '@dnd-kit/core';
@@ -22,13 +23,11 @@ export function Column({
   dragErrorCardId,
   dragErrorMessage,
 }: Props) {
-  // Make this column a valid drop target for drag-and-drop
   const { setNodeRef, isOver } = useDroppable({
     id: `column-${columnNumber}`,
     data: { columnNumber },
   });
 
-  // Separate expired cards from active ones for accurate badge count
   const activeCards = cards.filter((card) => {
     if (!card.expires_at) return true;
     return new Date(card.expires_at) > new Date();
@@ -80,7 +79,6 @@ export function Column({
                 onClick={() => onCardClick(card)}
               />
 
-              {/* Drag error overlay on the specific card */}
               {dragErrorCardId === card.id && dragErrorMessage && (
                 <div className="absolute inset-0 bg-red-900/30 border-2 border-red-500 rounded-lg flex items-center justify-center animate-shake pointer-events-none">
                   <div className="bg-red-900 border border-red-500 rounded px-2 py-1.5 text-xs text-red-200 max-w-[90%] text-center">

@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { api } from '../lib/api';
-import { mapApiError } from '../lib/errorMapper';
-import { showToast } from '../hooks/useToast';
+import { discoverTopics } from '@/lib/api';
+import { mapApiError } from '@/lib/errorMapper';
+import { showToast } from '@/hooks/useToast';
 
 export function Header() {
   const [seedHint, setSeedHint] = useState('');
@@ -10,7 +10,7 @@ export function Header() {
   const handleDiscover = async () => {
     setIsDiscovering(true);
     try {
-      await api.discover({ seed_hint: seedHint || undefined });
+      await discoverTopics(seedHint || undefined);
       setSeedHint('');
       showToast({ type: 'success', title: 'Discovery started', message: 'Finding trending topics...' });
     } catch (err) {
@@ -30,7 +30,6 @@ export function Header() {
         </span>
       </div>
 
-      {/* Topic Discovery Trigger */}
       <div className="flex items-center gap-2">
         <input
           type="text"
@@ -46,9 +45,7 @@ export function Header() {
           className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1"
         >
           {isDiscovering ? (
-            <>
-              <span className="animate-spin">⏳</span> Discovering...
-            </>
+            <><span className="animate-spin">⏳</span> Discovering...</>
           ) : (
             <>🔍 Discover Topics</>
           )}

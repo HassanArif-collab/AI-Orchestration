@@ -1,174 +1,318 @@
-import type { DiscoverRequest, ResumeRequest, PipelineStateResponse, QuotaResponse } from '../types';
+// apps/web/src/lib/api.ts
+// Authenticated Fetch Wrapper + Typed API Endpoint Functions
+//
+// Every API call MUST go through apiFetch() which auto-injects
+// Supabase JWT auth headers. The SWR global fetcher in main.tsx
+// handles GET-only; apiFetch is for mutations.
 
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { supabase } from '@/lib/supabase';
+import { env } from '@/config/env';
 
-// ── Retry Configuration ──
-const DEFAULT_TIMEOUT = 15_000; // 15 seconds
-const MAX_RETRIES = 2;
-const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
-
-interface RequestOptions extends RequestInit {
-  timeout?: number;
-  retries?: number;
-}
+// ─── Core Authenticated Fetch Wrapper ─────────────────────────────────────
 
 /**
- * Core request wrapper with timeout and automatic retry.
- *
- * Features:
- * - AbortController-based timeout (default 15s)
- * - Automatic retry on 429/5xx with exponential backoff (max 2 retries)
- * - No retry on 4xx client errors (except 408 Request Timeout)
- * - Retries on network/timeout errors
- *
- * Error format is preserved: `API {status}: {body}` so downstream
- * errorMapper.ts can parse the status code from the message.
+ * Authenticated fetch wrapper — every API call MUST go through this.
+ * Automatically attaches the Supabase JWT access_token as a Bearer header.
+ * Without this, every POST/PATCH/DELETE to FastAPI protected routes returns 401.
  */
-async function request<T>(
-  path: string,
-  options: RequestOptions = {},
-  currentRetry = 0,
-): Promise<T> {
-  const {
-    timeout = DEFAULT_TIMEOUT,
-    retries = MAX_RETRIES,
-    ...fetchOptions
-  } = options;
+export async function apiFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const res = await fetch(`${env.API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(session?.access_token
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : {}),
+      ...init?.headers,
+    },
+  });
 
-  // Merge default JSON headers — callers rarely set Content-Type themselves
-  const headers: Record<string, string> = {
-    ...(fetchOptions.headers as Record<string, string>),
-  };
-  // Only set Content-Type for requests with a body (POST/PATCH/PUT)
-  if (fetchOptions.body && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: ${res.statusText} on ${path}`);
   }
 
-  try {
-    const response = await fetch(`${BASE}${path}`, {
-      ...fetchOptions,
-      headers,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    // Retry on server errors and rate limiting
-    if (RETRYABLE_STATUS_CODES.has(response.status) && currentRetry < retries) {
-      const backoffDelay = 1000 * Math.pow(2, currentRetry);
-      console.warn(
-        `[API] ${response.status} on ${path}. Retrying in ${backoffDelay}ms (attempt ${currentRetry + 1}/${retries})...`
-      );
-      await new Promise((resolve) => setTimeout(resolve, backoffDelay));
-      return request<T>(path, options, currentRetry + 1);
-    }
-
-    // Handle non-ok responses (don't retry client errors)
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`API ${response.status}: ${body}`);
-    }
-
-    return response.json();
-  } catch (err) {
-    clearTimeout(timeoutId);
-
-    // Retry on timeout or network errors
-    const isRetryable =
-      err instanceof Error &&
-      (err.name === 'AbortError' ||
-        err.message.includes('fetch') ||
-        err.message.includes('Failed to fetch') ||
-        err.message.includes('NetworkError'));
-
-    if (isRetryable && currentRetry < retries) {
-      const backoffDelay = 1000 * Math.pow(2, currentRetry);
-      console.warn(
-        `[API] Request to ${path} failed (${err.name}). Retrying in ${backoffDelay}ms (attempt ${currentRetry + 1}/${retries})...`
-      );
-      await new Promise((resolve) => setTimeout(resolve, backoffDelay));
-      return request<T>(path, options, currentRetry + 1);
-    }
-
-    throw err;
-  }
+  return res.json() as Promise<T>;
 }
+
+// ─── Typed Endpoint Wrappers ──────────────────────────────────────────────
 
 // ── Pipeline Endpoints ──
 
+/** Start a new topic discovery process (creates Column 1 cards). */
+export function discoverTopics(seedHint?: string) {
+  return apiFetch<{ status: string; card_id: string }>('/api/pipeline/discover', {
+    method: 'POST',
+    body: JSON.stringify({ seed_hint: seedHint }),
+  });
+}
+
+/** User clicked "Save" on a Column 2 card (moves to Column 3, removes 3h expiry). */
+export function saveCard(cardId: string) {
+  return apiFetch<{ status: string }>(`/api/kanban/cards/${cardId}/save`, {
+    method: 'POST',
+  });
+}
+
+/** Add 3 hours to expiry for a topic. */
+export function extendTaskExpiry(cardId: string) {
+  return apiFetch<{ status: string }>(`/api/kanban/tasks/${cardId}/extend`, {
+    method: 'POST',
+  });
+}
+
+/** User dragged card from 3 to 4 (Start production LangGraph). */
+export function startProduction(cardId: string) {
+  return apiFetch<{ status: string; card_id: string }>(`/api/pipeline/produce/${cardId}`, {
+    method: 'POST',
+  });
+}
+
+// ── Drag & Drop (Optimistic UI fallback) ──
+
+/** Move card. Payload: { stage: col_num, position: target_index }. */
+export function moveCard(cardId: string, payload: { stage: number; position: number }) {
+  return apiFetch<{ status: string }>(`/api/kanban/tasks/${cardId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Soft delete task. */
+export function deleteCard(cardId: string) {
+  return apiFetch<{ status: string }>(`/api/kanban/tasks/${cardId}`, {
+    method: 'DELETE',
+  });
+}
+
+// ── Pipeline Monitoring & Human Gates ──
+
+export type PipelineStateResponse = {
+  card_id: string;
+  values: {
+    evaluation_score: number;
+    best_score: number;
+    iteration_count: number;
+    pipeline_status: string;
+    current_draft: string;
+    visual_plan: string;
+    error: string | null;
+  };
+  next: string[];
+};
+
+/** Poll every 5s while in Production. */
+export function getPipelineState(runId: string) {
+  return apiFetch<PipelineStateResponse>(`/api/pipeline/langgraph/state/${runId}`);
+}
+
+/** Approve/Reject script in the drawer. */
+export function resumePipeline(
+  cardId: string,
+  payload: { approved: boolean; feedback?: string },
+) {
+  return apiFetch<{ status: string }>(
+    `/api/pipeline/langgraph/resume/${cardId}`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/** Final preview check. */
+export function getPipelinePreview(cardId: string) {
+  return apiFetch<PipelineStateResponse>(`/api/pipeline/langgraph/preview/${cardId}`);
+}
+
+// ── Provider / Quota Endpoints ──
+
+export type ProviderQuota = {
+  name: string;
+  rpm_remaining: number;
+  tpm_remaining: number;
+  last_updated: string;
+};
+
+export type QuotaResponse = {
+  providers: ProviderQuota[];
+};
+
+/** Get live provider quotas. */
+export function getQuota() {
+  return apiFetch<QuotaResponse>('/api/providers/quota');
+}
+
+// ── Settings Endpoints ──
+
+/** Get skill file contents (for System Editor). */
+export function getSkills() {
+  return apiFetch<{ files: { name: string; content: string }[] }>('/api/settings/skills');
+}
+
+/** Get knowledge base content. */
+export function getKnowledgeBase() {
+  return apiFetch<{ content: string; path: string | null }>('/api/settings/knowledge-base');
+}
+
+// ── YouTube Analytics ──
+
+/** Get competitor videos. */
+export function getCompetitorVideos() {
+  return apiFetch<{ videos: unknown[] }>('/api/analytics/competitors');
+}
+
+/** Get own channel analytics. */
+export function getOwnAnalytics(channelId?: string) {
+  const url = channelId
+    ? `/api/analytics/channel?channel_id=${channelId}`
+    : '/api/analytics/channel';
+  return apiFetch<{
+    subscriber_count: number;
+    total_views: number;
+    video_count: number;
+  }>(url);
+}
+
+/** Repurpose a competitor video. */
+export function repurposeVideo(body: {
+  title: string;
+  video_id: string;
+  channel: string;
+  views: number;
+}) {
+  return apiFetch<{ status: string; card_id: string | null }>('/api/analytics/repurpose', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+// ── DLQ Endpoints ──
+
+/** Get DLQ statistics. */
+export function getDLQStats() {
+  return apiFetch<{ pending: number; total: number }>('/api/dlq/stats');
+}
+
+/** Get DLQ items by status. */
+export function getDLQItems(status: string = 'pending') {
+  return apiFetch<unknown[]>(`/api/dlq/items?status=${status}`);
+}
+
+/** Retry a failed DLQ item. */
+export function retryDLQItem(itemId: string) {
+  return apiFetch<{ status: string }>(`/api/dlq/items/${itemId}/retry`, {
+    method: 'POST',
+  });
+}
+
+/** Delete a DLQ item. */
+export function deleteDLQItem(itemId: string) {
+  return apiFetch<{ status: string }>(`/api/dlq/items/${itemId}`, {
+    method: 'DELETE',
+  });
+}
+
+// ── Provider Settings ──
+
+/** Update a provider API key. */
+export function updateProviderKey(providerName: string, apiKey: string) {
+  return apiFetch<{ status: string }>(`/api/providers/${providerName}/key`, {
+    method: 'POST',
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+}
+
+/** Test a provider connection. */
+export function testProviderConnection(providerName: string) {
+  return apiFetch<{ status: string }>(`/api/providers/${providerName}/test`, {
+    method: 'POST',
+  });
+}
+
+// ── Topic Reservoir ──
+
+/** Get the full topic reservoir. */
+export function getTopicReservoir() {
+  return apiFetch<unknown[]>('/api/topics/reservoir');
+}
+
+/** Bulk approve topics. */
+export function approveTopics(topicIds: string[]) {
+  return apiFetch<{ status: string }>('/api/topics/approve', {
+    method: 'POST',
+    body: JSON.stringify({ topic_ids: topicIds }),
+  });
+}
+
+/** Bulk reject topics. */
+export function rejectTopics(topicIds: string[]) {
+  return apiFetch<{ status: string }>('/api/topics/reject', {
+    method: 'POST',
+    body: JSON.stringify({ topic_ids: topicIds }),
+  });
+}
+
+// ── Memory / Zep Endpoints ──
+
+/** Get Zep memory sessions. */
+export function getMemorySessions() {
+  return apiFetch<unknown[]>('/api/memory/sessions');
+}
+
+/** Get facts for a specific session. */
+export function getMemoryFacts(sessionId: string) {
+  return apiFetch<unknown[]>(`/api/memory/facts/${sessionId}`);
+}
+
+// ── Visual Config Endpoints ──
+
+/** Get Remotion templates. */
+export function getRemotionTemplates() {
+  return apiFetch<unknown[]>('/api/visual/remotion/templates');
+}
+
+/** Get Radiant shaders. */
+export function getRadiantShaders() {
+  return apiFetch<unknown[]>('/api/visual/radiant/shaders');
+}
+
+// ── Iteration Logs ──
+
+/** Get iteration logs for a pipeline run. */
+export function getIterations(runId: string) {
+  return apiFetch<unknown[]>(`/api/pipeline/iterations/${runId}`);
+}
+
+// ── Re-export for backward compatibility ──
+
+/** @deprecated Use the individual named functions above instead. */
 export const api = {
-  // Trigger topic discovery
-  discover: (body: DiscoverRequest) =>
-    request<{ status: string; card_id: string }>('/api/pipeline/discover', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  // Start production pipeline for a card
+  discover: (body: { seed_hint?: string }) =>
+    discoverTopics(body.seed_hint),
   produce: (cardId: string) =>
-    request<{ status: string; card_id: string }>(`/api/pipeline/produce/${cardId}`, {
-      method: 'POST',
-    }),
-
-  // Resume after human review
-  resume: (cardId: string, decision: ResumeRequest) =>
-    request<{ status: string }>(`/api/pipeline/langgraph/resume/${cardId}`, {
-      method: 'POST',
-      body: JSON.stringify(decision),
-    }),
-
-  // Get current LangGraph state
+    startProduction(cardId),
+  resume: (cardId: string, decision: { approved: boolean; feedback?: string }) =>
+    resumePipeline(cardId, decision),
   getPipelineState: (cardId: string) =>
-    request<PipelineStateResponse>(`/api/pipeline/langgraph/state/${cardId}`),
-
-  // Get live provider quotas
+    getPipelineState(cardId),
   getQuota: () =>
-    request<QuotaResponse>('/api/providers/quota'),
-
-  // Get skill file contents (for System Editor)
+    getQuota(),
   getSkills: () =>
-    request<{ files: { name: string; content: string }[] }>('/api/settings/skills'),
-
-  // Save a suggested topic (prevents 3-hour auto-delete)
+    getSkills(),
   saveCard: (cardId: string) =>
-    request<{ status: string }>(`/api/kanban/cards/${cardId}/save`, {
-      method: 'POST',
-    }),
-
-  // Delete an expired/unwanted card
+    saveCard(cardId),
   deleteCard: (cardId: string) =>
-    request<{ status: string }>(`/api/kanban/tasks/${cardId}`, {
-      method: 'DELETE',
-    }),
-
-  // Move card between columns (canonical endpoint for drag-and-drop)
+    deleteCard(cardId),
   moveCard: (cardId: string, toColumn: number) =>
-    request<{ status: string }>(`/api/kanban/tasks/${cardId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ stage: toColumn }),
-    }),
-
-  // ── YouTube Analytics ──
-
+    moveCard(cardId, { stage: toColumn, position: 0 }),
   getCompetitorVideos: () =>
-    request<{ videos: unknown[] }>('/api/analytics/competitors'),
-
+    getCompetitorVideos(),
   getOwnAnalytics: (channelId?: string) =>
-    request<{ subscriber_count: number; total_views: number; video_count: number }>(
-      channelId ? `/api/analytics/channel?channel_id=${channelId}` : '/api/analytics/channel',
-    ),
-
+    getOwnAnalytics(channelId),
   repurposeVideo: (body: { title: string; video_id: string; channel: string; views: number }) =>
-    request<{ status: string; card_id: string | null }>('/api/analytics/repurpose', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  // ── Knowledge Base ──
-
+    repurposeVideo(body),
   getKnowledgeBase: () =>
-    request<{ content: string; path: string | null }>('/api/settings/knowledge-base'),
+    getKnowledgeBase(),
 };

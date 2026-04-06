@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { api } from '../lib/api';
+import { getCompetitorVideos, getOwnAnalytics } from '@/lib/api';
 
 export interface CompetitorVideo {
   title: string;
@@ -17,15 +17,10 @@ export interface OwnAnalytics {
   channel_title?: string;
 }
 
-/** SWR fetcher that uses the centralized api layer (retry + timeout included) */
-async function apiFetcher<T>(path: string): Promise<T> {
-  return api[path as keyof typeof api] as unknown as Promise<T>;
-}
-
 export function useCompetitorVideos() {
   const { data, error, isLoading } = useSWR(
     'competitor-videos',
-    () => api.getCompetitorVideos() as Promise<{ videos?: CompetitorVideo[]; error?: string }>,
+    () => getCompetitorVideos() as Promise<{ videos?: CompetitorVideo[]; error?: string }>,
     { refreshInterval: 300_000 } // Refresh every 5 minutes
   );
 
@@ -41,7 +36,7 @@ export function useOwnAnalytics(channelId?: string) {
 
   const { data, error, isLoading } = useSWR(
     key,
-    () => api.getOwnAnalytics(channelId) as Promise<OwnAnalytics & { error?: string }>,
+    () => getOwnAnalytics(channelId) as Promise<OwnAnalytics & { error?: string }>,
     { refreshInterval: 300_000 }
   );
 

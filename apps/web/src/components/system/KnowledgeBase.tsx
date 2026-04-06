@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { api } from '../../lib/api';
-import { mapApiError } from '../../lib/errorMapper';
+import Markdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
+import { getKnowledgeBase } from '@/lib/api';
+import { mapApiError } from '@/lib/errorMapper';
 
 export function KnowledgeBase() {
   const [content, setContent] = useState<string>('');
@@ -14,7 +14,7 @@ export function KnowledgeBase() {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await api.getKnowledgeBase();
+      const data = await getKnowledgeBase();
       setContent(data.content || '');
       setFilePath(data.path || null);
     } catch (err) {
@@ -50,7 +50,6 @@ export function KnowledgeBase() {
 
   return (
     <div className="p-4">
-      {/* Code is Truth banner */}
       <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 mb-4">
         <p className="text-xs text-amber-400 font-medium">
           ⚠ Code is Truth — Read-only view
@@ -62,12 +61,11 @@ export function KnowledgeBase() {
         )}
       </div>
 
-      {/* Markdown content */}
       <div className="prose prose-sm prose-invert max-w-none bg-gray-800 rounded-lg p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
         {content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <Markdown rehypePlugins={[rehypeSanitize]}>
             {content}
-          </ReactMarkdown>
+          </Markdown>
         ) : (
           <p className="text-gray-500">No knowledge base content available.</p>
         )}

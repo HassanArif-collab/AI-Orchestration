@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { CompetitorVideo } from '../../hooks/useYouTube';
-import { api } from '../../lib/api';
-import { mapApiError } from '../../lib/errorMapper';
-import { showToast } from '../../hooks/useToast';
+import type { CompetitorVideo } from '@/hooks/useYouTube';
+import { repurposeVideo } from '@/lib/api';
+import { mapApiError } from '@/lib/errorMapper';
+import { showToast } from '@/hooks/useToast';
 
 interface Props {
   video: CompetitorVideo;
@@ -15,7 +15,7 @@ export function CompetitorCard({ video }: Props) {
   const handleRepurpose = async () => {
     setIsRepurposing(true);
     try {
-      const result = await api.repurposeVideo({
+      const result = await repurposeVideo({
         title: video.title,
         video_id: video.video_id,
         channel: video.channel_title,
@@ -41,30 +41,16 @@ export function CompetitorCard({ video }: Props) {
 
   return (
     <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-      {/* Thumbnail */}
       {video.thumbnail_url && (
-        <img
-          src={video.thumbnail_url}
-          alt={video.title}
-          className="w-full h-32 object-cover rounded mb-2"
-        />
+        <img src={video.thumbnail_url} alt={video.title} className="w-full h-32 object-cover rounded mb-2" />
       )}
-
-      {/* Title */}
-      <h4 className="text-sm text-white font-medium line-clamp-2">
-        {video.title}
-      </h4>
-
-      {/* Meta */}
+      <h4 className="text-sm text-white font-medium line-clamp-2">{video.title}</h4>
       <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
         <span>{video.channel_title}</span>
         <span>{formattedViews} views</span>
       </div>
-      <p className="text-xs text-gray-600 mt-1">
-        {new Date(video.published_at).toLocaleDateString()}
-      </p>
+      <p className="text-xs text-gray-600 mt-1">{new Date(video.published_at).toLocaleDateString()}</p>
 
-      {/* Actions */}
       <div className="flex gap-2 mt-3">
         <a
           href={`https://youtube.com/watch?v=${video.video_id}`}

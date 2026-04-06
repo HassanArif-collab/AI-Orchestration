@@ -1,7 +1,6 @@
 import useSWR from 'swr';
-import { api } from '../lib/api';
-import type { PipelineStateResponse } from '../types';
-import { POLL_INTERVAL_MS } from '../lib/constants';
+import { getPipelineState } from '@/lib/api';
+import type { PipelineStateResponse } from '@/types';
 
 /**
  * Fetches the current LangGraph checkpoint state for a card.
@@ -15,9 +14,9 @@ import { POLL_INTERVAL_MS } from '../lib/constants';
 export function usePipelineState(cardId: string | null) {
   const { data, error, isLoading } = useSWR<PipelineStateResponse>(
     cardId ? `pipeline-state-${cardId}` : null, // null key = don't fetch
-    () => api.getPipelineState(cardId!),
+    () => getPipelineState(cardId!),
     {
-      refreshInterval: POLL_INTERVAL_MS,
+      refreshInterval: 5_000,
       revalidateOnFocus: true,
     }
   );

@@ -1,4 +1,4 @@
-import { MODEL_REGISTRY } from '../../types';
+import { MODEL_REGISTRY } from '@/types';
 
 /**
  * Read-only display of which agent uses which model on which provider.

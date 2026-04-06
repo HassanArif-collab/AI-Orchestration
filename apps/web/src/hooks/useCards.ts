@@ -1,6 +1,6 @@
 import useSWR from 'swr';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { KanbanCard } from '../types';
+import { supabase } from '@/lib/supabase';
+import type { KanbanCard } from '@/lib/schema';
 import { useEffect } from 'react';
 
 /**
@@ -14,7 +14,6 @@ import { useEffect } from 'react';
  */
 export function useCards() {
   const fetcher = async (): Promise<KanbanCard[]> => {
-    if (!isSupabaseConfigured() || !supabase) return [];
     const { data, error } = await supabase
       .from('kanban_cards')
       .select('*')
@@ -28,22 +27,23 @@ export function useCards() {
 
   // Subscribe to realtime changes on kanban_cards table
   useEffect(() => {
-    if (!isSupabaseConfigured() || !supabase) return;
+    // Unique channel name prevents React StrictMode double-mount collisions
+    const channelName = `kanban-realtime-${Math.random().toString(36).slice(2)}`;
     const channel = supabase
-      .channel('kanban-realtime')
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'kanban_cards' },
         () => {
           // Any change to kanban_cards → refetch all cards
-          // This is simpler than trying to merge individual changes
           mutate();
         }
       )
       .subscribe();
 
+    // CRITICAL: Always clean up channels to prevent WebSocket leaks
     return () => {
-      if (supabase) supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
   }, [mutate]);
 
@@ -51,12 +51,12 @@ export function useCards() {
 }
 
 /**
- * Helper: group cards by column number
+ * Helper: group cards by column_index number
  */
 export function groupByColumn(cards: KanbanCard[]): Record<number, KanbanCard[]> {
   const grouped: Record<number, KanbanCard[]> = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
   for (const card of cards) {
-    const col = card.column;
+    const col = card.column_index;
     if (grouped[col]) {
       grouped[col].push(card);
     }

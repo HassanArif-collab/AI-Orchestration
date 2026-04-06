@@ -1,12 +1,30 @@
 import { useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
-import type { KanbanCard } from '../../types';
+import type { KanbanCard } from '@/lib/schema';
 import { StatusBadge } from '../common/StatusBadge';
-import { useCardTimer } from '../../hooks/useCardTimer';
-import { api } from '../../lib/api';
-import { getCardAction } from '../../lib/cardHelpers';
-import { showToast } from '../../hooks/useToast';
-import { mapApiError } from '../../lib/errorMapper';
+import { useCardTimer } from '@/hooks/useCardTimer';
+import { saveCard, startProduction } from '@/lib/api';
+import { getCardAction } from '@/lib/cardHelpers';
+import { showToast } from '@/hooks/useToast';
+import { mapApiError } from '@/lib/errorMapper';
+
+/** Extract topic_brief from card metadata safely */
+function getTopicBrief(card: KanbanCard): { title?: string; description?: string } | null {
+  const meta = card.metadata as Record<string, unknown> | undefined;
+  if (!meta?.topic_brief) return null;
+  const brief = meta.topic_brief as Record<string, unknown>;
+  return {
+    title: typeof brief.title === 'string' ? brief.title : undefined,
+    description: typeof brief.description === 'string' ? brief.description : undefined,
+  };
+}
+
+/** Extract viability_score from card metadata */
+function getViabilityScore(card: KanbanCard): number | null {
+  const meta = card.metadata as Record<string, unknown> | undefined;
+  if (typeof meta?.viability_score !== 'number') return null;
+  return meta.viability_score;
+}
 
 interface Props {
   card: KanbanCard;
@@ -14,20 +32,22 @@ interface Props {
 }
 
 export function Card({ card, onClick }: Props) {
-  const timer = useCardTimer(card.column === 2 ? card.expires_at : null);
+  const timer = useCardTimer(card.column_index === 2 ? (card.expires_at ?? null) : null);
   const actionInfo = getCardAction(card);
   const [actionLoading, setActionLoading] = useState(false);
+  const brief = getTopicBrief(card);
+  const viabilityScore = getViabilityScore(card);
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: card.id,
-    data: { columnNumber: card.column },
+    data: { columnNumber: card.column_index },
   });
 
   const handleSave = async (e: React.MouseEvent) => {
-    e.stopPropagation(); // Don't trigger onClick (drawer open)
+    e.stopPropagation();
     setActionLoading(true);
     try {
-      await api.saveCard(card.id);
+      await saveCard(card.id);
       showToast({
         type: 'success',
         title: 'Topic saved',
@@ -35,33 +55,7 @@ export function Card({ card, onClick }: Props) {
       });
     } catch (err) {
       const friendlyError = mapApiError(err);
-      showToast({
-        type: 'error',
-        title: 'Save failed',
-        message: friendlyError.message,
-      });
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setActionLoading(true);
-    try {
-      await api.deleteCard(card.id);
-      showToast({
-        type: 'info',
-        title: 'Topic dismissed',
-        message: 'The topic has been removed.',
-      });
-    } catch (err) {
-      const friendlyError = mapApiError(err);
-      showToast({
-        type: 'error',
-        title: 'Delete failed',
-        message: friendlyError.message,
-      });
+      showToast({ type: 'error', title: 'Save failed', message: friendlyError.message });
     } finally {
       setActionLoading(false);
     }
@@ -71,19 +65,11 @@ export function Card({ card, onClick }: Props) {
     e.stopPropagation();
     setActionLoading(true);
     try {
-      await api.produce(card.id);
-      showToast({
-        type: 'success',
-        title: 'Pipeline started',
-        message: 'Production pipeline is now running.',
-      });
+      await startProduction(card.id);
+      showToast({ type: 'success', title: 'Pipeline started', message: 'Production pipeline is now running.' });
     } catch (err) {
       const friendlyError = mapApiError(err);
-      showToast({
-        type: 'error',
-        title: 'Pipeline failed to start',
-        message: friendlyError.message,
-      });
+      showToast({ type: 'error', title: 'Pipeline failed to start', message: friendlyError.message });
     } finally {
       setActionLoading(false);
     }
@@ -93,19 +79,11 @@ export function Card({ card, onClick }: Props) {
     e.stopPropagation();
     setActionLoading(true);
     try {
-      await api.produce(card.id);
-      showToast({
-        type: 'success',
-        title: 'Resubmitted',
-        message: 'The card has been sent back to production.',
-      });
+      await startProduction(card.id);
+      showToast({ type: 'success', title: 'Resubmitted', message: 'The card has been sent back to production.' });
     } catch (err) {
       const friendlyError = mapApiError(err);
-      showToast({
-        type: 'error',
-        title: 'Resubmit failed',
-        message: friendlyError.message,
-      });
+      showToast({ type: 'error', title: 'Resubmit failed', message: friendlyError.message });
     } finally {
       setActionLoading(false);
     }
@@ -121,7 +99,7 @@ export function Card({ card, onClick }: Props) {
         handleStartPipeline(e);
         break;
       case 'review':
-        onClick(); // Open drawer for review
+        onClick();
         break;
       case 'resubmit':
         handleResubmit(e);
@@ -161,28 +139,27 @@ export function Card({ card, onClick }: Props) {
     >
       {/* Title */}
       <h4 className="text-sm font-medium text-white truncate">
-        {card.topic_brief?.title ?? 'Untitled Topic'}
+        {brief?.title ?? card.title ?? 'Untitled Topic'}
       </h4>
 
       {/* Description preview */}
       <p className="text-xs text-gray-400 mt-1 line-clamp-2">
-        {card.topic_brief?.description ?? ''}
+        {brief?.description ?? ''}
       </p>
 
       {/* Status + Score row */}
       <div className="flex items-center justify-between mt-2">
         <StatusBadge status={card.status} />
-        {card.viability_score != null && (
+        {viabilityScore != null && (
           <span className="text-xs text-gray-500">
-            Score: {card.viability_score}%
+            Score: {viabilityScore}%
           </span>
         )}
       </div>
 
       {/* Column 2: Timer countdown with progressive urgency */}
-      {card.column === 2 && card.expires_at && (
+      {card.column_index === 2 && card.expires_at && (
         <div className="mt-2 space-y-1.5">
-          {/* Progress bar — color changes with urgency */}
           <div className="w-full bg-gray-700 rounded-full h-1">
             <div
               className={`h-1 rounded-full transition-all duration-1000 ${
@@ -192,7 +169,6 @@ export function Card({ card, onClick }: Props) {
             />
           </div>
 
-          {/* Time remaining display */}
           {timer.isExpired ? (
             <div className="flex items-center gap-1.5 text-xs text-red-400 font-medium">
               <span>⚠</span>
@@ -217,10 +193,9 @@ export function Card({ card, onClick }: Props) {
         </div>
       )}
 
-      {/* Action button (from cardHelpers — replaces scattered conditionals) */}
+      {/* Action button */}
       {actionInfo.action !== 'none' && (
         <div className="mt-2">
-          {/* Contextual help text */}
           <p
             className={`text-xs mb-1.5 ${
               actionInfo.variant === 'success'
@@ -235,7 +210,6 @@ export function Card({ card, onClick }: Props) {
             {actionInfo.reason}
           </p>
 
-          {/* Action button */}
           <button
             onClick={handleActionClick}
             disabled={actionLoading}
@@ -258,13 +232,6 @@ export function Card({ card, onClick }: Props) {
       {actionInfo.action === 'none' && actionInfo.reason && (
         <p className="text-xs text-gray-500 mt-2 italic">
           {actionInfo.reason}
-        </p>
-      )}
-
-      {/* Error message */}
-      {card.error_message && (
-        <p className="text-xs text-red-400 mt-2 truncate" title={card.error_message}>
-          ⚠ {card.error_message}
         </p>
       )}
     </div>

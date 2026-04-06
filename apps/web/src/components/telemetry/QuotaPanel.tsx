@@ -1,4 +1,5 @@
-import { useQuota } from '../../hooks/useQuota';
+import type { ProviderQuota } from '@/lib/api';
+import { useQuota } from '@/hooks/useQuota';
 
 /**
  * Displays live RPM/TPM remaining for each AI provider.
@@ -20,7 +21,7 @@ export function QuotaPanel() {
     <div className="p-4 space-y-6">
       <h3 className="text-sm font-semibold text-gray-400">Live Provider Quotas</h3>
 
-      {providers.map((provider) => (
+      {providers.map((provider: ProviderQuota) => (
         <div key={provider.name} className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm text-white font-medium capitalize">

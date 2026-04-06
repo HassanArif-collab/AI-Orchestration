@@ -1,24 +1,19 @@
 import { useState, useEffect } from 'react';
 import { differenceInSeconds, parseISO } from 'date-fns';
-import { EXPIRATION_MS } from '../lib/constants';
+
+// 3-hour expiration in milliseconds — inlined to avoid extra import
+const EXPIRATION_MS = 3 * 60 * 60 * 1000;
 
 export interface TimerState {
   remainingMinutes: number;
   remainingSeconds: number;
   isExpired: boolean;
   percentage: number;
-  isCritical: boolean;   // < 15 minutes — urgent orange
-  isWarning: boolean;    // < 30 minutes — caution yellow
-  timeString: string;    // Human-readable: "2h 30m", "15m", "45s"
+  isCritical: boolean;
+  isWarning: boolean;
+  timeString: string;
 }
 
-/**
- * Calculates countdown for a card's 3-hour expiration timer.
- * Only meaningful for Column 2 (Suggested Topics) cards.
- *
- * Updates every 5 seconds for smooth countdown display.
- * Provides tiered urgency flags (warning < 30m, critical < 15m).
- */
 export function useCardTimer(expiresAt: string | null): TimerState {
   const [now, setNow] = useState(Date.now());
 

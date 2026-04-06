@@ -1,25 +1,29 @@
-import type { KanbanCard } from '../types';
+import type { KanbanCard } from '@/lib/schema';
+import type { CardAction, CardActionInfo } from '@/types';
 
 /**
  * Determines the appropriate action to display on a KanbanCard
- * based on its column, status, and metadata (e.g. expires_at).
+ * based on its column_index, status, and metadata (e.g. expires_at).
  *
  * This replaces the scattered conditional checks that previously lived
  * inside Card.tsx and caused mismatches between frontend and backend state.
+ *
+ * NOTE: Uses `column_index` (matching DB schema), NOT `column`.
  */
 
-export type CardAction = 'save' | 'start_pipeline' | 'resubmit' | 'review' | 'none';
-
-export interface CardActionInfo {
-  action: CardAction;
-  reason: string;
-  label: string;
-  variant: 'primary' | 'secondary' | 'warning' | 'success';
-}
-
 export function getCardAction(card: KanbanCard): CardActionInfo {
+  // Column 1: Topic Finding (read-only, backend is busy)
+  if (card.column_index === 1) {
+    return {
+      action: 'none',
+      reason: 'AI is discovering topics. Please wait.',
+      label: '',
+      variant: 'secondary',
+    };
+  }
+
   // Column 2: Suggested Topics
-  if (card.column === 2) {
+  if (card.column_index === 2) {
     // Has expiry time = temporary suggestion that needs saving
     if (card.expires_at) {
       const expiryTime = new Date(card.expires_at);
@@ -51,14 +55,14 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
     };
   }
 
-  // Column 3: In Production / Researching
-  if (card.column === 3) {
+  // Column 3: Researching
+  if (card.column_index === 3) {
     if (card.status === 'error') {
       return {
         action: 'resubmit',
         reason: 'Pipeline failed. Click to retry.',
         label: '🔄 Retry',
-        variant: 'warning' as const,
+        variant: 'warning',
       };
     }
     return {
@@ -69,27 +73,27 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
     };
   }
 
-  // Column 4: Script Evolution / Ready for Review
-  if (card.column === 4) {
+  // Column 4: Script Evolution / Writing
+  if (card.column_index === 4) {
     if (card.status === 'error') {
       return {
         action: 'resubmit',
         reason: 'Script generation failed. Click to retry.',
         label: '🔄 Retry',
-        variant: 'warning' as const,
+        variant: 'warning',
       };
     }
     return {
-      action: 'review',
-      reason: 'Script is ready for your review.',
-      label: '👀 Review Script',
+      action: 'none',
+      reason: 'Script is being written. Check the drawer for progress.',
+      label: '',
       variant: 'primary',
     };
   }
 
   // Column 5: Review + Visuals
-  if (card.column === 5) {
-    if (card.status === 'review') {
+  if (card.column_index === 5) {
+    if (card.status === 'review_required') {
       return {
         action: 'review',
         reason: 'Script is ready for your review and approval.',
@@ -102,7 +106,7 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
         action: 'resubmit',
         reason: 'Visual annotation failed. Click to retry.',
         label: '🔄 Retry',
-        variant: 'warning' as const,
+        variant: 'warning',
       };
     }
     return {
@@ -114,7 +118,7 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
   }
 
   // Column 6: Published (Notion)
-  if (card.column === 6) {
+  if (card.column_index === 6) {
     return {
       action: 'none',
       reason: 'Script published to Notion.',
@@ -130,3 +134,6 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
     variant: 'secondary',
   };
 }
+
+// Re-export for backward compatibility
+export type { CardAction, CardActionInfo };

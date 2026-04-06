@@ -3,17 +3,14 @@ import { DndContext, closestCenter, DragOverlay } from '@dnd-kit/core';
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { Column } from './Column';
 import { CardDrawer } from './CardDrawer';
-import { useCards, groupByColumn } from '../../hooks/useCards';
-import { api } from '../../lib/api';
-import { COLUMNS } from '../../types';
-import type { KanbanCard } from '../../types';
-import { showToast } from '../../hooks/useToast';
-import { mapApiError } from '../../lib/errorMapper';
+import { useCards, groupByColumn } from '@/hooks/useCards';
+import { moveCard as moveCardApi } from '@/lib/api';
+import { COLUMNS } from '@/types';
+import type { KanbanCard } from '@/types';
+import { showToast } from '@/hooks/useToast';
+import { mapApiError } from '@/lib/errorMapper';
 
 // ── Pipeline transition rules ──
-// Based on the actual column layout:
-//   1: Topic Finding → 2: Suggested Topics → 3: Researching →
-//   4: Script Evolution → 5: Review + Visuals → 6: Published
 const VALID_TRANSITIONS: Record<number, number[]> = {
   1: [2],      // Topic Finding → Suggested Topics
   2: [3],      // Suggested Topics → Researching (start pipeline)
@@ -52,12 +49,24 @@ function getColumnName(colNum: number): string {
   return COLUMNS[colNum]?.name ?? `Column ${colNum}`;
 }
 
+/** Extract topic_brief from card metadata safely */
+function getTopicBrief(card: KanbanCard): { title?: string; description?: string } | null {
+  const meta = card.metadata as Record<string, unknown> | undefined;
+  if (!meta?.topic_brief) return null;
+  const brief = meta.topic_brief as Record<string, unknown>;
+  return {
+    title: typeof brief.title === 'string' ? brief.title : undefined,
+    description: typeof brief.description === 'string' ? brief.description : undefined,
+  };
+}
+
 // ── Drag Overlay Component ──
 function CardOverlay({ card }: { card: KanbanCard }) {
+  const brief = getTopicBrief(card);
   return (
     <div className="bg-gray-800 rounded-lg p-3 shadow-2xl border border-blue-500 w-[260px] rotate-2">
-      <h4 className="text-sm font-medium text-white truncate">{card.topic_brief?.title ?? 'Untitled Topic'}</h4>
-      <p className="text-xs text-gray-400 mt-1 line-clamp-2">{card.topic_brief?.description ?? ''}</p>
+      <h4 className="text-sm font-medium text-white truncate">{brief?.title ?? card.title ?? 'Untitled Topic'}</h4>
+      <p className="text-xs text-gray-400 mt-1 line-clamp-2">{brief?.description ?? ''}</p>
     </div>
   );
 }
@@ -88,14 +97,14 @@ export function Board() {
 
   // Compute effective card groupings (optimistic moves override real columns)
   const getEffectiveColumn = useCallback(
-    (card: KanbanCard) => optimisticMoves[card.id] ?? card.column,
+    (card: KanbanCard) => optimisticMoves[card.id] ?? card.column_index,
     [optimisticMoves],
   );
 
   const grouped = groupByColumn(
     cards.map((card) => ({
       ...card,
-      column: getEffectiveColumn(card),
+      column_index: getEffectiveColumn(card),
     })),
   );
 
@@ -124,11 +133,11 @@ export function Board() {
       if (!card) return;
 
       // Same column — ignore
-      if (card.column === targetColumn) return;
+      if (card.column_index === targetColumn) return;
 
-      // ── Validate transition (Issue 7) ──
-      if (!isValidTransition(card.column, targetColumn)) {
-        const errorMsg = getTransitionErrorMessage(card.column, targetColumn);
+      // ── Validate transition ──
+      if (!isValidTransition(card.column_index, targetColumn)) {
+        const errorMsg = getTransitionErrorMessage(card.column_index, targetColumn);
 
         showToast({
           type: 'error',
@@ -136,21 +145,17 @@ export function Board() {
           message: errorMsg,
         });
 
-        // Brief visual shake indicator
         setDragError({ cardId, message: errorMsg });
         scheduleTimer(() => setDragError(null), 3000);
-
         return;
       }
 
-      // ── Optimistic update (Issue 2) ──
+      // ── Optimistic update ──
       setOptimisticMoves((prev) => ({ ...prev, [cardId]: targetColumn }));
 
       try {
-        // Make API call
-        await api.moveCard(cardId, targetColumn);
+        await moveCardApi(cardId, { stage: targetColumn, position: 0 });
 
-        // Success: refetch to get authoritative state, clear optimistic
         setOptimisticMoves((prev) => {
           const next = { ...prev };
           delete next[cardId];
@@ -163,10 +168,8 @@ export function Board() {
           message: `Moved to ${getColumnName(targetColumn)}`,
         });
 
-        // Refetch cards so local state matches backend
         mutate?.();
       } catch (err) {
-        // Failure: show error, revert after 3 seconds
         const friendlyError = mapApiError(err);
 
         setDragError({ cardId, message: friendlyError.message });
@@ -177,7 +180,6 @@ export function Board() {
           message: friendlyError.message,
         });
 
-        // Revert optimistic move after 3 seconds
         scheduleTimer(() => {
           setOptimisticMoves((prev) => {
             const next = { ...prev };
@@ -188,7 +190,7 @@ export function Board() {
         }, 3000);
       }
     },
-    [cards, mutate],
+    [cards, mutate, scheduleTimer],
   );
 
   if (isLoading) {

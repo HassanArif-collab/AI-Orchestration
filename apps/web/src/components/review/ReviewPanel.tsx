@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
-import { mapApiError } from '../../lib/errorMapper';
-import { showToast } from '../../hooks/useToast';
+import { resumePipeline } from '@/lib/api';
+import { mapApiError } from '@/lib/errorMapper';
+import { showToast } from '@/hooks/useToast';
 import { PublishConfirmModal } from './PublishConfirmModal';
 
 interface Props {
@@ -11,7 +11,7 @@ interface Props {
   cardIterationCount?: number;
   cardContent?: string;
   cardVisualPlan?: string;
-  onDecision: () => void; // Close drawer after decision
+  onDecision: () => void;
 }
 
 export function ReviewPanel({
@@ -32,20 +32,16 @@ export function ReviewPanel({
   const handleFeedbackChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setFeedback(value);
-    // Clear inline error as soon as user starts typing meaningful content
     if (feedbackError && value.trim().length >= 10) {
       setFeedbackError('');
     }
   };
 
-  /** Unified validation error message — from reject validation OR API error */
   const getFeedbackError = (): string => {
     if (feedbackError) return feedbackError;
     if (confirmationState === 'error' && errorMessage) return errorMessage;
     return '';
   };
-
-  // ── Reject (no confirmation modal needed) ──
 
   const handleReject = async () => {
     if (!feedback.trim()) {
@@ -62,14 +58,10 @@ export function ReviewPanel({
     setFeedbackError('');
 
     try {
-      await api.resume(cardId, { approved: false, feedback: feedback.trim() });
+      await resumePipeline(cardId, { approved: false, feedback: feedback.trim() });
 
       setConfirmationState('idle');
-      showToast({
-        type: 'info',
-        title: 'Script rejected',
-        message: 'Moving back to revision queue',
-      });
+      showToast({ type: 'info', title: 'Script rejected', message: 'Moving back to revision queue' });
       onDecision();
     } catch (err) {
       setConfirmationState('error');
@@ -79,11 +71,8 @@ export function ReviewPanel({
     }
   };
 
-  // ── Approve (two-phase: optional modal → API call) ──
-
   const handleApprove = () => {
     const suppressModal = localStorage.getItem('suppressPublishModal') === 'true';
-
     if (suppressModal) {
       executeApproval();
     } else {
@@ -97,15 +86,11 @@ export function ReviewPanel({
     setFeedbackError('');
 
     try {
-      await api.resume(cardId, { approved: true });
+      await resumePipeline(cardId, { approved: true });
 
       setConfirmationState('idle');
       setShowPublishConfirm(false);
-      showToast({
-        type: 'success',
-        title: '✅ Script approved',
-        message: 'Publishing to Notion...',
-      });
+      showToast({ type: 'success', title: '✅ Script approved', message: 'Publishing to Notion...' });
       onDecision();
     } catch (err) {
       setConfirmationState('error');
@@ -127,7 +112,6 @@ export function ReviewPanel({
           or provide feedback to send back for revision.
         </p>
 
-        {/* Inline error banner (shown on failure or validation error, keeps drawer open) */}
         {getFeedbackError() && (
           <div className="bg-red-900/30 border border-red-500 rounded p-3 text-sm mb-4 animate-shake">
             <p className="text-red-300 font-medium flex items-center gap-2">
@@ -191,7 +175,6 @@ export function ReviewPanel({
         </div>
       </div>
 
-      {/* Publish confirmation modal */}
       <PublishConfirmModal
         isOpen={showPublishConfirm}
         scriptPreview={{
