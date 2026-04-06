@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { DndContext, closestCenter, DragOverlay } from '@dnd-kit/core';
-import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
+import { DndContext, closestCenter, DragOverlay } from '@/lib/dnd-compat';
+import type { DragEndEvent, DragStartEvent } from '@/lib/dnd-compat';
 import { Column } from './Column';
 import { CardDrawer } from './CardDrawer';
 import { useCards, groupByColumn } from '@/hooks/useCards';

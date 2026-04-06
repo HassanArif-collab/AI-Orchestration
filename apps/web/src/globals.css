@@ -1,4 +1,4 @@
-@import 'geist/dist/geist.css';
+@import '@fontsource/geist';
 
 @import "tailwindcss";
 

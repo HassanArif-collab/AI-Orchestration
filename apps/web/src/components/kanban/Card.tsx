@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useDraggable } from '@dnd-kit/core';
+import { useDraggable } from '@/lib/dnd-compat';
 import type { KanbanCard } from '@/lib/schema';
 import { StatusBadge } from '../common/StatusBadge';
 import { useCardTimer } from '@/hooks/useCardTimer';

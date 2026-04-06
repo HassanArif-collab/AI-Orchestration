@@ -2,7 +2,7 @@ import type { KanbanCard } from '@/lib/schema';
 import type { ColumnDef } from '@/types';
 import { Card } from './Card';
 import { EmptyState } from '../common/EmptyState';
-import { useDroppable } from '@dnd-kit/core';
+import { useDroppable } from '@/lib/dnd-compat';
 
 interface Props {
   columnNumber: number;
