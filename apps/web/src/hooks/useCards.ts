@@ -12,7 +12,7 @@
 // CRITICAL: Items are NOT independent useState. They are derived from SWR data.
 // If items were independent, they would diverge from the server after the first drag.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import useSWR from 'swr';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore } from '@/lib/store';
@@ -22,6 +22,14 @@ import type { KanbanCard } from '@/lib/schema';
 export const COLUMNS = ['1', '2', '3', '4', '5', '6'] as const;
 export type ColumnKey = (typeof COLUMNS)[number];
 
+// STABLE module-level empty array — prevents infinite re-render loop.
+// Using `?? []` inside the component creates a NEW [] reference on every render,
+// which causes useEffect deps to change every render → infinite setState loop.
+const EMPTY_CARDS: KanbanCard[] = [];
+const EMPTY_ITEMS: Record<ColumnKey, string[]> = {
+  '1': [], '2': [], '3': [], '4': [], '5': [], '6': [],
+};
+
 // All SWR data goes through the global fetcher from main.tsx SWRConfig
 // Backend returns {tasks: [...]} from GET /api/kanban/tasks — we unwrap .tasks
 export function useCards() {
@@ -29,35 +37,52 @@ export function useCards() {
   const { data, isLoading, error, mutate } = useSWR<{tasks: KanbanCard[]}>(
     '/api/kanban/tasks',
   );
-  const cards = data?.tasks ?? [];
+
+  // Stable cards reference — uses module-level EMPTY_CARDS when no data,
+  // so useEffect deps don't change on every render
+  const cards = data?.tasks ?? EMPTY_CARDS;
 
   // Derive dnd-kit items from SWR data — re-sync whenever SWR updates or search changes
-  const [items, setItems] = useState<Record<ColumnKey, string[]>>(() => ({
-    '1': [], '2': [], '3': [], '4': [], '5': [], '6': [],
-  }));
+  const [items, setItems] = useState<Record<ColumnKey, string[]>>(EMPTY_ITEMS);
 
-  useEffect(() => {
-    if (!cards) return;
+  // Memoize derived items to prevent unnecessary re-renders
+  const derivedItems = useMemo(() => {
+    if (!cards.length) return EMPTY_ITEMS;
     const filtered = cards.filter((card) =>
       !searchQuery || card.title.toLowerCase().includes(searchQuery.toLowerCase()),
     );
-    setItems(
-      filtered.reduce<Record<ColumnKey, string[]>>(
-        (acc, card) => {
-          const key = String(card.column_index) as ColumnKey;
-          acc[key] = [...(acc[key] ?? []), card.id];
-          return acc;
-        },
-        { '1': [], '2': [], '3': [], '4': [], '5': [], '6': [] },
-      ),
+    return filtered.reduce<Record<ColumnKey, string[]>>(
+      (acc, card) => {
+        const key = String(card.column_index) as ColumnKey;
+        acc[key] = [...(acc[key] ?? []), card.id];
+        return acc;
+      },
+      { '1': [], '2': [], '3': [], '4': [], '5': [], '6': [] },
     );
   }, [cards, searchQuery]);
+
+  // Sync derived items to state only when the derivation changes
+  // Use a ref to deep-compare and avoid unnecessary setItems calls
+  const prevItemsRef = useRef<string>('');
+  useEffect(() => {
+    const serialized = JSON.stringify(derivedItems);
+    if (serialized !== prevItemsRef.current) {
+      prevItemsRef.current = serialized;
+      setItems(derivedItems);
+    }
+  }, [derivedItems]);
 
   const setCards = useAppStore((s) => s.setCards);
 
   // Sync cards to Zustand store (for CardDrawer quick lookup)
+  // Use ref guard to prevent unnecessary store updates when cards reference
+  // hasn't meaningfully changed (e.g., SWR returning same data shape)
+  const prevCardsRef = useRef<KanbanCard[] | null>(null);
   useEffect(() => {
-    if (cards) setCards(cards);
+    if (cards !== prevCardsRef.current) {
+      prevCardsRef.current = cards;
+      setCards(cards);
+    }
   }, [cards, setCards]);
 
   // Supabase Realtime subscription — revalidates SWR on any kanban_cards change
