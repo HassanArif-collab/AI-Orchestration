@@ -28,7 +28,11 @@ async function refreshAnalytics() {
   try { renderVidTable('vid-table', await api('/api/analytics/videos')); }
   catch { document.getElementById('vid-table').innerHTML = `<p style="color:var(--text-muted)">Cannot load videos</p>`; }
 
-  try { renderVidTable('comp-table', await api('/api/analytics/competitors')); }
+  try {
+    // Backend returns {videos: [...]} — extract the array
+    const compData = await api('/api/analytics/competitors');
+    renderVidTable('comp-table', compData.videos || compData || []);
+  }
   catch { document.getElementById('comp-table').innerHTML = `<p style="color:var(--text-muted)">No competitor data</p>`; }
 }
 

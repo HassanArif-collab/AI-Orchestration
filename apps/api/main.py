@@ -191,14 +191,14 @@ app.include_router(dlq_routes, tags=["dlq"])
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])
 
 # Static frontend — MUST be last
-# Serves the React + Vite production build from apps/web/dist/.
-# If the dist directory is missing (e.g. first clone), falls back to the
-# legacy vanilla-JS dashboard at apps/api/static/ so the UI still loads.
+# Serves the legacy vanilla-JS dashboard from apps/api/static/ (fixed to match
+# current backend API contracts). React build is preserved at apps/web/dist/.
+# To switch back to React: set _frontend_dir = _react_dist below.
 _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _react_dist = os.path.join(_project_root, "apps", "web", "dist")
 _legacy_static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-_frontend_dir = _react_dist if os.path.isdir(_react_dist) else _legacy_static
-_frontend_label = "React (Vite)" if os.path.isdir(_react_dist) else "Legacy (vanilla JS)"
+_frontend_dir = _legacy_static
+_frontend_label = "Legacy (vanilla JS)"
 print(f"  Frontend: {_frontend_label} from {_frontend_dir}")
 app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="static")
 

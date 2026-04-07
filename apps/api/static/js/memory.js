@@ -29,14 +29,18 @@ async function refreshMemory() {
     const sessions = data.sessions || data || [];
     el.innerHTML = sessions.length
       ? `<h4 style="color:var(--text-secondary);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Sessions</h4>` +
-        sessions.map(s => `
-          <div class="provider-card" style="cursor:pointer" onclick="viewSession('${s.session_id}')">
+        sessions.map(s => {
+          // Backend returns plain string session IDs, not objects
+          const sid = typeof s === 'string' ? s : (s.session_id || s);
+          return `
+          <div class="provider-card" style="cursor:pointer" onclick="viewSession('${escHtml(sid)}')">
             <div>
-              <div class="provider-name">${escHtml(s.session_id)}</div>
-              <div class="provider-model">${escHtml(s.metadata?.session_type||'—')}</div>
-              <div class="provider-usage">${fmtDate(s.created_at)}</div>
+              <div class="provider-name">${escHtml(sid)}</div>
+              <div class="provider-model">${typeof s === 'object' ? escHtml(s.metadata?.session_type||'—') : ''}</div>
+              <div class="provider-usage">${typeof s === 'object' ? fmtDate(s.created_at) : ''}</div>
             </div>
-          </div>`).join('')
+          </div>`;
+        }).join('')
       : `<div class="empty-state"><div class="icon">🧠</div>
           <div class="message">No memory sessions yet</div>
           <div class="help">Created when agents process tasks</div></div>`;
@@ -54,7 +58,7 @@ async function viewSession(id) {
       <h4 style="color:var(--text-secondary);margin-bottom:6px">Summary</h4>
       <p style="color:var(--text-primary)">${escHtml(mem.summary||'No summary')}</p>
       <h4 style="color:var(--text-secondary);margin:14px 0 6px">Facts</h4>
-      <ul style="color:var(--text-primary);padding-left:16px">${(facts||[]).map(f=>`<li>${escHtml(f)}</li>`).join('')||'<li>No facts</li>'}</ul>`);
+      <ul style="color:var(--text-primary);padding-left:16px">${(facts||[]).map(f=>`<li>${escHtml(typeof f === 'object' ? (f.fact||f.content||JSON.stringify(f)) : f)}</li>`).join('')||'<li>No facts</li>'}</ul>`);
   } catch (e) { showToast(`Cannot load: ${e.message}`, 'error'); }
 }
 

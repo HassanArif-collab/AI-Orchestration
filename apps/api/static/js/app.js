@@ -208,7 +208,7 @@ function connectSSE() {
   _es.addEventListener('rate_limit', e => {
     try {
       const d = JSON.parse(e.data).data;
-      showToast(`⏳ Rate limited — retrying in ${d.wait_seconds}s...`, 'warning', 3000);
+      showToast(`⏳ Rate limited — retrying in ${d.wait_time||d.wait_seconds||'?'}s...`, 'warning', 3000);
     } catch (err) {
       // Silently ignore rate limit parse errors
     }
@@ -378,7 +378,9 @@ async function checkDLQStatus() {
 
   try {
     const data = await api('/api/dlq/stats');
-    const pending = data.pending || data.stats?.pending || 0;
+    // Backend wraps response: {success: true, data: {pending: N, ...}}
+    const stats = data.data || data;
+    const pending = stats.pending || stats.stats?.pending || 0;
     if (pending > 0) {
       badge.textContent = pending;
       badge.classList.remove('hidden');
@@ -410,7 +412,8 @@ async function _loadDLQItems() {
 
   try {
     const data = await api('/api/dlq/items?status=pending');
-    const items = data.items || data || [];
+    // Backend wraps response: {success: true, data: [...entries], count: N}
+    const items = data.data || data.items || data || [];
 
     if (!Array.isArray(items) || items.length === 0) {
       body.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:40px 20px">✓ No pending failed operations</div>';
