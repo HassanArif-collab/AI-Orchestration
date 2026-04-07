@@ -284,14 +284,24 @@ export function repurposeVideo(body: {
 
 // ── DLQ Endpoints ──
 
-/** Get DLQ statistics. */
-export function getDLQStats() {
-  return apiFetch<{ pending: number; total: number }>('/api/dlq/stats');
+/** Get DLQ statistics.
+ *
+ * Backend returns {success: true, data: {pending, total, ...}}.
+ * We unwrap to get the counts directly.
+ */
+export async function getDLQStats() {
+  const res = await apiFetch<{ success: boolean; data: { pending: number; total: number } }>('/api/dlq/stats');
+  return res.data;
 }
 
-/** Get DLQ items by status. */
-export function getDLQItems(status: string = 'pending') {
-  return apiFetch<unknown[]>(`/api/dlq/items?status=${status}`);
+/** Get DLQ items by status.
+ *
+ * Backend returns {success: true, data: [...], count: N}.
+ * We unwrap to return the items array directly.
+ */
+export async function getDLQItems(status: string = 'pending') {
+  const res = await apiFetch<{ success: boolean; data: unknown[] }>(`/api/dlq/items?status=${status}`);
+  return res.data;
 }
 
 /** Retry a failed DLQ item. */

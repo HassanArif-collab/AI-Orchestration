@@ -23,11 +23,13 @@ export const COLUMNS = ['1', '2', '3', '4', '5', '6'] as const;
 export type ColumnKey = (typeof COLUMNS)[number];
 
 // All SWR data goes through the global fetcher from main.tsx SWRConfig
+// Backend returns {tasks: [...]} from GET /api/kanban/tasks — we unwrap .tasks
 export function useCards() {
   const searchQuery = useAppStore((s) => s.searchQuery);
-  const { data: cards, isLoading, error, mutate } = useSWR<KanbanCard[]>(
-    '/api/kanban/cards',
+  const { data, isLoading, error, mutate } = useSWR<{tasks: KanbanCard[]}>(
+    '/api/kanban/tasks',
   );
+  const cards = data?.tasks ?? [];
 
   // Derive dnd-kit items from SWR data — re-sync whenever SWR updates or search changes
   const [items, setItems] = useState<Record<ColumnKey, string[]>>(() => ({

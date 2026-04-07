@@ -82,6 +82,7 @@ def _card_to_kanban_dict(card: dict) -> dict:
         "id": card_id,
         "title": card.get("title", "Untitled"),
         "stage": column_index,
+        "column_index": column_index,  # React frontend expects this key
         "status": kanban_status,
         "color": color,
         "updated_at": card.get("updated_at"),
