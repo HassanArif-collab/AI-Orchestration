@@ -981,9 +981,17 @@ a:hover { text-decoration: underline; }
 
 /* ─── Toast with Action Button ───────────────────────────────────────────── */
 
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .toast-action {
-  display: inline-block;
-  padding: 2px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
   margin-left: 8px;
   background: var(--accent-primary);
   color: #fff;
@@ -991,6 +999,8 @@ a:hover { text-decoration: underline; }
   font-size: 11px;
   cursor: pointer;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .toast-action:hover { opacity: 0.85; }

@@ -84,7 +84,7 @@ const Kanban = {
             </div>
             
             <!-- Task Detail Drawer -->
-            <div id="kanban-drawer" class="kanban-drawer hidden" style="display: none;">
+            <div id="kanban-drawer" class="kanban-drawer hidden">
                 <div class="drawer-overlay" onclick="Kanban.closeDrawer()"></div>
                 <div class="drawer-content" id="drawer-content">
                     <div class="drawer-header">
@@ -234,9 +234,9 @@ const Kanban = {
         if (isThinking) {
             const elapsed = task.thinking_started_at ? Math.floor((Date.now() - new Date(task.thinking_started_at).getTime()) / 1000) : null;
             let timeText = '';
-            if (elapsed && elapsed > 10) {
+            if (elapsed && elapsed > 0) {
                 const mins = Math.floor(elapsed / 60);
-                const secs = elapsed % 60;
+                const secs = Math.max(0, elapsed % 60);
                 timeText = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
             }
             thinkingHtml = `<div class="thinking-progress">${timeText ? `⏳ ${timeText}` : '⏳ Processing...'}</div>`;
@@ -357,8 +357,6 @@ const Kanban = {
         const drawer = document.getElementById('kanban-drawer');
         if (drawer) {
             drawer.classList.remove('hidden');
-            // Use consistent approach: remove inline style to let CSS handle display
-            drawer.style.removeProperty('display');
         }
     },
     
@@ -482,8 +480,6 @@ const Kanban = {
         const drawer = document.getElementById('kanban-drawer');
         if (drawer) {
             drawer.classList.add('hidden');
-            // Use consistent approach: let CSS handle display via hidden class
-            drawer.style.display = 'none';
         }
     },
     
@@ -522,10 +518,8 @@ const Kanban = {
     // ─── Expiration Countdown Timer ───────────────────────────────────────────
 
     _startExpiryCountdown() {
-        // Update every 30 seconds
+        // Update every 30 seconds - runs independently of active tab
         this._expiryInterval = setInterval(() => {
-            // Only run if kanban tab is active
-            if (typeof _activeTab !== 'undefined' && _activeTab !== 'kanban') return;
             this._updateExpiryBadges();
         }, 30000);
     },

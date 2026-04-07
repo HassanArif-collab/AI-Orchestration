@@ -198,9 +198,11 @@ function connectSSE() {
       if (batchLabel && d.total_items && d.current_item) {
         batchLabel.textContent = `Processing ${d.current_item}/${d.total_items} ${d.item_label || 'items'}...`;
         batchLabel.style.display = '';
+      } else if (batchLabel) {
+        batchLabel.style.display = 'none';
       }
     } catch (err) {
-      // Silently ignore progress parse errors
+      console.warn('Progress event parse error:', err);
     }
   });
 
@@ -210,7 +212,7 @@ function connectSSE() {
       const d = JSON.parse(e.data).data;
       showToast(`⏳ Rate limited — retrying in ${d.wait_time||d.wait_seconds||'?'}s...`, 'warning', 3000);
     } catch (err) {
-      // Silently ignore rate limit parse errors
+      console.warn('Rate limit event parse error:', err);
     }
   });
 
@@ -405,6 +407,10 @@ function closeDLQPanel() {
   if (!panel) return;
   panel.classList.remove('open');
 }
+
+// Expose DLQ functions to global scope for onclick handlers
+window.showDLQPanel = showDLQPanel;
+window.closeDLQPanel = closeDLQPanel;
 
 async function _loadDLQItems() {
   const body = document.getElementById('dlq-panel-body');
