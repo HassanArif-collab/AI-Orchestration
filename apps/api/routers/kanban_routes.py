@@ -363,28 +363,48 @@ async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) ->
     delegates to the LangGraph discovery graph via Supabase Realtime for progress.
     """
     import uuid as _uuid
+    from datetime import datetime, timezone
     card_id = str(_uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
 
     # Create a placeholder kanban card in Column 1 (Topic Finding)
     try:
         sb = _get_supabase()
-        sb.table("kanban_cards").insert({
+        insert_result = sb.table("kanban_cards").insert({
             "id": card_id,
             "title": data.seed_query[:100],
             "column_index": 1,
             "status": "thinking",
             "seed_query": data.seed_query,
             "genre_id": data.genre_id,
+            "created_at": now,
+            "updated_at": now,
         }).execute()
-    except Exception as e:
-        logger.warning(f"topic_finder_card_create_failed: {e}")
 
-    # Trigger the LangGraph discovery graph
+        if not insert_result.data:
+            raise RuntimeError(f"Supabase insert returned no data: {insert_result}")
+
+        logger.info(f"topic_finder_card_created: card_id={card_id}")
+    except Exception as e:
+        logger.error(f"topic_finder_card_create_failed: {e}")
+        raise HTTPException(500, f"Failed to create kanban card: {e}")
+
+    # Trigger the LangGraph discovery graph with the SAME card_id
     try:
         from apps.api.routers.pipeline_routes import discover_topics
-        await discover_topics(background_tasks=bg, seed_hint=data.seed_query)
+        await discover_topics(background_tasks=bg, seed_hint=data.seed_query, card_id=card_id)
     except Exception as e:
         logger.error(f"topic_finder_discover_failed: {e}")
+        # Card was created but discovery failed — update status to error
+        try:
+            sb = _get_supabase()
+            sb.table("kanban_cards").update({
+                "status": "error",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "metadata": {"error_message": f"Discovery failed: {e}"},
+            }).eq("id", card_id).execute()
+        except Exception:
+            pass
 
     # Emit task_created for Kanban board
     try:

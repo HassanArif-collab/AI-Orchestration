@@ -245,12 +245,17 @@ class ResumeDecision(BaseModel):
 async def discover_topics(
     background_tasks: BackgroundTasks,
     seed_hint: str = Query(default=None, max_length=200),
+    card_id: str | None = Query(default=None, description="Pre-existing card ID to reuse (e.g. from kanban_cards)")
 ):
     """
     Kick off the LangGraph discovery graph asynchronously.
     Returns immediately — progress streams via Supabase WebSocket.
 
     This is the NEW Phase 4 endpoint using LangGraph state machine.
+
+    If card_id is provided (e.g. from kanban_routes.topic_finder which already
+    created a kanban_cards row), it is reused so the graph updates the same card.
+    Otherwise a new UUID is generated (standalone /discover call).
     """
     global _discovery_graph
 
@@ -260,7 +265,8 @@ async def discover_topics(
     if _discovery_graph is None:
         raise HTTPException(503, "LangGraph not initialized (check Supabase DB connection)")
 
-    card_id = str(uuid.uuid4())
+    if not card_id:
+        card_id = str(uuid.uuid4())
 
     initial_state = {
         "card_id": card_id,
