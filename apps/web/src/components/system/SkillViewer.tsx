@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { AlertTriangle } from 'lucide-react';
 import { getSkills } from '@/lib/api';
@@ -16,10 +16,12 @@ export function SkillViewer() {
 
   const skills: SkillFile[] = data?.files ?? [];
 
-  // Auto-select first skill once loaded
-  if (!selectedSkill && skills.length > 0) {
-    setSelectedSkill(skills[0].name);
-  }
+  // Auto-select first skill once data loads (via useEffect, NOT during render)
+  useEffect(() => {
+    if (skills.length > 0 && !selectedSkill) {
+      setSelectedSkill(skills[0].name);
+    }
+  }, [skills, selectedSkill]);
 
   if (isLoading) return <div className="p-4 text-[hsl(var(--neutral-400))] text-sm">Loading skills...</div>;
   if (error) return <div className="p-4 text-red-400 text-sm">Failed to load skill files</div>;
