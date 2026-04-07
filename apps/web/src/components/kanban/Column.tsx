@@ -1,96 +1,104 @@
-import type { KanbanCard } from '@/lib/schema';
-import type { ColumnDef } from '@/types';
+// apps/web/src/components/kanban/Column.tsx
+//
+// Kanban column — uses @dnd-kit/react useSortable with type 'column'.
+// Lower collision priority so cards dropping into columns take precedence.
+//
+// Styling directives (from Phase 3 spec):
+// Columns should be subtle placeholders, not solid blocks:
+// "flex flex-col gap-3 w-80 bg-[hsl(var(--surface-glass-border))] rounded-2xl p-3 border border-[hsl(var(--surface-glass-border))]"
+
+import { forwardRef } from 'react';
+import { useSortable } from '@dnd-kit/react/sortable';
+import { CollisionPriority } from '@dnd-kit/abstract';
+import { cn } from '@/lib/utils';
+import { COLUMNS_DEF } from '@/types';
 import { Card } from './Card';
 import { EmptyState } from '../common/EmptyState';
-import { useDroppable } from '@/lib/dnd-compat';
+import type { KanbanCard } from '@/lib/schema';
 
-interface Props {
-  columnNumber: number;
-  definition: ColumnDef;
+interface ColumnProps {
+  columnId: string;
+  index: number;
+  cardIds: string[];
   cards: KanbanCard[];
-  onCardClick: (card: KanbanCard) => void;
-  isDragging: boolean;
-  dragErrorCardId: string | null;
-  dragErrorMessage: string | null;
+  hoveredCardId: string | null;
+  onHoverCard: (id: string | null) => void;
+  onCardClick: (cardId: string) => void;
 }
 
-export function Column({
-  columnNumber,
-  definition,
-  cards,
-  onCardClick,
-  isDragging,
-  dragErrorCardId,
-  dragErrorMessage,
-}: Props) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: `column-${columnNumber}`,
-    data: { columnNumber },
-  });
+export const Column = forwardRef<HTMLDivElement, ColumnProps>(
+  function Column({ columnId, index, cardIds, cards, hoveredCardId, onHoverCard, onCardClick }, ref) {
+    const { ref: sortableRef, isDropTarget } = useSortable({
+      id: columnId,
+      index,
+      type: 'column',
+      accept: ['item', 'column'],
+      collisionPriority: CollisionPriority.Low,
+    });
 
-  const activeCards = cards.filter((card) => {
-    if (!card.expires_at) return true;
-    return new Date(card.expires_at) > new Date();
-  });
-  const expiredCount = cards.length - activeCards.length;
+    const colDef = COLUMNS_DEF[Number(columnId)];
 
-  return (
-    <div
-      ref={setNodeRef}
-      className={`
-        flex flex-col w-kanban-col min-w-[260px] shrink-0
-        bg-gray-900 rounded-xl border
-        ${isOver ? 'border-blue-500 bg-gray-800/50' : 'border-gray-800'}
-        ${isDragging ? 'ring-1 ring-blue-500/30' : ''}
-        transition-colors duration-200
-      `}
-    >
-      {/* Column Header */}
-      <div className="p-3 border-b border-gray-800">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">
-            {definition.name}
-          </h3>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${
-            expiredCount > 0
-              ? 'bg-yellow-900/50 text-yellow-300'
-              : 'bg-gray-800 text-gray-500'
-          }`}>
-            {activeCards.length}
-            {expiredCount > 0 && (
-              <span className="text-yellow-500">+{expiredCount}</span>
-            )}
+    return (
+      <div
+        ref={(node) => {
+          // Merge refs: useSortable ref + forwarded ref
+          (sortableRef as (node: HTMLDivElement | null) => void)(node);
+          if (typeof ref === 'function') ref(node);
+          else if (ref) ref.current = node;
+        }}
+        className={cn(
+          'flex flex-col gap-3 w-80 shrink-0 min-w-[260px] rounded-2xl p-3',
+          'border transition-all duration-[var(--duration-default)] ease-[var(--ease-spring)]',
+          'bg-[hsl(var(--surface-glass-border)/0.3)]',
+          'border-[hsl(var(--surface-glass-border))]',
+          isDropTarget && 'bg-[hsl(var(--brand-500)/0.05)] border-[hsl(var(--brand-500)/0.3)]',
+        )}
+      >
+        {/* Column Header */}
+        <div className="flex items-center justify-between px-1">
+          <div>
+            <h3 className={cn(
+              'text-sm font-semibold tracking-tight',
+              'text-[hsl(var(--neutral-100))]',
+            )}>
+              {colDef?.name ?? `Column ${columnId}`}
+            </h3>
+            <p className="text-[10px] font-medium tracking-wide uppercase text-[hsl(var(--neutral-400))] mt-0.5">
+              {colDef?.description ?? ''}
+            </p>
+          </div>
+          <span className={cn(
+            'text-xs font-medium px-2 py-0.5 rounded-full',
+            'bg-[hsl(var(--neutral-800))] text-[hsl(var(--neutral-400))]',
+          )}>
+            {cardIds.length}
           </span>
         </div>
-        <p className="text-xs text-gray-500 mt-0.5">
-          {definition.description}
-        </p>
-      </div>
 
-      {/* Card List */}
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-2 space-y-2">
-        {cards.length === 0 ? (
-          <EmptyState message="No cards" icon="📋" />
-        ) : (
-          cards.map((card) => (
-            <div key={card.id} className="relative">
-              <Card
-                card={card}
-                onClick={() => onCardClick(card)}
-              />
-
-              {dragErrorCardId === card.id && dragErrorMessage && (
-                <div className="absolute inset-0 bg-red-900/30 border-2 border-red-500 rounded-lg flex items-center justify-center animate-shake pointer-events-none">
-                  <div className="bg-red-900 border border-red-500 rounded px-2 py-1.5 text-xs text-red-200 max-w-[90%] text-center">
-                    <p className="font-medium">⚠ Move failed</p>
-                    <p className="mt-0.5 text-red-200/70">{dragErrorMessage}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))
-        )}
+        {/* Card List */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {cardIds.length === 0 ? (
+            <EmptyState message="No cards" />
+          ) : (
+            cardIds.map((id, idx) => {
+              const card = cards.find((c) => c.id === id);
+              if (!card) return null;
+              return (
+                <Card
+                  key={id}
+                  card={card}
+                  index={idx}
+                  column={columnId}
+                  isHoveredParent={hoveredCardId === card.id || (card.parent_id != null && hoveredCardId === card.parent_id)}
+                  onClick={() => onCardClick(card.id)}
+                  onMouseEnter={() => onHoverCard(card.id)}
+                  onMouseLeave={() => onHoverCard(null)}
+                />
+              );
+            })
+          )}
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);

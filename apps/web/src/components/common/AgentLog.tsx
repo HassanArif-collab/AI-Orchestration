@@ -1,3 +1,13 @@
+// apps/web/src/components/common/AgentLog.tsx
+//
+// Renders a single agent thought as a console-like log entry.
+// Thought type icons match the DB enum constraint exactly:
+// thinking, search, output, error, memory_read, memory_write
+//
+// Content is rendered in <pre> with whitespace-pre-wrap to
+// mitigate XSS risks without heavy sanitization.
+
+import { cn } from '@/lib/utils';
 import type { AgentThought } from '@/lib/schema';
 import { AGENT_DISPLAY, THOUGHT_DISPLAY } from '@/types';
 
@@ -12,24 +22,32 @@ export function AgentLog({ thought }: Props) {
   // Border styling based on thought type
   const typeBorder = thoughtDisplay
     ? thoughtDisplay.colorClass.replace('text-', 'border-l-')
-    : 'border-l-gray-400';
+    : 'border-l-[hsl(var(--neutral-400))]';
 
   return (
-    <div className={`border-l-2 ${typeBorder} pl-3 py-1.5 text-sm`}>
+    <div
+      className={cn(
+        'border-l-2 pl-3 py-1.5',
+        typeBorder,
+      )}
+    >
       <div className="flex items-center gap-2">
-        <span>{thoughtDisplay?.emoji ?? '💬'}</span>
-        <span className={`font-semibold ${display.colorClass}`}>
+        <span className="text-sm">{thoughtDisplay?.emoji ?? '💬'}</span>
+        <span className={cn('text-xs font-semibold', display.colorClass)}>
           {display.label}
         </span>
-        <span className="text-gray-400 text-xs">
+        <span className="text-[hsl(var(--neutral-400))] text-[10px] font-mono">
           {thought.created_at
             ? new Date(thought.created_at).toLocaleTimeString()
             : '—'}
         </span>
       </div>
-      <p className="text-gray-300 mt-0.5 font-mono text-xs leading-relaxed">
+      <pre
+        className="text-[hsl(var(--neutral-400))] mt-0.5 font-mono text-xs leading-relaxed whitespace-pre-wrap"
+        // pre tag mitigates XSS — no innerHTML, no dangerouslySetInnerHTML
+      >
         {thought.content}
-      </p>
+      </pre>
     </div>
   );
 }

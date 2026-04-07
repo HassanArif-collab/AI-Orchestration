@@ -10,7 +10,7 @@ export type { KanbanCard, AgentThought, IterationLog } from '@/lib/schema';
 // ─── UI Display Constants ────────────────────────────────────────────────
 
 /** Maps column_index number to display name and description */
-export const COLUMNS: Record<number, ColumnDef> = {
+export const COLUMNS_DEF: Record<number, ColumnDef> = {
   1: { name: 'Topic Finding',      description: 'AI is searching for ideas',  color: 'blue'   },
   2: { name: 'Suggested Topics',   description: 'Approve within 3 hours',     color: 'yellow' },
   3: { name: 'Researching',        description: 'Deep research in progress',  color: 'green'  },

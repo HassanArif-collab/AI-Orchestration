@@ -2,7 +2,8 @@
 // Zustand V5 Global Application Store
 //
 // We minimize React Context usage — all global UI state lives here.
-// Cards are NOT stored here; they are fetched via SWR + Supabase Realtime.
+// Cards are fetched via SWR + Supabase Realtime. We store a reference
+// to the cards array here for the CardDrawer to do quick lookups.
 //
 // CRITICAL (Zustand V5):
 // The extra `()` after `create<AppState>` is required by V5's curried pattern.
@@ -13,6 +14,7 @@
 // to prevent SSR/build-time crashes.
 
 import { create } from 'zustand';
+import type { KanbanCard } from '@/lib/schema';
 
 type SidebarTab = 'chat' | 'dlq' | 'quota' | 'youtube' | 'settings';
 
@@ -29,6 +31,14 @@ interface AppState {
   isSidebarOpen: boolean;
   toggleSidebar: () => void;
   activeTab: SidebarTab;
+
+  // Lineage hover — parent/child glow across board
+  hoveredCardId: string | null;
+  setHoveredCardId: (id: string | null) => void;
+
+  // Cards reference (for CardDrawer quick lookup — updated by useCards hook)
+  cards: KanbanCard[] | null;
+  setCards: (cards: KanbanCard[]) => void;
 }
 
 export type { SidebarTab };
@@ -44,4 +54,10 @@ export const useAppStore = create<AppState>()((set) => ({
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
 
   activeTab: 'chat',
+
+  hoveredCardId: null,
+  setHoveredCardId: (id) => set({ hoveredCardId: id }),
+
+  cards: null,
+  setCards: (cards) => set({ cards }),
 }));

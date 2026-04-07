@@ -1,33 +1,65 @@
+// apps/web/src/hooks/useCards.ts
+//
+// SWR + Supabase Realtime hook for Kanban cards.
+// This is the single source of truth for card data on the board.
+//
+// Architecture:
+// 1. SWR fetches GET /api/kanban/cards (initial hydration + background refocus)
+// 2. Supabase postgres_changes subscription fires mutate() on ANY card change
+// 3. Items (Record<string, string[]>) are DERIVED from SWR cards via useEffect
+// 4. Search filtering happens BEFORE item derivation (live-filters the board)
+//
+// CRITICAL: Items are NOT independent useState. They are derived from SWR data.
+// If items were independent, they would diverge from the server after the first drag.
+
+import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
+import { useAppStore } from '@/lib/store';
 import type { KanbanCard } from '@/lib/schema';
-import { useEffect } from 'react';
 
-/**
- * Fetches all kanban cards from Supabase and subscribes to realtime changes.
- * When a card is inserted, updated, or deleted in Supabase, this hook
- * automatically refetches — no polling needed.
- *
- * Returns: { cards, isLoading, error, mutate }
- *   - cards: KanbanCard[] grouped by nothing (caller groups by column)
- *   - mutate: call to force refetch after local actions
- */
+// Column IDs for dnd-kit — string versions of column_index (1-6)
+export const COLUMNS = ['1', '2', '3', '4', '5', '6'] as const;
+export type ColumnKey = (typeof COLUMNS)[number];
+
+// All SWR data goes through the global fetcher from main.tsx SWRConfig
 export function useCards() {
-  const fetcher = async (): Promise<KanbanCard[]> => {
-    const { data, error } = await supabase
-      .from('kanban_cards')
-      .select('*')
-      .order('created_at', { ascending: false });
+  const searchQuery = useAppStore((s) => s.searchQuery);
+  const { data: cards, isLoading, error, mutate } = useSWR<KanbanCard[]>(
+    '/api/kanban/cards',
+  );
 
-    if (error) throw error;
-    return data as KanbanCard[];
-  };
+  // Derive dnd-kit items from SWR data — re-sync whenever SWR updates or search changes
+  const [items, setItems] = useState<Record<ColumnKey, string[]>>(() => ({
+    '1': [], '2': [], '3': [], '4': [], '5': [], '6': [],
+  }));
 
-  const { data: cards, error, isLoading, mutate } = useSWR('kanban-cards', fetcher);
-
-  // Subscribe to realtime changes on kanban_cards table
   useEffect(() => {
-    // Unique channel name prevents React StrictMode double-mount collisions
+    if (!cards) return;
+    const filtered = cards.filter((card) =>
+      !searchQuery || card.title.toLowerCase().includes(searchQuery.toLowerCase()),
+    );
+    setItems(
+      filtered.reduce<Record<ColumnKey, string[]>>(
+        (acc, card) => {
+          const key = String(card.column_index) as ColumnKey;
+          acc[key] = [...(acc[key] ?? []), card.id];
+          return acc;
+        },
+        { '1': [], '2': [], '3': [], '4': [], '5': [], '6': [] },
+      ),
+    );
+  }, [cards, searchQuery]);
+
+  const setCards = useAppStore((s) => s.setCards);
+
+  // Sync cards to Zustand store (for CardDrawer quick lookup)
+  useEffect(() => {
+    if (cards) setCards(cards);
+  }, [cards, setCards]);
+
+  // Supabase Realtime subscription — revalidates SWR on any kanban_cards change
+  useEffect(() => {
     const channelName = `kanban-realtime-${Math.random().toString(36).slice(2)}`;
     const channel = supabase
       .channel(channelName)
@@ -35,9 +67,8 @@ export function useCards() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'kanban_cards' },
         () => {
-          // Any change to kanban_cards → refetch all cards
-          mutate();
-        }
+          mutate(); // bound mutate from useSWR — scoped to /api/kanban/cards
+        },
       )
       .subscribe();
 
@@ -47,19 +78,12 @@ export function useCards() {
     };
   }, [mutate]);
 
-  return { cards: cards ?? [], isLoading, error, mutate };
-}
-
-/**
- * Helper: group cards by column_index number
- */
-export function groupByColumn(cards: KanbanCard[]): Record<number, KanbanCard[]> {
-  const grouped: Record<number, KanbanCard[]> = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
-  for (const card of cards) {
-    const col = card.column_index;
-    if (grouped[col]) {
-      grouped[col].push(card);
-    }
-  }
-  return grouped;
+  return {
+    cards: cards ?? [],
+    items,
+    setItems,
+    isLoading,
+    error,
+    mutate,
+  };
 }

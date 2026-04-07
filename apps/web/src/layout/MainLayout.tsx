@@ -1,9 +1,8 @@
 // apps/web/src/layout/MainLayout.tsx
 //
 // Primary application shell — a fixed, non-scrolling layout.
-// This is the root layout structure for the entire app.
 //
-// Structure (from Phase 2 spec):
+// Structure:
 // <FreeRouterBanner /> — position: fixed, renders at viewport top, OUTSIDE flex flow
 // <main> flex row:
 //   <Sidebar> — LEFT side (w-80, glass panel, sunken surface)
@@ -11,18 +10,15 @@
 //     <Header> — top bar (h-16, glass surface)
 //     <KanbanBoard> — fills remaining space
 //
-// CRITICAL: FreeRouterBanner uses position: fixed — it sits outside normal
-// document flow and doesn't affect the flex layout.
-//
-// CRITICAL: The <ErrorBoundary> wraps <App> in main.tsx. Do NOT add another one here.
-//
-// Styling: All colors use CSS custom properties from globals.css @theme.
-// NEVER use generic bg-slate-900 or bg-gray-950.
+// <CardDrawer /> — Radix Dialog portal, renders at document body level.
+//   Must be included here (not inside Board) because Dialog.Portal teleports
+//   to body regardless of React tree position.
 
 import { cn } from '@/lib/utils';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { Board } from '@/components/kanban/Board';
+import { CardDrawer } from '@/components/kanban/CardDrawer';
 import { FreeRouterBanner } from '@/components/system/FreeRouterBanner';
 import { ToastContainer } from '@/components/ui/ToastContainer';
 
@@ -52,6 +48,9 @@ export function MainLayout() {
           <Board />
         </section>
       </main>
+
+      {/* Card Drawer — Radix Dialog portal (renders at body level) */}
+      <CardDrawer />
 
       {/* Global toast notifications */}
       <ToastContainer />
