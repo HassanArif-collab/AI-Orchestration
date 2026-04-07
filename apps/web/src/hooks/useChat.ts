@@ -1,8 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { mapApiError } from '../lib/errorMapper';
 import { SSE_TIMEOUT_MS } from '@/lib/constants';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { env } from '@/config/env';
 
 interface ChatMessage {
   id: string;
@@ -79,7 +78,7 @@ export function useChat(): UseChatReturn {
     }, SSE_TIMEOUT_MS);
 
     try {
-      const response = await fetch(`${API_BASE}/api/chat/stream`, {
+      const response = await fetch(`${env.API_BASE_URL}/api/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

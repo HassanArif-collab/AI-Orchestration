@@ -10,6 +10,7 @@
 // sits at the true top of the screen.
 
 import useSWR from 'swr';
+import { AlertTriangle } from 'lucide-react';
 
 export function FreeRouterBanner() {
   const { data, isLoading, error } = useSWR('/api/health/services', {
@@ -22,8 +23,9 @@ export function FreeRouterBanner() {
   // Show banner if: fetch error, or freerouter explicitly offline
   if (error || data?.freerouter?.status === 'offline') {
     return (
-      <div className="fixed top-0 left-0 right-0 z-[var(--z-toast)] bg-red-900/90 text-red-100 px-4 py-2 text-center text-sm backdrop-blur-sm">
-        🚨 FreeRouter LLM Proxy is disconnected. Please run &lsquo;make freerouter&rsquo; in your terminal.
+      <div className="fixed top-0 left-0 right-0 z-[var(--z-toast)] bg-red-900/90 text-red-100 px-4 py-2 text-center text-sm backdrop-blur-sm flex items-center justify-center gap-2">
+        <AlertTriangle className="w-4 h-4 shrink-0" />
+        <span>FreeRouter LLM Proxy is disconnected. Please run &lsquo;make freerouter&rsquo; in your terminal.</span>
       </div>
     );
   }
