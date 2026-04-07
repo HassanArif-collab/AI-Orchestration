@@ -403,8 +403,8 @@ async def trigger_topic_finder(data: TopicFinderRequest, bg: BackgroundTasks) ->
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "metadata": {"error_message": f"Discovery failed: {e}"},
             }).eq("id", card_id).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"kanban_card_update_on_error_failed: {card_id}: {e}")
 
     # Emit task_created for Kanban board
     try:

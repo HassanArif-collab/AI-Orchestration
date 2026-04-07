@@ -12,8 +12,11 @@ Endpoints:
     GET /api/health/config          - Configuration completeness check
 """
 
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -69,8 +72,8 @@ async def freerouter_health():
             response = await client.get(f"{url}/health")
             if response.status_code == 200:
                 return {"healthy": True, "url": url}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"health_check_failed for {url}: {e}")
     
     return {"healthy": False, "url": url}
 
