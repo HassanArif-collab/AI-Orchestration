@@ -147,13 +147,25 @@ function delConv(e, cid) { delSession(e, cid); }
 
 async function delSession(e, sid) {
   e.stopPropagation();
-  if (!confirm('Delete this conversation from local history?')) return;
+  if (!confirm('Delete this conversation?')) return;
+  
+  try {
+    // Delete from backend first
+    await api(`/api/chat/sessions/${sid}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error('Backend deletion failed:', err);
+    // Continue with local deletion even if backend fails
+  }
+  
+  // Remove from local storage
   _removeSession(sid);
+  
   if (_chatState.sessionId === sid) {
     newChatSession();
   } else {
     loadConvList();
   }
+  showToast('Conversation deleted', 'success');
 }
 
 function clearChat() {

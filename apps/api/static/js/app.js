@@ -486,13 +486,14 @@ window.addEventListener('load', () => {
   switchTab(_initTab);
   
   // Bug C Fix: Delay SSE slightly to ensure all modules are registered
+  // Increased from 100ms to 500ms to ensure proper module initialization
   setTimeout(() => {
     connectSSE();
     checkHealth();
     checkFreeRouter();
     loadServiceHealth();
     checkDLQStatus();
-  }, 100);
+  }, 500);
   
   setInterval(checkHealth, 30000);
   setInterval(checkFreeRouter, 30000);

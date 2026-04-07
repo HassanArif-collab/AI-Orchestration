@@ -355,8 +355,11 @@ const Kanban = {
         this.activeTaskId = taskId;
         this._updateDrawer(task);
         const drawer = document.getElementById('kanban-drawer');
-        drawer.classList.remove('hidden');
-        drawer.style.display = '';
+        if (drawer) {
+            drawer.classList.remove('hidden');
+            // Use consistent approach: remove inline style to let CSS handle display
+            drawer.style.removeProperty('display');
+        }
     },
     
     _updateDrawer(task) {
@@ -479,6 +482,7 @@ const Kanban = {
         const drawer = document.getElementById('kanban-drawer');
         if (drawer) {
             drawer.classList.add('hidden');
+            // Use consistent approach: let CSS handle display via hidden class
             drawer.style.display = 'none';
         }
     },
