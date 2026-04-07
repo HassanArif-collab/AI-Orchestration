@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import Markdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import { AlertTriangle } from 'lucide-react';
@@ -6,41 +6,23 @@ import { getKnowledgeBase } from '@/lib/api';
 import { mapApiError } from '@/lib/errorMapper';
 
 export function KnowledgeBase() {
-  const [content, setContent] = useState<string>('');
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, isLoading, mutate } = useSWR('knowledge-base', () => getKnowledgeBase());
 
-  const loadContent = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await getKnowledgeBase();
-      setContent(data.content || '');
-      setFilePath(data.path || null);
-    } catch (err) {
-      const friendlyError = mapApiError(err);
-      setError(friendlyError.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadContent();
-  }, []);
+  const content: string = data?.content || '';
+  const filePath: string | null = data?.path || null;
 
   if (isLoading) return <div className="p-4 text-[hsl(var(--neutral-400))] text-sm">Loading knowledge base...</div>;
 
   if (error) {
+    const friendlyError = mapApiError(error);
     return (
       <div className="p-4">
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
           <p className="text-red-300 text-sm font-medium">Failed to load knowledge base</p>
-          <p className="text-red-200/70 text-xs mt-1">{error}</p>
+          <p className="text-red-200/70 text-xs mt-1">{friendlyError.message}</p>
         </div>
         <button
-          onClick={loadContent}
+          onClick={() => mutate()}
           className="text-xs text-[hsl(var(--brand-300))] hover:text-[hsl(var(--brand-500))] underline"
         >
           Retry

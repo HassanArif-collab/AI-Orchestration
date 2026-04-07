@@ -3,13 +3,14 @@ import { useState } from 'react';
 import { useCompetitorVideos } from '../../hooks/useYouTube';
 import { CompetitorCard } from './CompetitorCard';
 import { OwnStats } from './OwnStats';
+import { VideoCardSkeleton } from '@/components/ui/Skeleton';
 import { cn } from '@/lib/utils';
 
 type Tab = 'competitors' | 'own';
 
 export function YouTubePanel() {
   const [tab, setTab] = useState<Tab>('competitors');
-  const { videos, isLoading, error } = useCompetitorVideos();
+  const { videos, isLoading, error } = useCompetitorVideos(tab === 'competitors');
 
   return (
     <div className="flex flex-col h-full">
@@ -54,11 +55,9 @@ export function YouTubePanel() {
 
             {isLoading && (
               <div className="space-y-3">
-                <div className="bg-[hsl(var(--surface-glass))] rounded-xl p-3 border border-[hsl(var(--surface-glass-border))] animate-pulse">
-                  <div className="h-32 bg-[hsl(var(--neutral-800))] rounded-lg mb-2" />
-                  <div className="h-4 bg-[hsl(var(--neutral-800))] rounded w-3/4" />
-                  <div className="h-3 bg-[hsl(var(--neutral-800))] rounded w-1/2 mt-2" />
-                </div>
+                {[1, 2, 3].map((i) => (
+                  <VideoCardSkeleton key={i} />
+                ))}
               </div>
             )}
             {!isLoading && error && <p className="text-red-400 text-sm">{String(error)}</p>}

@@ -44,7 +44,13 @@ export function CompetitorCard({ video }: Props) {
   return (
     <div className="bg-[hsl(var(--surface-glass))] rounded-xl p-3 border border-[hsl(var(--surface-glass-border))]">
       {video.thumbnail_url && (
-        <img src={video.thumbnail_url} alt={video.title} className="w-full h-32 object-cover rounded-lg mb-2" />
+        <img 
+          src={video.thumbnail_url} 
+          alt={video.title} 
+          loading="lazy"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          className="w-full aspect-video object-cover rounded-lg mb-2 bg-[hsl(var(--neutral-800))]"
+        />
       )}
       <h4 className="text-sm text-[hsl(var(--neutral-100))] font-medium line-clamp-2">{video.title}</h4>
       <div className="flex items-center justify-between mt-2 text-xs text-[hsl(var(--neutral-500))]">

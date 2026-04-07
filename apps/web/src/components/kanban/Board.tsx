@@ -24,6 +24,7 @@ import { useAppStore } from '@/lib/store';
 import { moveCard as moveCardApi, startProduction } from '@/lib/api';
 import { showToast } from '@/hooks/useToast';
 import { mapApiError } from '@/lib/errorMapper';
+import { CardSkeleton } from '@/components/ui/Skeleton';
 import { Column } from './Column';
 import type { KanbanCard } from '@/lib/schema';
 
@@ -74,8 +75,15 @@ export function Board() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-[hsl(var(--neutral-400))] text-sm">
-        Loading pipeline...
+      <div className="flex-1 overflow-x-auto p-4 flex gap-4 h-full">
+        {COLUMNS.map((colId) => (
+          <div key={colId} className="w-80 shrink-0 min-w-[260px] rounded-2xl p-3 border border-[hsl(var(--surface-glass-border))] bg-[hsl(var(--surface-glass-border)/0.3)] space-y-3">
+            <div className="h-4 w-28 bg-[hsl(var(--neutral-800))] rounded animate-pulse" />
+            {[1, 2, 3].map((i) => (
+              <CardSkeleton key={i} />
+            ))}
+          </div>
+        ))}
       </div>
     );
   }

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { mapApiError } from '../lib/errorMapper';
+import { SSE_TIMEOUT_MS } from '@/lib/constants';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -71,12 +72,11 @@ export function useChat(): UseChatReturn {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // SSE timeout: abort after 120 seconds to prevent hanging connections
     const sseTimedOut = { current: false };
     const sseTimeoutId = setTimeout(() => {
       sseTimedOut.current = true;
       controller.abort();
-    }, 120_000);
+    }, SSE_TIMEOUT_MS);
 
     try {
       const response = await fetch(`${API_BASE}/api/chat/stream`, {

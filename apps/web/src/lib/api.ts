@@ -4,41 +4,117 @@
 // Every API call MUST go through apiFetch() which auto-injects
 // Supabase JWT auth headers. The SWR global fetcher in main.tsx
 // handles GET-only; apiFetch is for mutations.
+//
+// Phase 8: Centralized timeout (AbortController) + retry with
+// exponential backoff for transient errors. All values from constants.ts.
 
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { env } from '@/config/env';
+import {
+  API_TIMEOUT_MS,
+  MAX_RETRIES,
+  RETRYABLE_STATUS_CODES,
+  RETRY_DELAYS_MS,
+} from '@/lib/constants';
 
 // ─── Core Authenticated Fetch Wrapper ─────────────────────────────────────
 
 /**
- * Authenticated fetch wrapper — every API call MUST go through this.
- * Automatically attaches the Supabase JWT access_token as a Bearer header
- * when Supabase is configured. Without auth, calls to protected routes
- * may return 401.
+ * Authenticated fetch wrapper with timeout + retry.
+ *
+ * Features:
+ * - Auto-attaches Supabase JWT Bearer header when configured
+ * - AbortController timeout (15s default) prevents hanging requests
+ * - Automatic retry on 408/429/5xx with exponential backoff (1s, 2s)
+ * - JSON parse error handling with user-friendly messages
  */
-export async function apiFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+export async function apiFetch<T = unknown>(
+  path: string,
+  init?: RequestInit & { _skipRetry?: boolean },
+): Promise<T> {
   let authToken: string | undefined;
   if (isSupabaseConfigured() && supabase) {
     const { data: { session } } = await supabase.auth.getSession();
     authToken = session?.access_token;
   }
 
-  const res = await fetch(`${env.API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(authToken
-        ? { Authorization: `Bearer ${authToken}` }
-        : {}),
-      ...init?.headers,
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
-  if (!res.ok) {
-    throw new Error(`API ${res.status}: ${res.statusText} on ${path}`);
+  // Merge caller's signal with our timeout signal
+  const mergedSignal = init?.signal
+    ? AbortSignal.any([init.signal, controller.signal])
+    : controller.signal;
+
+  let lastError: Error | null = null;
+  const skipRetry = init?._skipRetry ?? false;
+
+  for (let attempt = 0; attempt <= (skipRetry ? 0 : MAX_RETRIES); attempt++) {
+    try {
+      // Delay before retry (not on first attempt)
+      if (attempt > 0) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, RETRY_DELAYS_MS[attempt - 1] ?? 2_000),
+        );
+      }
+
+      const res = await fetch(`${env.API_BASE_URL}${path}`, {
+        ...init,
+        signal: mergedSignal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken
+            ? { Authorization: `Bearer ${authToken}` }
+            : {}),
+          ...init?.headers,
+        },
+      });
+
+      // If the response is a transient error and we have retries left, retry
+      if (
+        !res.ok
+        && !skipRetry
+        && RETRYABLE_STATUS_CODES.includes(res.status)
+        && attempt < MAX_RETRIES
+      ) {
+        lastError = new Error(`API ${res.status}: ${res.statusText} on ${path}`);
+        continue; // retry
+      }
+
+      if (!res.ok) {
+        clearTimeout(timeoutId);
+        throw new Error(`API ${res.status}: ${res.statusText} on ${path}`);
+      }
+
+      clearTimeout(timeoutId);
+
+      // Safe JSON parse with fallback
+      try {
+        return await res.json() as Promise<T>;
+      } catch {
+        throw new Error(`Failed to parse response from ${path}`);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Don't retry on abort (user-initiated cancel or timeout)
+      if (lastError.name === 'AbortError') {
+        clearTimeout(timeoutId);
+        throw lastError;
+      }
+
+      // If this was the last attempt, throw
+      if (attempt >= (skipRetry ? 0 : MAX_RETRIES)) {
+        clearTimeout(timeoutId);
+        throw lastError;
+      }
+
+      // Otherwise, continue to next retry iteration
+    }
   }
 
-  return res.json() as Promise<T>;
+  clearTimeout(timeoutId);
+  throw lastError ?? new Error(`API request failed: ${path}`);
 }
 
 // ─── Typed Endpoint Wrappers ──────────────────────────────────────────────
@@ -147,6 +223,19 @@ export type QuotaResponse = {
 /** Get live provider quotas. */
 export function getQuota() {
   return apiFetch<QuotaResponse>('/api/providers/quota');
+}
+
+// ── Provider Models Endpoint ──
+
+export type ProviderModel = {
+  task: string;
+  model: string;
+  fallback: string;
+};
+
+/** Get the agent/model mapping from the API (dynamic, not hardcoded). */
+export function getProviderModels() {
+  return apiFetch<{ models: ProviderModel[] }>('/api/providers/models');
 }
 
 // ── Settings Endpoints ──

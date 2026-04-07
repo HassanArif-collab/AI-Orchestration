@@ -1,5 +1,6 @@
 import useSWR from 'swr';
 import { getCompetitorVideos, getOwnAnalytics } from '@/lib/api';
+import { YOUTUBE_POLL_MS } from '@/lib/constants';
 
 export interface CompetitorVideo {
   title: string;
@@ -17,11 +18,11 @@ export interface OwnAnalytics {
   channel_title?: string;
 }
 
-export function useCompetitorVideos() {
+export function useCompetitorVideos(enabled: boolean = true) {
   const { data, error, isLoading } = useSWR(
-    'competitor-videos',
+    enabled ? 'competitor-videos' : null,
     () => getCompetitorVideos() as Promise<{ videos?: CompetitorVideo[]; error?: string }>,
-    { refreshInterval: 300_000 } // Refresh every 5 minutes
+    { refreshInterval: enabled ? YOUTUBE_POLL_MS : 0 }
   );
 
   return {
@@ -37,7 +38,7 @@ export function useOwnAnalytics(channelId?: string) {
   const { data, error, isLoading } = useSWR(
     key,
     () => getOwnAnalytics(channelId) as Promise<OwnAnalytics & { error?: string }>,
-    { refreshInterval: 300_000 }
+    { refreshInterval: YOUTUBE_POLL_MS }
   );
 
   return {

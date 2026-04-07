@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { AlertTriangle } from 'lucide-react';
 import { getSkills } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -9,26 +10,19 @@ interface SkillFile {
 }
 
 export function SkillViewer() {
-  const [skills, setSkills] = useState<SkillFile[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    getSkills()
-      .then((res) => {
-        setSkills(res.files);
-        if (res.files.length > 0) setSelectedSkill(res.files[0].name);
-      })
-      .catch((err) => {
-        console.error('Failed to load skills:', err);
-        setError('Failed to load skill files');
-      })
-      .finally(() => setIsLoading(false));
-  }, []);
+  const { data, error, isLoading } = useSWR('skills', () => getSkills());
+
+  const skills: SkillFile[] = data?.files ?? [];
+
+  // Auto-select first skill once loaded
+  if (!selectedSkill && skills.length > 0) {
+    setSelectedSkill(skills[0].name);
+  }
 
   if (isLoading) return <div className="p-4 text-[hsl(var(--neutral-400))] text-sm">Loading skills...</div>;
-  if (error) return <div className="p-4 text-red-400 text-sm">{error}</div>;
+  if (error) return <div className="p-4 text-red-400 text-sm">Failed to load skill files</div>;
 
   const activeSkill = skills.find((s) => s.name === selectedSkill);
 

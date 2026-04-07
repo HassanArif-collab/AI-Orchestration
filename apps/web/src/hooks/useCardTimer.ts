@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react';
 import { differenceInSeconds, parseISO } from 'date-fns';
-
-// 3-hour expiration in milliseconds — inlined to avoid extra import
-const EXPIRATION_MS = 3 * 60 * 60 * 1000;
+import { EXPIRATION_MS } from '@/lib/constants';
 
 export interface TimerState {
   remainingMinutes: number;

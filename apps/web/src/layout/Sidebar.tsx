@@ -40,6 +40,7 @@ import { QuotaPanel } from '@/components/telemetry/QuotaPanel';
 import { ModelRegistry } from '@/components/telemetry/ModelRegistry';
 import { SkillViewer } from '@/components/system/SkillViewer';
 import { KnowledgeBase } from '@/components/system/KnowledgeBase';
+import { DLQPanel } from '@/components/dlq/DLQPanel';
 
 type SidebarTab = 'chat' | 'dlq' | 'quota' | 'youtube' | 'settings';
 
@@ -193,11 +194,7 @@ export function Sidebar() {
               activeTab === 'dlq' ? 'flex' : 'hidden',
             )}
           >
-            <div className="p-4">
-              <p className="text-xs text-[hsl(var(--neutral-400))]">
-                DLQ panel will be built in Phase 7.
-              </p>
-            </div>
+            <DLQPanel />
           </div>
 
           {/* Quota Panel — active when 'quota' */}

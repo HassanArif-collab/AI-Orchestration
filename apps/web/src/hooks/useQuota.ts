@@ -1,22 +1,33 @@
 import useSWR from 'swr';
 import { getQuota } from '@/lib/api';
 import type { QuotaResponse } from '@/lib/api';
+import { QUOTA_POLL_MS } from '@/lib/constants';
+import { useAppStore } from '@/lib/store';
 
 /**
- * Fetches live provider quotas every 5 seconds.
+ * Fetches live provider quotas.
  *
- * Unlike agent thoughts (which use WebSocket), quotas come from
- * the FreeRouter SQLite DB via a REST endpoint. Polling is fine here
- * because quotas change slowly (once per LLM call, not per second).
+ * Phase 8 Optimization:
+ * - Only polls when the Quota tab is visible in the sidebar.
+ * - Uses Zustand activeTab to determine visibility.
+ * - Stops polling entirely when user is on a different tab,
+ *   saving bandwidth and preventing unnecessary backend load.
+ *
+ * When the Quota tab becomes visible again, SWR automatically
+ * triggers a revalidation via revalidateOnFocus.
  */
 export function useQuota() {
+  const activeTab = useAppStore((s) => s.activeTab);
+  const isQuotaTabVisible = activeTab === 'quota';
+
   const { data, error, isLoading } = useSWR<QuotaResponse>(
-    'provider-quota',
+    // Null key disables SWR entirely (no fetch, no polling)
+    isQuotaTabVisible ? 'provider-quota' : null,
     () => getQuota(),
     {
-      refreshInterval: 5_000,
+      refreshInterval: isQuotaTabVisible ? QUOTA_POLL_MS : 0,
       revalidateOnFocus: true,
-    }
+    },
   );
 
   return {

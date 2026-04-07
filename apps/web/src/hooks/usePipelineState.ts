@@ -8,10 +8,14 @@
 // by its own run ID. Using card.id when the backend expects pipeline_run_id
 // returns 404.
 //
-// Conditional Polling: The null key pattern disables SWR polling when
-// no card is active or the card is not in columns 4/5.
+// Phase 8 Optimization:
+// - Conditional polling via null SWR key when card not in cols 4/5
+// - STOPS polling when pipeline_status is "complete" or "error"
+//   (previously polled forever, wasting CPU and bandwidth)
+// - Uses centralized PIPELINE_POLL_MS from constants.ts
 
 import useSWR from 'swr';
+import { PIPELINE_POLL_MS } from '@/lib/constants';
 
 export interface PipelineValues {
   evaluation_score: number;
@@ -29,13 +33,14 @@ export interface PipelineStateData {
   next: string[];
 }
 
+/** Terminal pipeline statuses — no further polling needed */
+const TERMINAL_STATUSES = new Set(['complete', 'error', 'published']);
+
 /**
  * Fetches pipeline state for the currently active drawer card.
  * Uses pipeline_run_id from the card, and only polls when in col 4 or 5.
  */
 export function usePipelineState() {
-  // The parent component (CardDrawer) should use usePipelineStateForCard
-  // which takes explicit runId and column_index.
   const { data, error, isLoading } = useSWR<PipelineStateData>(null);
 
   const isWaitingForReview =
@@ -53,18 +58,30 @@ export function usePipelineState() {
 /**
  * Hook that takes explicit runId and column_index for conditional polling.
  * Used by CardDrawer which already has the full card data.
+ *
+ * Phase 8: Stops polling when pipeline reaches a terminal status
+ * (complete, error, published). This prevents wasting bandwidth
+ * on cards that will never change state again.
  */
 export function usePipelineStateForCard(card: {
   pipeline_run_id?: string | null;
   column_index: number;
 } | null) {
-  const key =
-    card?.pipeline_run_id && (card.column_index === 4 || card.column_index === 5)
-      ? `/api/pipeline/langgraph/state/${card.pipeline_run_id}`
-      : null; // Don't poll if run hasn't started or card not in production
+  const shouldPoll =
+    card?.pipeline_run_id != null &&
+    (card.column_index === 4 || card.column_index === 5);
 
-  const { data, error, isLoading } = useSWR<PipelineStateData>(key, {
-    refreshInterval: 5_000,
+  const swrKey = shouldPoll
+    ? `/api/pipeline/langgraph/state/${card.pipeline_run_id}`
+    : null;
+
+  const { data, error, isLoading } = useSWR<PipelineStateData>(swrKey, {
+    // Only poll while pipeline is actively running
+    refreshInterval: (currentData) => {
+      if (!currentData?.values) return PIPELINE_POLL_MS;
+      if (TERMINAL_STATUSES.has(currentData.values.pipeline_status)) return 0;
+      return PIPELINE_POLL_MS;
+    },
     revalidateOnFocus: true,
   });
 
