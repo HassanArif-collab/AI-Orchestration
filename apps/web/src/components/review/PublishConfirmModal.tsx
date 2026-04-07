@@ -8,6 +8,8 @@ import { useState, useEffect, useRef } from 'react';
  * - Visual plan preview (if available)
  * - 5-second countdown on the publish button to prevent accidental clicks
  * - "Don't show this again" checkbox persisted in localStorage
+ * - Full ARIA dialog attributes (role, aria-modal, focus trap)
+ * - Escape key handler
  */
 
 interface PublishConfirmModalProps {
@@ -129,83 +131,93 @@ export function PublishConfirmModal({
         role="dialog"
         aria-modal="true"
         aria-label="Confirm publish"
-        className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 p-6 animate-scale-in"
+        className="relative bg-[hsl(var(--surface-sunken)/0.95)] backdrop-blur-3xl border border-[hsl(var(--surface-glass-border))] rounded-2xl shadow-2xl max-w-2xl w-full mx-4 p-6"
       >
-        <h2 className="text-2xl font-bold text-white mb-4">
-          📤 Ready to Publish to Notion?
+        <h2 className="text-xl font-bold text-[hsl(var(--neutral-100))] mb-4 flex items-center gap-2">
+          <span className="text-lg">&#x1F4E4;</span>
+          Ready to Publish to Notion?
         </h2>
 
         {/* Script Preview */}
-        <div className="bg-gray-800 border border-gray-700 rounded p-4 mb-4">
-          <h3 className="text-lg font-semibold text-white mb-2">
+        <div className="bg-[hsl(var(--surface-glass))] border border-[hsl(var(--surface-glass-border))] rounded-xl p-4 mb-4">
+          <h3 className="text-lg font-semibold text-[hsl(var(--neutral-100))] mb-2">
             {scriptPreview.title}
           </h3>
-          <div className="flex items-center gap-4 text-sm text-gray-400 mb-3">
+          <div className="flex items-center gap-4 text-sm text-[hsl(var(--neutral-400))] mb-3">
             <span>Score: {scriptPreview.score.toFixed(1)}%</span>
-            <span>•</span>
+            <span>&middot;</span>
             <span>Iteration {scriptPreview.iterationCount}</span>
           </div>
-          <p className="text-gray-300 text-sm line-clamp-3">
+          <p className="text-[hsl(var(--neutral-300))] text-sm line-clamp-3">
             {scriptPreview.snippet}
           </p>
         </div>
 
         {/* Visual Preview (if available) */}
         {visualSnippet && (
-          <div className="bg-gray-800 border border-gray-700 rounded p-4 mb-4">
-            <p className="text-sm text-gray-400 mb-2">Visual Plan Preview:</p>
-            <div className="bg-gray-900 rounded p-2 text-xs text-gray-300 font-mono max-h-32 overflow-y-auto">
+          <div className="bg-[hsl(var(--surface-glass))] border border-[hsl(var(--surface-glass-border))] rounded-xl p-4 mb-4">
+            <p className="text-sm text-[hsl(var(--neutral-400))] mb-2">Visual Plan Preview:</p>
+            <div className="bg-[hsl(var(--neutral-800)/0.5)] rounded-lg p-3 text-xs text-[hsl(var(--lineage-cyan))] font-mono max-h-32 overflow-y-auto">
               {visualSnippet}
             </div>
           </div>
         )}
 
         {/* Warning */}
-        <div className="bg-yellow-900/20 border border-yellow-600/50 rounded p-3 mb-4">
-          <p className="text-yellow-300 text-sm">
-            ⚠ This action will publish the script to your Notion workspace and cannot be undone.
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-4">
+          <p className="text-amber-300 text-sm">
+            <span className="mr-1">&#x26A0;</span>
+            This action will publish the script to your Notion workspace and cannot be undone.
           </p>
         </div>
 
         {/* Suppress future checkbox */}
-        <label className="flex items-center gap-2 text-sm text-gray-400 mb-6 cursor-pointer select-none">
+        <label className="flex items-center gap-2 text-sm text-[hsl(var(--neutral-400))] mb-6 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={suppressFuture}
             onChange={(e) => setSuppressFuture(e.target.checked)}
             className="rounded"
           />
-          <span>Don't show this confirmation again</span>
+          <span>Don&apos;t show this confirmation again</span>
         </label>
 
         {/* Actions */}
         <div className="flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+            className="flex-1 bg-[hsl(var(--neutral-800))] hover:bg-[hsl(var(--neutral-700))] text-[hsl(var(--neutral-100))] px-6 py-3 rounded-xl font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--brand-500))]"
           >
-            ← Keep Editing
+            Keep Editing
           </button>
           <button
             onClick={handleConfirm}
             disabled={countdown > 0}
-            className={`flex-1 px-6 py-3 rounded-lg font-medium transition-all ${
+            className={cn(
+              'flex-1 px-6 py-3 rounded-xl font-medium transition-all',
               countdown > 0
-                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                : 'bg-green-600 hover:bg-green-700 text-white'
-            }`}
+                ? 'bg-[hsl(var(--neutral-800))] text-[hsl(var(--neutral-500))] cursor-not-allowed'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400',
+            )}
           >
             {countdown > 0 ? (
               <span className="flex items-center justify-center gap-2">
-                <span className="animate-pulse">📤</span>
+                <span className="animate-pulse">&#x1F4E4;</span>
                 <span>Publish to Notion ({countdown}s)</span>
               </span>
             ) : (
-              '📤 Publish to Notion'
+              <span className="flex items-center justify-center gap-2">
+                <span>&#x1F4E4;</span>
+                Publish to Notion
+              </span>
             )}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function cn(...classes: (string | boolean | undefined)[]) {
+  return classes.filter(Boolean).join(' ');
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { CheckCircle, RotateCcw, Loader2, AlertTriangle } from 'lucide-react';
 import { resumePipeline } from '@/lib/api';
 import { mapApiError } from '@/lib/errorMapper';
 import { showToast } from '@/hooks/useToast';
+import { cn } from '@/lib/utils';
 import { PublishConfirmModal } from './PublishConfirmModal';
 
 interface Props {
@@ -90,7 +92,7 @@ export function ReviewPanel({
 
       setConfirmationState('idle');
       setShowPublishConfirm(false);
-      showToast({ type: 'success', title: '✅ Script approved', message: 'Publishing to Notion...' });
+      showToast({ type: 'success', title: 'Script approved', message: 'Publishing to Notion...' });
       onDecision();
     } catch (err) {
       setConfirmationState('error');
@@ -103,20 +105,21 @@ export function ReviewPanel({
 
   return (
     <>
-      <div className="p-4 bg-amber-900/20">
-        <h3 className="text-sm font-semibold text-amber-400 mb-2">
-          ⏸ Human Review Required
+      <div className="p-4 bg-amber-500/10 border-t border-amber-500/20">
+        <h3 className="text-sm font-semibold text-amber-400 mb-2 flex items-center gap-1.5">
+          <AlertTriangle className="w-4 h-4" strokeWidth={1.5} />
+          Human Review Required
         </h3>
-        <p className="text-xs text-gray-400 mb-3">
+        <p className="text-xs text-[hsl(var(--neutral-400))] mb-3">
           Review the script and visual cues above. Approve to publish to Notion,
           or provide feedback to send back for revision.
         </p>
 
         {getFeedbackError() && (
-          <div className="bg-red-900/30 border border-red-500 rounded p-3 text-sm mb-4 animate-shake">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-sm mb-4">
             <p className="text-red-300 font-medium flex items-center gap-2">
-              <span>⚠</span>
-              <span>Could not submit your decision</span>
+              <AlertTriangle className="w-3 h-3" strokeWidth={1.5} />
+              Could not submit your decision
             </p>
             <p className="text-red-200/70 mt-1">{getFeedbackError()}</p>
             <p className="text-red-200/50 mt-1 text-xs">
@@ -129,13 +132,17 @@ export function ReviewPanel({
           value={feedback}
           onChange={handleFeedbackChange}
           placeholder="What should be improved? Be specific..."
-          className={`w-full bg-gray-800 border rounded p-2 text-sm text-white placeholder-gray-500 resize-none h-20 transition-colors ${
+          className={cn(
+            'w-full bg-[hsl(var(--neutral-800))] border rounded-xl p-2.5 text-sm',
+            'text-[hsl(var(--neutral-100))] placeholder-[hsl(var(--neutral-500))]',
+            'resize-none h-20 transition-colors',
+            'focus:outline-none focus:ring-2',
             getFeedbackError()
-              ? 'border-red-500 focus:border-red-400'
-              : 'border-gray-700 focus:border-amber-500'
-          }`}
+              ? 'border-red-500 focus:ring-red-400'
+              : 'border-[hsl(var(--surface-glass-border))] focus:ring-[hsl(var(--brand-500))]',
+          )}
         />
-        <p className="text-gray-500 text-xs mt-1 text-right">
+        <p className="text-[hsl(var(--neutral-500))] text-xs mt-1 text-right">
           {feedback.length} characters
         </p>
 
@@ -143,33 +150,47 @@ export function ReviewPanel({
           <button
             onClick={handleApprove}
             disabled={confirmationState === 'submitting'}
-            className={`flex-1 bg-green-600 hover:bg-green-500 text-white py-2 rounded text-sm font-medium transition-all ${
-              confirmationState === 'submitting' ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-1.5',
+              'bg-emerald-600 hover:bg-emerald-500 text-white',
+              'py-2.5 rounded-xl text-sm font-medium transition-all',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400',
+              confirmationState === 'submitting' && 'opacity-50 cursor-not-allowed',
+            )}
           >
             {confirmationState === 'submitting' ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="animate-spin">⟳</span>
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} />
                 <span>Confirming...</span>
-              </span>
+              </>
             ) : (
-              '✅ Approve & Publish'
+              <>
+                <CheckCircle className="w-3.5 h-3.5" strokeWidth={1.5} />
+                <span>Approve & Publish</span>
+              </>
             )}
           </button>
           <button
             onClick={handleReject}
             disabled={confirmationState === 'submitting'}
-            className={`flex-1 bg-red-600 hover:bg-red-500 text-white py-2 rounded text-sm font-medium transition-all ${
-              confirmationState === 'submitting' ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-1.5',
+              'bg-red-600 hover:bg-red-500 text-white',
+              'py-2.5 rounded-xl text-sm font-medium transition-all',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400',
+              confirmationState === 'submitting' && 'opacity-50 cursor-not-allowed',
+            )}
           >
             {confirmationState === 'submitting' ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="animate-spin">⟳</span>
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} />
                 <span>Confirming...</span>
-              </span>
+              </>
             ) : (
-              '🔄 Revise'
+              <>
+                <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
+                <span>Revise</span>
+              </>
             )}
           </button>
         </div>

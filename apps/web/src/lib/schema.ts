@@ -18,7 +18,7 @@ export const KanbanCardSchema = z.object({
   title: z.string(),
   column_index: z.number().int().min(1).max(6),
   position: z.number().int(),
-  status: z.enum(['idle', 'processing', 'error', 'review_required', 'completed']),
+  status: z.enum(['idle', 'processing', 'error', 'review_required', 'review', 'completed']),
   pipeline_run_id: z.string().nullable().optional(),
   parent_id: z.string().uuid().nullable().optional(), // Lineage key
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),

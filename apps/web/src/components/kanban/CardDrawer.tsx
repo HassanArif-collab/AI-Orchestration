@@ -52,12 +52,11 @@ export function CardDrawer() {
   const cards = useAppStore((s) => s.cards);
   const card = cards?.find((c) => c.id === activeDrawerCardId) ?? null;
 
-  const brief = getTopicBrief(card ?? undefined as unknown as KanbanCard);
+  const brief = card ? getTopicBrief(card) : null;
   const viabilityScore = card ? getViabilityScore(card) : null;
 
   // Pipeline state polling (conditional — only for col 4/5)
-  const { state } =
-    usePipelineStateForCard(card);
+  const { state } = usePipelineStateForCard(card);
 
   // Agent thoughts streaming
   const { thoughts, isConnected, connectionError, bottomRef, forceReconnect } =

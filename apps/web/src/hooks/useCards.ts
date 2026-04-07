@@ -14,7 +14,7 @@
 
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore } from '@/lib/store';
 import type { KanbanCard } from '@/lib/schema';
 
@@ -60,8 +60,12 @@ export function useCards() {
 
   // Supabase Realtime subscription — revalidates SWR on any kanban_cards change
   useEffect(() => {
+    if (!isSupabaseConfigured() || !supabase) return;
+
+    const db = supabase;
+
     const channelName = `kanban-realtime-${Math.random().toString(36).slice(2)}`;
-    const channel = supabase
+    const channel = db
       .channel(channelName)
       .on(
         'postgres_changes',
@@ -74,7 +78,7 @@ export function useCards() {
 
     // CRITICAL: Always clean up channels to prevent WebSocket leaks
     return () => {
-      supabase.removeChannel(channel);
+      db.removeChannel(channel);
     };
   }, [mutate]);
 

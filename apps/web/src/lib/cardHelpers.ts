@@ -93,7 +93,7 @@ export function getCardAction(card: KanbanCard): CardActionInfo {
 
   // Column 5: Review + Visuals
   if (card.column_index === 5) {
-    if (card.status === 'review_required') {
+    if (card.status === 'review_required' || card.status === 'review') {
       return {
         action: 'review',
         reason: 'Script is ready for your review and approval.',

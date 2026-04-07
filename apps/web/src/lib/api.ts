@@ -5,25 +5,30 @@
 // Supabase JWT auth headers. The SWR global fetcher in main.tsx
 // handles GET-only; apiFetch is for mutations.
 
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { env } from '@/config/env';
 
 // ─── Core Authenticated Fetch Wrapper ─────────────────────────────────────
 
 /**
  * Authenticated fetch wrapper — every API call MUST go through this.
- * Automatically attaches the Supabase JWT access_token as a Bearer header.
- * Without this, every POST/PATCH/DELETE to FastAPI protected routes returns 401.
+ * Automatically attaches the Supabase JWT access_token as a Bearer header
+ * when Supabase is configured. Without auth, calls to protected routes
+ * may return 401.
  */
 export async function apiFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const { data: { session } } = await supabase.auth.getSession();
+  let authToken: string | undefined;
+  if (isSupabaseConfigured() && supabase) {
+    const { data: { session } } = await supabase.auth.getSession();
+    authToken = session?.access_token;
+  }
 
   const res = await fetch(`${env.API_BASE_URL}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      ...(session?.access_token
-        ? { Authorization: `Bearer ${session.access_token}` }
+      ...(authToken
+        ? { Authorization: `Bearer ${authToken}` }
         : {}),
       ...init?.headers,
     },

@@ -1,8 +1,10 @@
 import { useState } from 'react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import type { CompetitorVideo } from '@/hooks/useYouTube';
 import { repurposeVideo } from '@/lib/api';
 import { mapApiError } from '@/lib/errorMapper';
 import { showToast } from '@/hooks/useToast';
+import { cn } from '@/lib/utils';
 
 interface Props {
   video: CompetitorVideo;
@@ -40,36 +42,51 @@ export function CompetitorCard({ video }: Props) {
     : String(video.views);
 
   return (
-    <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+    <div className="bg-[hsl(var(--surface-glass))] rounded-xl p-3 border border-[hsl(var(--surface-glass-border))]">
       {video.thumbnail_url && (
-        <img src={video.thumbnail_url} alt={video.title} className="w-full h-32 object-cover rounded mb-2" />
+        <img src={video.thumbnail_url} alt={video.title} className="w-full h-32 object-cover rounded-lg mb-2" />
       )}
-      <h4 className="text-sm text-white font-medium line-clamp-2">{video.title}</h4>
-      <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+      <h4 className="text-sm text-[hsl(var(--neutral-100))] font-medium line-clamp-2">{video.title}</h4>
+      <div className="flex items-center justify-between mt-2 text-xs text-[hsl(var(--neutral-500))]">
         <span>{video.channel_title}</span>
         <span>{formattedViews} views</span>
       </div>
-      <p className="text-xs text-gray-600 mt-1">{new Date(video.published_at).toLocaleDateString()}</p>
+      <p className="text-xs text-[hsl(var(--neutral-500))] mt-1">{new Date(video.published_at).toLocaleDateString()}</p>
 
       <div className="flex gap-2 mt-3">
         <a
           href={`https://youtube.com/watch?v=${video.video_id}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex-1 text-center text-xs bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded"
+          className={cn(
+            'flex-1 flex items-center justify-center gap-1.5 text-xs',
+            'bg-[hsl(var(--neutral-800))] hover:bg-[hsl(var(--neutral-700))] text-[hsl(var(--neutral-100))]',
+            'py-1.5 rounded-lg transition-colors',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--brand-500))]',
+          )}
         >
-          ▶ Watch
+          <ExternalLink className="w-3 h-3" strokeWidth={1.5} />
+          Watch
         </a>
         <button
           onClick={handleRepurpose}
           disabled={isRepurposing || repurposed}
-          className={`flex-1 text-xs py-1.5 rounded font-medium ${
+          className={cn(
+            'flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-lg font-medium transition-all',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--brand-500))]',
             repurposed
-              ? 'bg-green-800 text-green-300 cursor-default'
-              : 'bg-blue-600 hover:bg-blue-500 text-white'
-          } disabled:opacity-50`}
+              ? 'bg-emerald-500/20 text-emerald-300 cursor-default'
+              : 'bg-[hsl(var(--brand-500))] hover:bg-[hsl(var(--brand-300))] text-white',
+            'disabled:opacity-50 disabled:cursor-not-allowed',
+          )}
         >
-          {repurposed ? '✓ Added' : isRepurposing ? '...' : 'Repurpose'}
+          {repurposed ? (
+            'Added'
+          ) : isRepurposing ? (
+            <RefreshCw className="w-3 h-3 animate-spin" strokeWidth={1.5} />
+          ) : (
+            'Repurpose'
+          )}
         </button>
       </div>
     </div>

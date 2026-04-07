@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { AgentThought } from '@/lib/schema';
 
@@ -14,6 +14,7 @@ import type { AgentThought } from '@/lib/schema';
  * - Shows reconnection state (connecting/reconnecting/failed)
  * - Deduplicates thoughts by ID to prevent duplicates on reconnect
  * - Properly cleans up channels before reconnecting
+ * - Gracefully handles missing Supabase configuration
  *
  * NOTE: Uses `thought.content` (matching DB column name), NOT `thought.thought`.
  */
@@ -52,6 +53,16 @@ export function useAgentStream(cardId: string | null) {
       return cleanup;
     }
 
+    // Guard: skip if Supabase is not configured
+    if (!isSupabaseConfigured() || !supabase) {
+      setConnectionError('Supabase not configured. Realtime disabled.');
+      setIsConnected(false);
+      return cleanup;
+    }
+
+    // Local alias — safe after the null guard above
+    const db = supabase;
+
     let cancelled = false;
     const MAX_RECONNECTS = 5;
     const BASE_DELAY = 1000;
@@ -64,7 +75,7 @@ export function useAgentStream(cardId: string | null) {
 
       // Remove old channel before creating a new one
       if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
+        db.removeChannel(channelRef.current);
         channelRef.current = null;
       }
 
@@ -84,7 +95,7 @@ export function useAgentStream(cardId: string | null) {
         const id = cardIdRef.current;
         if (!id) return;
 
-        const { data, error } = await supabase
+        const { data, error } = await db
           .from('agent_thoughts')
           .select('*')
           .eq('card_id', id)
@@ -105,7 +116,7 @@ export function useAgentStream(cardId: string | null) {
       const subscribe = () => {
         if (cancelled) return;
 
-        const channel = supabase
+        const channel = db
           .channel(channelName)
           .on(
             'postgres_changes',
@@ -164,7 +175,7 @@ export function useAgentStream(cardId: string | null) {
       cancelled = true;
       cleanup();
       if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
+        db.removeChannel(channelRef.current);
         channelRef.current = null;
       }
       setIsConnected(false);
@@ -178,7 +189,7 @@ export function useAgentStream(cardId: string | null) {
   const forceReconnect = useCallback(() => {
     cleanup();
     if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
+      supabase?.removeChannel(channelRef.current);
       channelRef.current = null;
     }
     setIsConnected(false);
