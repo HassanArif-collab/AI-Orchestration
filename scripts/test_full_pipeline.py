@@ -105,10 +105,12 @@ async def step_1_research():
     return dossier, markdown
 
 
-async def step_2_script_writing(research_markdown: str):
+async def step_2_script_writing(research_markdown: str, visual_feedback: str = None):
     """Step 2: Write a documentary script from research — using the SAME prompt as draft_node."""
     print("\n" + "=" * 70)
     print("STEP 2: SCRIPT WRITING (with style constitution + genre rules)")
+    if visual_feedback:
+        print("  (Re-drafting with visual annotator feedback)")
     print("=" * 70)
 
     # Load style reference and genre rules (same as nodes.py does)
@@ -122,14 +124,18 @@ async def step_2_script_writing(research_markdown: str):
         style_block = f"\n\n=== JOHNNY HARRIS STYLE CONSTITUTION ===\n{style_block}"
     genre_block = f"\n\n=== GENRE-SPECIFIC RULES ===\n{genre_rules}" if genre_rules else ""
 
+    context_parts = [f"RESEARCH DOSSIER:\n{research_markdown[:16000]}"]
+    if visual_feedback:
+        context_parts.append(f"VISUAL ANNOTATOR FEEDBACK TO ADDRESS:\n{visual_feedback}")
+    context = "\n\n---\n\n".join(context_parts)
+
     prompt = f"""You are writing a Johnny Harris-style documentary script. This is NOT a generic overview — this is a specific, evidence-driven story.
 
 TOPIC: {TOPIC}
 {genre_block}
 {style_block}
 
-RESEARCH DOSSIER:
-{research_markdown[:16000]}
+{context}
 
 CRITICAL RULES — YOUR SCRIPT WILL BE REJECTED IF YOU VIOLATE THESE:
 1. You MUST cite at least 3 specific numbers, statistics, or data points from the research above
@@ -235,13 +241,56 @@ Score = percentage of YES answers. Be honest but fair."""
 
 
 async def step_4_visual_annotation(draft: str):
-    """Step 4: Add visual annotations."""
+    """Step 4: Add visual annotations + structural review (tests visual feedback loop logic)."""
     print("\n" + "=" * 70)
-    print("STEP 4: VISUAL ANNOTATION")
+    print("STEP 4: VISUAL ANNOTATION + STRUCTURAL REVIEW")
     print("=" * 70)
 
-    prompt = f"""You are a video director. Add visual cues to this script.
-Use labels: [B-ROLL], [MAP], [DATA], [ARCHIVAL], [GRAPHIC], [TRANSITION], [SOUND].
+    # Part A: Structural review (tests the new visual_node logic)
+    structural_prompt = f"""You are a video production director reviewing a script for produceability.
+
+Analyze this script and answer:
+1. Is the script specific enough to film? (Are there concrete locations, people, objects the camera can point at?)
+2. Is the script too abstract? (Too many ideas without visual anchors?)
+3. What specific visual elements are missing that would make this produceable?
+
+Return JSON: {{"produceable": true/false, "structural_issues": ["issue1", "issue2"], "missing_visuals": ["visual1", "visual2"]}}
+
+SCRIPT:
+{draft}
+
+Be strict. A script that is mostly abstract ideas without concrete visuals is NOT produceable."""
+
+    start = time.time()
+    async with RouterClient() as router:
+        structural_review = await router.complete_text(
+            structural_prompt,
+            system="You are a video production director. Return ONLY valid JSON.",
+            model="annotator",
+            temperature=0.0,
+        )
+    elapsed = time.time() - start
+
+    from packages.core.json_utils import extract_json_object
+    review_json = extract_json_object(structural_review)
+    produceable = True
+    structural_issues = []
+    if review_json:
+        try:
+            review = json.loads(review_json)
+            produceable = review.get("produceable", True)
+            structural_issues = review.get("structural_issues", [])
+            print(f"Structural review in {elapsed:.1f}s")
+            print(f"Produceable: {produceable}")
+            print(f"Issues found: {structural_issues}")
+        except json.JSONDecodeError:
+            print(f"Structural review parse failed, assuming produceable")
+    else:
+        print(f"Structural review in {elapsed:.1f}s (could not parse JSON, assuming produceable)")
+
+    # Part B: Visual annotations
+    visual_prompt = f"""You are a video director. Add visual cues to this script.
+Use labels: [B-ROLL], [MAP], [DATA], [ARCHIVAL], [GRAPHIC], [TRANSITION], [SOUND], [TALKING HEAD].
 Keep notes short — one sentence each.
 
 SCRIPT:
@@ -252,7 +301,7 @@ Add visual directions to each section."""
     start = time.time()
     async with RouterClient() as router:
         annotated = await router.complete_text(
-            prompt,
+            visual_prompt,
             system="You are a video director. Output ONLY visual notes in plain text. NO JSON.",
             model="annotator",
         )
@@ -260,10 +309,11 @@ Add visual directions to each section."""
     elapsed = time.time() - start
     print(f"Visual annotations in {elapsed:.1f}s")
     print(f"\n--- VISUAL PLAN ---\n{annotated[:1000]}...\n")
-    return annotated
+
+    return annotated, produceable, structural_issues
 
 
-async def step_5_publish_to_notion(title: str, draft: str, visual_plan: str):
+async def step_5_publish_to_notion(title: str, draft: str, visual_plan: str, score: int, categories: dict):
     """Step 5: Publish to Notion."""
     print("\n" + "=" * 70)
     print("STEP 5: PUBLISH TO NOTION")
@@ -278,11 +328,12 @@ async def step_5_publish_to_notion(title: str, draft: str, visual_plan: str):
         print("SKIP: Notion database ID not configured")
         return None
 
-    print(f"Notion API key: configured ({settings.NOTION_API_KEY[:8]}...)")
+    print(f"Notion API key: {'configured' if settings.NOTION_API_KEY else 'NOT configured'}")
     print(f"Notion database ID: {settings.NOTION_DATABASE_ID}")
 
     notion = NotionScriptClient()
 
+    # Build script entries with both narration and visual plan
     script_entries = [
         {
             "section_type": "Script",
@@ -292,10 +343,18 @@ async def step_5_publish_to_notion(title: str, draft: str, visual_plan: str):
         }
     ]
 
+    # Include score metadata
+    seo_data = {
+        "score": score,
+        "score_categories": categories,
+        "pipeline_version": "feedback-loops-v2",
+        "test_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
     result = await notion.create_script_page(
         title=title,
         script_data={"entries": script_entries},
-        seo_data={},
+        seo_data=seo_data,
     )
 
     if result.success:
@@ -329,11 +388,33 @@ async def main():
         # Step 3: Scoring
         score, feedback, categories = await step_3_scoring(draft)
 
-        # Step 4: Visual Annotation
-        visual_plan = await step_4_visual_annotation(draft)
+        # TEST RESEARCH FEEDBACK LOOP: if credibility < 60%, test research gap
+        credibility = categories.get("credibility", 100)
+        if credibility < 60:
+            print("\n[TEST] Research feedback loop would be triggered (credibility < 60%)")
+            print(f"[TEST] Credibility score: {credibility}% — this would trigger research_gap_node")
+        else:
+            print(f"\n[TEST] Credibility score: {credibility}% — no research gap needed (threshold: 60%)")
+
+        # TEST KARPATHY LOOP: if score < 85, show what mutation would do
+        if score < 85:
+            print(f"\n[TEST] Karpathy loop would activate (score {score} < 85 threshold)")
+            print(f"[TEST] In production, the mutator would run up to 20 iterations to improve the script")
+        else:
+            print(f"\n[TEST] Score {score} >= 85 — script passes quality threshold")
+
+        # Step 4: Visual Annotation + Structural Review
+        visual_plan, produceable, structural_issues = await step_4_visual_annotation(draft)
+
+        # TEST VISUAL FEEDBACK LOOP: if not produceable, re-draft with feedback
+        if not produceable and structural_issues:
+            print("\n[TEST] Visual feedback loop triggered — re-drafting with structural feedback...")
+            visual_feedback_text = "STRUCTURAL ISSUES FROM VISUAL ANNOTATOR:\n" + "\n".join(f"- {issue}" for issue in structural_issues)
+            draft = await step_2_script_writing(research_markdown, visual_feedback=visual_feedback_text)
+            print("[TEST] Re-draft after visual feedback complete")
 
         # Step 5: Publish to Notion
-        notion_result = await step_5_publish_to_notion(TOPIC, draft, visual_plan)
+        notion_result = await step_5_publish_to_notion(TOPIC, draft, visual_plan, score, categories)
 
         # Final Summary
         total_elapsed = time.time() - total_start

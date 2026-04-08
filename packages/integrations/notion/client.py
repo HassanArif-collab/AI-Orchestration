@@ -55,6 +55,27 @@ def _get_notion_exceptions():
         return (ConnectionError, TimeoutError)
 
 
+# Notion API limits rich_text content to 2000 chars per block.
+# Helper to split long text into multiple paragraph blocks.
+_NOTION_TEXT_LIMIT = 2000
+
+
+def _split_narration_blocks(narration: str) -> list[dict]:
+    """Split narration text into Notion paragraph blocks, respecting the 2000-char limit."""
+    if not narration:
+        return []
+    blocks = []
+    for i in range(0, len(narration), _NOTION_TEXT_LIMIT):
+        chunk = narration[i:i + _NOTION_TEXT_LIMIT]
+        blocks.append({
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": chunk}}]
+            },
+        })
+    return blocks
+
+
 class NotionScriptClient:
     """Client for Notion script page operations with graceful degradation.
 
@@ -171,14 +192,9 @@ class NotionScriptClient:
                     },
                 })
 
-                # Add narration paragraph
+                # Add narration paragraph(s) — split at 2000-char Notion limit
                 if narration:
-                    children.append({
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": narration}}]
-                        },
-                    })
+                    children.extend(_split_narration_blocks(narration))
 
                 # Add visual cue as callout with color
                 if visual_cue:
@@ -310,14 +326,9 @@ class NotionScriptClient:
                     },
                 })
 
-                # Add narration paragraph
+                # Add narration paragraph(s) — split at 2000-char Notion limit
                 if narration:
-                    children.append({
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": narration}}]
-                        },
-                    })
+                    children.extend(_split_narration_blocks(narration))
 
                 # Add visual cue as callout
                 if visual_cue:
