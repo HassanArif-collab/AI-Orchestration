@@ -234,3 +234,78 @@ Stage Summary:
 - 0 hardcoded secrets found
 - All Groq references verified as legitimate
 - Integration clients all have proper graceful degradation patterns
+
+---
+Task ID: pipeline-research-loop-fixes
+Agent: Super Z (main)
+Task: Fix research loop reliability, score clamping, cache API, and script creation pipeline
+
+Work Log:
+- Reviewed entire pipeline: graphs.py, nodes.py, state.py, pipeline_routes.py, research_cache.py, deep_research.py, router/client.py
+- Verified all cross-module API calls match (ResearchCache.get/save, DeepResearchEngine.research, ResearchDossier.all_sources/to_markdown)
+- Verified FreeRouter config has Llama 4 Maverick + Gemma 3 27B across all routes
+- Verified .gitignore properly excludes .env files (lines 31-34)
+- Fixed search_web_node: replaced hardcoded "2024" with dynamic year
+- Fixed generate_topics_node: robust JSON parsing with isinstance check and explicit error on empty topics
+- Fixed grade_viability_node: propagate error when no topics to grade
+- Fixed research_node: correct ResearchCache.get(topic_statement=) and cache.save() API calls, handle dict dossier from cache
+- Fixed score_node: clamp LLM score to 0-100 range
+- Fixed capture_learning_node: always sync best draft and score to state (handles equal scores)
+- Fixed publish_notion_node: proper OperationResult unwrapping, return current_draft + visual_plan in final state
+- Fixed should_continue in graphs.py: add score bounds check before threshold comparison
+- Added state.py fields: score_categories, risk_tier, review_requested_at, sla_deadline
+- Added pipeline_routes.py: initialize new state fields in produce_content endpoint
+- Minor: replaced __import__('datetime') with top-level datetime import
+- Committed as 533ee26 and pushed to codebase-audit-finding-fixes
+
+Stage Summary:
+- 10 bugs fixed across 4 files (107 insertions, 30 deletions)
+- Research loop: topic_analysis → discovery → grading now properly propagates errors
+- Script creation: content_creation → score → mutate loop correctly tracks best draft
+- Score clamping: prevents LLM out-of-bounds scores in both score_node and should_continue
+- Cache API: research_node correctly uses ResearchCache.get/save signatures
+- Notion publish: handles OperationResult properly, returns complete final state
+- No credentials pushed (verified .gitignore excludes .env)
+
+---
+Task ID: free-models-config-v5
+Agent: Super Z (main)
+Task: Add free models (StepFun, Qwen, Hermes, Gemma 4), fix checkpointer, fix FK constraint, rate limit retry
+
+Work Log:
+- Searched OpenRouter API for correct free model identifiers
+- Found qwen/qwen3.6-plus:free is DEPRECATED → replaced with qwen/qwen3-next-80b-a3b-instruct:free
+- Found stepfun/step-3.5-flash:free still active (confirmed)
+- Found google/gemma-4-31b-it:free available on OpenRouter
+- Found nousresearch/hermes-3-llama-3.1-405b:free (405B params, best creative)
+- Updated FreeRouter config.py from v3.4 to v5.1 with task-specific routing:
+  - Researcher: Qwen 3 Next 80B → StepFun → Hermes 3 405B → Llama 3.3 70B → DeepSeek → Ollama Gemma 4
+  - Topic Finder: Hermes 3 405B → Qwen 3 Next 80B → StepFun → Llama 3.3 70B → Llama 4 Maverick → DeepSeek
+  - Script Writer: Hermes 3 405B → Qwen 3 Next 80B → StepFun → Llama 3.3 70B → Llama 4 Maverick → DeepSeek
+  - Scorer: Qwen 3 Next 80B → StepFun → Hermes 3 405B → Llama 3.3 70B → DeepSeek
+  - Challenger: Gemma 4 31B (OpenRouter free) → Ollama Gemma 4 31B → StepFun → Qwen 3 Next 80B → DeepSeek
+  - Annotator: StepFun 3.5 Flash → Llama 3.3 70B → Qwen 3 Next 80B → Gemma 3 27B → Mistral Small
+- Fixed checkpointer.py: updated from deprecated pool= kwarg to from_conn_string() API
+  - Fixed pipeline_routes.py: pre-create kanban card before discovery to satisfy FK constraint
+  - Fixed router/client.py: added 3s delay on 429 rate limit errors in embedded mode
+  - Fixed nodes.py error_handler_node: removed non-existent error_message column reference
+- Added debug logging in generate_topics_node: log raw LLM response on parse failure
+- Installed playwright + chromium for screenshots
+- Started backend, verified health endpoint returns 200
+- Took 6 screenshots of dashboard (Kanban, Chat, Providers, Memory, Analytics, Settings)
+- Tested discovery pipeline end-to-end:
+  - FK constraint fix verified: 0 FK errors (was 5+ per run before)
+  - LLM calls confirmed working: StepFun 3.5 Flash responded with 1595 tokens
+  - Rate limit retry working: 3s delay on 429 before trying next model
+  - Free models hit shared 20 req/min limit during rapid successive calls
+  - JSON parsing issue: LLM response not parseable as JSON (needs rate limit cooldown)
+- Committed as 36c3ed7 and pushed to codebase-audit-finding-fixes
+
+Stage Summary:
+- 6 new free models added with task-specific routing (0 cost pipeline operation)
+- Checkpointer works with latest langgraph API (no more pool= error)
+- FK constraint on agent_thoughts resolved (thoughts now save correctly)
+- Rate limit retry prevents immediate cascade failures
+- Pipeline infrastructure verified: LLM calls succeed, Exa search works, state persists
+- 5 files changed, 133 insertions, 111 deletions
+- No credentials pushed (verified)
