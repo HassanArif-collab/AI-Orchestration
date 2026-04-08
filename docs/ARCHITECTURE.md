@@ -94,36 +94,83 @@ HTTP keeps them independent.
 
 ---
 
-## 9-Stage Pipeline
+## Production Pipeline (LangGraph)
 
-### Why 9 Stages?
+### Current Pipeline — 4 Feedback Loops
+
+The production pipeline uses LangGraph with **four feedback loops** for iterative quality improvement:
 
 ```
-Stage 1:  trend_analysis          ← AI discovers topics
-Stage 2:  human_topic_approval    ← HUMAN GATE: You pick the topic
-Stage 3:  research                ← AI researches deeply
-Stage 4:  script_writing          ← AI writes dual-column script
-Stage 5:  visual_planning         ← AI designs visuals
-Stage 6:  seo                     ← AI generates metadata
-Stage 7:  human_review            ← HUMAN GATE: You review script
-Stage 8:  asset_creation          ← AI creates assets
-Stage 9:  publish                 ← AI publishes to Notion
+load_learnings → research → draft → score
+                                    │
+                          ┌─────────┼──────────┐
+                     needs_research  mutate     done
+                          │         │          │
+                     research_gap  → score  capture_learning
+                          │                    │
+                          ↓                    ↓
+                         draft               visuals
+                                               │
+                                         ┌─────┴──────┐
+                                    revise_visual     ok
+                                         │            │
+                                         ↓            ↓
+                                        draft    human_review
+                                                      │
+                                                ┌─────┴──────┐
+                                             approve      revise
+                                                │            │
+                                                ↓            ↓
+                                             publish      draft
 ```
 
-**Reasoning**:
-- Stages map to distinct creative tasks (research ≠ writing ≠ visuals)
-- Human gates at irreversible decisions (topic choice, final script)
-- Each stage is independently testable
-- Failures can resume from last successful stage
+### Nodes (defined in `orchestration/nodes.py`)
 
-**Why human gates at stages 2 and 7?**
-- Stage 2 (topic approval): Wrong topic = wasted 10+ minutes
-- Stage 7 (script review): Script quality determines video quality
+| Node | Purpose | Model | Feedback Loop |
+|------|---------|-------|---------------|
+| `load_learnings` | Load past winning patterns from Zep memory | system | — |
+| `research` | Deep research via Exa.ai web search + LLM synthesis (5-phase deer-flow methodology) | researcher | — |
+| `research_gap` | Targeted supplementary search when credibility is low | researcher | Research Feedback |
+| `draft` | Generate script from research + style constitution + genre rules | script_writer | All loops return here |
+| `score` | 56-question binary checklist evaluation (9 categories) | scorer | Karpathy Loop |
+| `mutate` | Improve weakest sections per scorer feedback | challenger | Karpathy Loop |
+| `capture_learning` | Store winning patterns to Zep for future scripts | — | — |
+| `visuals` | Add visual annotations + structural review | annotator | Visual Feedback |
+| `human_review` | Pause graph for human approval (LangGraph interrupt) | — | Human Review |
+| `publish` | Publish approved script to Notion | — | — |
 
-**Why not more human gates?**
-- Too many gates creates fatigue
-- AI handles routine decisions well
-- Gate at points where human judgment matters most
+### The 4 Feedback Loops
+
+1. **Karpathy Mutation Loop** (`score → mutate → score`): Up to 20 iterations. Scorer identifies weak sections, mutator rewrites them. Best draft is tracked across all iterations.
+
+2. **Research Feedback Loop** (`score → research_gap → draft`): When credibility score < 60% on first pass AND research hasn't been supplemented yet. Runs targeted supplementary searches on 2-3 identified gaps, appends findings to dossier, then routes back to draft. Max 1 additional research round.
+
+3. **Visual Feedback Loop** (`visuals → draft`): Visual annotator runs structural review. If the script is too abstract or visually unproduceable, routes back to draft with specific feedback for the writer.
+
+4. **Human Review Loop** (`human_review → draft`): After visual annotations, the graph pauses for human review. If rejected, routes back to draft with human feedback. Iteration count resets for fresh mutation budget.
+
+### Style & Genre Injection
+
+The script writer loads two JSON files at module level:
+- **`style_reference.json`** — Full Johnny Harris constitution (anchor-bridge formula, classic style writing, peer-to-peer framing, motive loading, conclusion shift, Pakistani adaptation)
+- **`genre_schema.json`** — Genre-specific structural backbone, key challenge, and conclusion pattern
+
+These are injected into the script writer prompt and mutator prompt, ensuring consistent non-AI voice across all iterations.
+
+### Why This Design?
+
+- **Quality without human fatigue**: 3 automated feedback loops handle routine improvements. Human only reviews the final result.
+- **Voice consistency**: Style constitution is loaded once and injected into every draft and mutation, preventing the "each iteration sounds more generic" problem.
+- **Research depth**: If the scorer detects thin evidence, the pipeline automatically gets more research before continuing — the writer never has to work with shallow research.
+- **Crash-proof**: LangGraph checkpoints state after every node. If the server dies at iteration 14, restart picks up exactly where it left off.
+
+### Discovery Graph (Separate)
+
+The discovery graph finds and grades candidate topics. It runs independently with no loops or human gates:
+
+```
+gather_context → search_web → generate_topics → grade_viability → save_topics → END
+```
 
 ---
 

@@ -71,17 +71,54 @@ packages/
 
 ## The Pipeline
 
+### Production Pipeline (4 Feedback Loops)
+
+```
+load_learnings → research → draft → score
+                                    │
+                          ┌─────────┼──────────┐
+                     needs_research  mutate     done
+                          │         │          │
+                     research_gap  → score  capture_learning
+                          │                    │
+                          ↓                    ↓
+                         draft               visuals
+                                               │
+                                         ┌─────┴──────┐
+                                    revise_visual     ok
+                                         │            │
+                                         ↓            ↓
+                                        draft    human_review
+                                                      │
+                                                ┌─────┴──────┐
+                                             approve      revise
+                                                │            │
+                                                ↓            ↓
+                                             publish      draft
+```
+
+| Node | Purpose | Gate? |
+|------|---------|-------|
+| load_learnings | Load past winning patterns from Zep | No |
+| research | Deep research (5-phase deer-flow via Exa.ai) | No |
+| research_gap | Supplementary search on weak evidence (auto) | No |
+| draft | Script generation with style constitution + genre rules | No |
+| score | 56-question binary evaluation | No |
+| mutate | Improve weakest sections (Karpathy loop, up to 20x) | No |
+| capture_learning | Store winning patterns to Zep | No |
+| visuals | Visual annotations + structural review | No |
+| human_review | Review script | **Yes** |
+| publish | Publish to Notion | No |
+
+### Discovery Pipeline
+
 | Stage | Purpose | Gate? |
 |-------|---------|-------|
-| trend_analysis | Discover topics | No |
-| human_topic_approval | Pick topic | **Yes** |
-| research | Deep research | No |
-| script_writing | Generate script | No |
-| visual_planning | Design visuals | No |
-| seo | Metadata | No |
-| human_review | Review script | **Yes** |
-| asset_creation | Create assets | No |
-| publish | Publish to Notion | No |
+| gather_context | Load audience history | No |
+| search_web | Search via Exa.ai | No |
+| generate_topics | Discover candidate topics | No |
+| grade_viability | Score topics (17-question checklist) | No |
+| save_topics | Save passing topics to Kanban | No |
 
 ## Environment Variables
 

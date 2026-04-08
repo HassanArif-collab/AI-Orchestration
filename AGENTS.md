@@ -129,16 +129,60 @@ The active pipeline is powered by **LangGraph** (not the legacy PipelineRunner, 
 
 Entry point: `packages/content_factory/orchestration/graphs.py`
 
+### Two Graphs
+
+**Discovery Graph** — finds and grades candidate topics (no loops, no human gates):
+```
+gather_context → search_web → generate_topics → grade_viability → save_topics → END
+```
+
+**Production Graph** — research, write, refine, publish (4 feedback loops):
+```
+load_learnings → research → draft → score
+                                    │
+                          ┌─────────┼──────────┐
+                     needs_research  mutate     done
+                          │         │          │
+                     research_gap  → score  capture_learning
+                          │                    │
+                          ↓                    ↓
+                         draft               visuals
+                                               │
+                                         ┌─────┴──────┐
+                                    revise_visual     ok
+                                         │            │
+                                         ↓            ↓
+                                        draft    human_review
+                                                      │
+                                                ┌─────┴──────┐
+                                             approve      revise
+                                                │            │
+                                                ↓            ↓
+                                             publish      draft
+```
+
 ### LangGraph Nodes (defined in `orchestration/nodes.py`)
-  - `trend_analysis` — Topic discovery via TopicFinderAgent
-  - `human_topic_approval` — Human gate: pick topic
-  - `research` — Deep research with web search + LLM synthesis
-  - `script_writing` — Dual-column script generation
-  - `visual_planning` — Visual direction + music architecture
-  - `seo` — Metadata generation (titles, tags, description)
-  - `human_review` — Human gate: review script
-  - `asset_creation` — Generate visual assets
-  - `publish` — Publish to Notion / YouTube
+
+| Node | Purpose | Model |
+|------|---------|-------|
+| `load_learnings` | Load past winning patterns from Zep | system |
+| `research` | Deep research (5-phase deer-flow via Exa.ai) | researcher |
+| `research_gap` | Targeted supplementary search on scorer-identified gaps | researcher |
+| `draft` | Script generation with style constitution + genre rules | script_writer |
+| `score` | 56-question binary checklist (9 categories) | scorer |
+| `mutate` | Improve weakest sections (style-aware) | challenger |
+| `capture_learning` | Store winning patterns to Zep | — |
+| `visuals` | Visual annotations + structural review | annotator |
+| `human_review` | Human gate via LangGraph interrupt | — |
+| `publish` | Publish approved script to Notion | — |
+
+### Style & Voice
+
+The `draft_node` and `mutate_node` load and inject:
+- `style_reference.json` — Johnny Harris constitution (anchor-bridge, classic style, peer-to-peer, motive loading, conclusion shift, Pakistani adaptation)
+- `genre_schema.json` — Genre-specific structural rules based on `genre_id`
+
+Both files are loaded at module level and cached (reloaded on server restart).
 
 ### State persistence
   - `kanban_cards` (Supabase) — Card state for each pipeline run
