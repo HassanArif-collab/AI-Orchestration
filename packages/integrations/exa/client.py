@@ -44,9 +44,12 @@ class ExaResearchClient:
     providing structured error context for the frontend.
     """
 
-    def __init__(self) -> None:
-        settings = get_settings()
-        self._api_key = settings.EXA_API_KEY
+    def __init__(self, api_key: str | None = None) -> None:
+        if api_key:
+            self._api_key = api_key
+        else:
+            settings = get_settings()
+            self._api_key = settings.EXA_API_KEY
         self._client = None
 
     def _get_client(self):
@@ -62,6 +65,56 @@ class ExaResearchClient:
             from exa_py import Exa
             self._client = Exa(api_key=self._api_key)
         return self._client
+
+    async def search(self, query: str, num_results: int = 5, days_back: int = 7) -> list[dict]:
+        """Async search for web content matching query.
+
+        This is the method called by LangGraph pipeline nodes (nodes.py).
+        Returns a plain list of dicts with keys: title, url, snippet, published_date.
+        Returns empty list on any error (never crashes the pipeline).
+
+        Args:
+            query: Natural language search query
+            num_results: Max results to return (1-10)
+            days_back: Only include content from last N days
+
+        Returns:
+            List of dicts with title, url, snippet, published_date
+        """
+        client = self._get_client()
+        if client is None:
+            logger.warning("exa_not_configured: EXA_API_KEY is not set")
+            return []
+
+        try:
+            from datetime import datetime, timedelta
+            start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+            response = client.search_and_contents(
+                query=query,
+                type="neural",
+                num_results=min(num_results, 10),
+                text=True,
+                start_published_date=start_date,
+            )
+
+            results = []
+            for item in response.results:
+                snippet = (item.text or "")[:500].strip()
+                if snippet:
+                    results.append({
+                        "title": item.title or "Untitled",
+                        "url": item.url or "",
+                        "snippet": snippet,
+                        "published_date": getattr(item, "published_date", None),
+                    })
+
+            logger.info(f"exa_search_completed: query='{query[:50]}', results={len(results)}")
+            return results
+
+        except Exception as e:
+            logger.warning(f"exa_search_failed_non_blocking: {e}")
+            return []
 
     def search_trending(
         self,

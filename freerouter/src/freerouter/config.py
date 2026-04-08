@@ -1,72 +1,88 @@
 """
-config.py — Task-to-model routing table (v3.1).
+config.py — Task-to-model routing table (v3.4).
 
-2 providers: OpenRouter (free tier) + Ollama Cloud.
+2 providers: OpenRouter (paid + free) + Ollama Cloud.
 7 routes with multi-fallback chains.
 
 Providers:
-    OpenRouter   — free tier models (Qwen 3.6, StepFun 3.5 Flash)
-    Ollama Cloud — creative models (gemma4, nemotron-cascade-2)
+    OpenRouter   — models that work in current environment:
+                    deepseek-chat (paid, reliable), llama-4-maverick (paid),
+                    llama-3.1-70b (paid), gemma-3-27b-it (free, rate-limited),
+                    stepfun-3.5-flash (free, rate-limited), mistral-small-24b (paid)
+    Ollama Cloud — creative models (gemma2, llama3)
 
 Set your API keys in freerouter/.env:
     OPENROUTER_API_KEY=sk-or-...   # required
-    OLLAMA_API_KEY=...             # required
+    OLLAMA_API_KEY=...             # optional
 
 LiteLLM model string format:
     openrouter/<provider>/<model>       →  routes via OpenRouter
     ollama_chat/<model>                 →  routes via Ollama (local or cloud)
 
-Each route has: model, fallback (optional), fallback2 (optional).
-server.py tries them in order: model → fallback → fallback2.
+Each route has: model, fallback (optional), fallback2 (optional), fallback3 (optional).
+server.py tries them in order: model → fallback → fallback2 → fallback3.
 """
 
 ROUTES: dict[str, dict[str, str]] = {
     # ── Generic fallback ─────────────────────────────────────────────────
     "auto": {
-        "model":      "openrouter/stepfun/step-3.5-flash:free",
-        "fallback":   "openrouter/qwen/qwen3.6-plus:free",
+        "model":      "openrouter/deepseek/deepseek-chat",
+        "fallback":   "openrouter/meta-llama/llama-4-maverick",
+        "fallback2":  "openrouter/stepfun/step-3.5-flash:free",
+        "fallback3":  "openrouter/google/gemma-3-27b-it:free",
     },
 
-    # ── Task 1: Researcher (deep synthesis, 1M context) ─────────────────
-    # Qwen 3.6 Plus: strong synthesis, 1M context window
+    # ── Task 1: Researcher (deep synthesis, large context) ───────────────
+    # DeepSeek Chat: excellent reasoning, large context
     "researcher": {
-        "model":      "openrouter/qwen/qwen3.6-plus:free",
-        "fallback":   "openrouter/stepfun/step-3.5-flash:free",
+        "model":      "openrouter/deepseek/deepseek-chat",
+        "fallback":   "openrouter/meta-llama/llama-4-maverick",
+        "fallback2":  "openrouter/meta-llama/llama-3.1-70b-instruct",
+        "fallback3":  "openrouter/stepfun/step-3.5-flash:free",
     },
 
     # ── Task 2: Topic Finder (creative ideation, gap analysis) ────────────
-    # Ollama gemma4: frontier-level creative agentic ideation (26b cloud variant)
+    # Llama 4 Maverick: strong creative reasoning with 128k context
     "topic_finder": {
-        "model":      "ollama_chat/gemma4:26b",
-        "fallback":   "openrouter/qwen/qwen3.6-plus:free",
+        "model":      "openrouter/meta-llama/llama-4-maverick",
+        "fallback":   "openrouter/deepseek/deepseek-chat",
+        "fallback2":  "openrouter/meta-llama/llama-3.1-70b-instruct",
+        "fallback3":  "openrouter/google/gemma-3-27b-it:free",
     },
 
-    # ── Task 3: Script Writer (creative prose, 1M context) ───────────────
-    # Qwen 3.6 Plus: strong creative writing, style adherence, 1M context
+    # ── Task 3: Script Writer (creative prose, large context) ────────────
+    # Llama 4 Maverick: excellent creative writing with style adherence
     "script_writer": {
-        "model":      "openrouter/qwen/qwen3.6-plus:free",
-        "fallback":   "openrouter/stepfun/step-3.5-flash:free",
+        "model":      "openrouter/meta-llama/llama-4-maverick",
+        "fallback":   "openrouter/deepseek/deepseek-chat",
+        "fallback2":  "openrouter/meta-llama/llama-3.1-70b-instruct",
+        "fallback3":  "openrouter/google/gemma-3-27b-it:free",
     },
 
     # ── Task 4: Scoring Engine (fast pass/fail, logical precision) ───────
-    # StepFun 3.5 Flash: 88.2% τ²-Bench, deterministic evaluation
+    # DeepSeek Chat: fast, precise evaluation
     "scorer": {
-        "model":      "openrouter/stepfun/step-3.5-flash:free",
-        "fallback":   "openrouter/qwen/qwen3.6-plus:free",
+        "model":      "openrouter/deepseek/deepseek-chat",
+        "fallback":   "openrouter/meta-llama/llama-4-maverick",
+        "fallback2":  "openrouter/stepfun/step-3.5-flash:free",
+        "fallback3":  "openrouter/google/gemma-3-27b-it:free",
     },
 
     # ── Task 5: Challenger Generator (JSON rewrite, structured output) ───
-    # Ollama nemotron-cascade-2: frontier reasoning, structured rewriting
-    # Note: nemotron-cascade-2:30b may not exist on Ollama Cloud; fallback handles failure
+    # DeepSeek Chat: strong reasoning for mutation
     "challenger": {
-        "model":      "ollama_chat/nemotron-cascade-2:30b",
-        "fallback":   "openrouter/qwen/qwen3.6-plus:free",
+        "model":      "openrouter/deepseek/deepseek-chat",
+        "fallback":   "openrouter/meta-llama/llama-4-maverick",
+        "fallback2":  "openrouter/mistralai/mistral-small-24b-instruct-2501",
+        "fallback3":  "openrouter/stepfun/step-3.5-flash:free",
     },
 
-    # ── Task 6: Visual Annotator (short cues, repetitive) ────────────────
-    # Qwen 3.6 Plus: high quality descriptive output
+    # ── Task 6: Visual Annotator (short cues, descriptive) ───────────────
+    # Mistral Small: efficient, descriptive output
     "annotator": {
-        "model":      "openrouter/qwen/qwen3.6-plus:free",
-        "fallback":   "openrouter/stepfun/step-3.5-flash:free",
+        "model":      "openrouter/mistralai/mistral-small-24b-instruct-2501",
+        "fallback":   "openrouter/meta-llama/llama-4-maverick",
+        "fallback2":  "openrouter/google/gemma-3-27b-it:free",
+        "fallback3":  "openrouter/stepfun/step-3.5-flash:free",
     },
 }

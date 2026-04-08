@@ -203,6 +203,7 @@ class RouterClient:
         - Automatic retry with exponential backoff
         - Fallback to "auto" model on 503 errors
         - Cached AsyncOpenAI client for structured completions
+        - Direct LiteLLM fallback when FreeRouter is not running (embedded mode)
     """
 
     # Class-level shared HTTP client for connection pooling
@@ -223,6 +224,74 @@ class RouterClient:
         failure_threshold=10,
         recovery_timeout=30,
     )
+
+    # Embedded mode: when FreeRouter is not reachable, use LiteLLM directly
+    _embedded_mode: bool = False
+    _embedded_routes: Optional[dict] = None
+    _embedded_ollama_base: Optional[str] = None
+    _embedded_ollama_key: Optional[str] = None
+
+    @classmethod
+    def _init_embedded_mode(cls):
+        """Initialize embedded LiteLLM mode with FreeRouter routing table."""
+        if cls._embedded_routes is not None:
+            return
+        try:
+            # Import FreeRouter config to get routing table
+            import sys
+            freerouter_src = '/home/z/AI-Orchestration/freerouter/src'
+            if freerouter_src not in sys.path:
+                sys.path.insert(0, freerouter_src)
+            from freerouter.config import ROUTES
+            cls._embedded_routes = ROUTES
+
+            # Load Ollama config from freerouter/.env
+            import os
+            from dotenv import load_dotenv
+            freerouter_env = os.path.join('/home/z/AI-Orchestration', 'freerouter', '.env')
+            if os.path.exists(freerouter_env):
+                load_dotenv(freerouter_env, override=True)
+            cls._embedded_ollama_base = os.getenv('OLLAMA_API_BASE', 'https://ollama.com')
+            cls._embedded_ollama_key = os.getenv('OLLAMA_API_KEY', '')
+
+            cls._embedded_mode = True
+        except Exception as e:
+            # Use print to avoid structlog issues during class init
+            print(f"Warning: embedded_mode_init_failed: {e}")
+            cls._embedded_mode = False
+
+    @classmethod
+    def _resolve_model_chain(cls, model: str) -> list[str]:
+        """Resolve a task name to a chain of LiteLLM model strings."""
+        if cls._embedded_routes is None:
+            return [model]
+        route = cls._embedded_routes.get(model)
+        if route:
+            models = []
+            for key in ('model', 'fallback', 'fallback2', 'fallback3'):
+                val = route.get(key)
+                if val:
+                    models.append(val)
+            return models
+        return [model]
+
+    @classmethod
+    def _build_litellm_kwargs(cls, model_str: str) -> dict:
+        """Build extra kwargs for litellm based on provider."""
+        kwargs = {}
+        if model_str.startswith('ollama'):
+            kwargs['api_base'] = cls._embedded_ollama_base
+            if cls._embedded_ollama_key:
+                kwargs['api_key'] = cls._embedded_ollama_key
+        return kwargs
+
+    @classmethod
+    def _extract_provider(cls, model_str: str) -> str:
+        """Extract provider name from LiteLLM model string."""
+        prefix = model_str.split('/')[0]
+        if prefix.startswith('ollama'):
+            return 'ollama'
+        return prefix
 
     @classmethod
     def reset_circuit_breaker(cls) -> None:
@@ -287,6 +356,9 @@ class RouterClient:
         self._startup_check_enabled = startup_check and settings.FREEROUTER_STARTUP_CHECK
 
         self._http = self._get_shared_client(self.base_url, timeout)
+
+        # Pre-initialize embedded mode so it's ready when needed
+        self._init_embedded_mode()
 
     async def _startup_health_check(self) -> None:
         """
@@ -412,6 +484,8 @@ class RouterClient:
         """
         Call FreeRouter and return parsed response with exponential backoff retries.
 
+        Falls back to embedded LiteLLM mode if FreeRouter is not reachable.
+
         Returns dict with keys:
             content  (str)  — the model's reply
             model    (str)  — actual model used (from x-freerouter-model header)
@@ -422,6 +496,12 @@ class RouterClient:
         If a specific model returns 503, automatically retries with model="auto"
         so FreeRouter's fallback chain kicks in.
         """
+        # If in embedded mode (FreeRouter not running), use direct LiteLLM
+        if self._healthy is False or (self._healthy is None and not self._startup_check_enabled):
+            return await self._complete_embedded(
+                messages, model=model, max_tokens=max_tokens, temperature=temperature
+            )
+
         # Circuit breaker check — reject immediately if OPEN
         if not self._circuit_breaker.allow_request():
             raise LLMClientError("Circuit breaker is OPEN for RouterClient")
@@ -580,6 +660,73 @@ class RouterClient:
 
         raise LLMClientError(f"LLM call failed after {retries} attempts: {last_error}")
 
+    async def _complete_embedded(
+        self,
+        messages: list[dict],
+        model: str = "auto",
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> dict:
+        """Direct LiteLLM call with FreeRouter routing table (embedded mode).
+
+        Used when FreeRouter proxy is not running. Tries each model in the
+        fallback chain until one succeeds.
+        """
+        self._init_embedded_mode()
+        if not self._embedded_mode:
+            raise LLMClientError("Embedded LiteLLM mode not available")
+
+        import litellm
+        litellm.drop_params = True
+        model_chain = self._resolve_model_chain(model)
+        last_error = None
+
+        for m in model_chain:
+            try:
+                extra = self._build_litellm_kwargs(m)
+                resp = await litellm.acompletion(
+                    model=m,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    **extra,
+                )
+                content = resp.choices[0].message.content or ''
+                # Fix reasoning models that put output in reasoning_content
+                if not content and hasattr(resp.choices[0].message, 'reasoning_content'):
+                    content = resp.choices[0].message.reasoning_content or ''
+
+                provider = self._extract_provider(m)
+                usage = {}
+                if hasattr(resp, 'usage'):
+                    usage = {
+                        'prompt_tokens': getattr(resp.usage, 'prompt_tokens', 0),
+                        'completion_tokens': getattr(resp.usage, 'completion_tokens', 0),
+                        'total_tokens': getattr(resp.usage, 'total_tokens', 0),
+                    }
+
+                log.info(
+                    'llm_embedded_call_ok',
+                    provider=provider,
+                    model=m,
+                    tokens=usage.get('total_tokens', 0),
+                )
+                return {
+                    'content': content,
+                    'model': m,
+                    'provider': provider,
+                    'usage': usage,
+                    'limits': {'rpm_remaining': -1, 'tpm_remaining': -1, 'provider': provider},
+                }
+            except Exception as e:
+                last_error = e
+                log.warning(f"embedded_model_failed model={m} error={e}")
+                continue
+
+        raise LLMClientError(
+            f"All embedded LiteLLM models failed: {model_chain}. Last error: {last_error}"
+        ) from last_error
+
     async def complete_text(
         self,
         prompt: str,
@@ -588,22 +735,26 @@ class RouterClient:
         **kwargs: Any,
     ) -> str:
         """Convenience wrapper: single prompt string in, text string out."""
-        # Lazy health check on first call
+        # Lazy health check on first call — use embedded mode if FreeRouter is down
         if self._healthy is None and self._startup_check_enabled:
             try:
                 await self._startup_health_check()
                 self._healthy = True
             except LLMClientError:
                 self._healthy = False
-                raise LLMClientError(
-                    f"FreeRouter not running at {self.base_url}. "
-                    "Run: cd freerouter && python -m freerouter proxy"
-                )
+                log.warning("freerouter_not_running_falling_back_to_embedded_litellm")
+                self._init_embedded_mode()
 
         messages: list[dict] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+
+        # If FreeRouter is not healthy or startup check was skipped, use embedded LiteLLM
+        if self._healthy is False or (self._healthy is None and not self._startup_check_enabled):
+            result = await self._complete_embedded(messages, model=model, **kwargs)
+            return result["content"]
+
         result = await self.complete(messages, model=model, **kwargs)
         return result["content"]
 

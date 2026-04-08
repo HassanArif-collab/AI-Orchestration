@@ -68,9 +68,9 @@ def _resolve(model: str) -> list[str]:
     """
     route = ROUTES.get(model)
     if route:
-        # Build list from route keys (model, fallback, fallback2) — skip missing
+        # Build list from route keys (model, fallback, fallback2, fallback3) — skip missing
         models = []
-        for key in ("model", "fallback", "fallback2"):
+        for key in ("model", "fallback", "fallback2", "fallback3"):
             val = route.get(key)
             if val:
                 models.append(val)
@@ -195,7 +195,7 @@ async def list_models():
     models = []
     for task_name, route in ROUTES.items():
         chain = []
-        for key in ("model", "fallback", "fallback2"):
+        for key in ("model", "fallback", "fallback2", "fallback3"):
             val = route.get(key)
             if val:
                 chain.append(val)
@@ -206,6 +206,7 @@ async def list_models():
             "primary": route["model"],
             "fallback": route.get("fallback", ""),
             "fallback2": route.get("fallback2", ""),
+            "fallback3": route.get("fallback3", ""),
             "chain": chain,
         })
     return {"object": "list", "data": models}

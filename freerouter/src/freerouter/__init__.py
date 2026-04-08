@@ -12,7 +12,7 @@ v3.1 Changes:
   - StepFun 3.5 Flash as primary for auto/scorer
 """
 
-__version__ = "3.1.0"
+__version__ = "3.4.0"
 __author__ = "FreeRouter"
 
 from freerouter.config import ROUTES

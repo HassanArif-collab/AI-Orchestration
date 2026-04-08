@@ -151,7 +151,7 @@ Search Results:
 Return a JSON array of topics. Each topic should have:
 - title: A catchy title for the documentary
 - description: One sentence describing the story angle  
-- gap_type: One of "Hidden Mechanism", "Invisible Victim", "False Binary", "Wrong Villain"
+- gap_type: One of "Hidden Mechanism", "Oversimplified Narrative", "Hidden Connection", "Universal in Local"
 - mainstream_assumption: What most people wrongly believe
 - reality: What's actually true
 - urgency: Why this matters NOW
@@ -257,34 +257,10 @@ async def grade_viability_node(state: DiscoveryState) -> dict:
                         f"❌ '{title[:40]}...' failed ({score}%)"
                     )
 
-                # CHECKPOINT: Save graded topic to kanban_cards immediately (Issue 14)
-                # This ensures that if the node fails partway through grading,
-                # the already-graded topics are preserved in the database.
-                # Without this checkpoint, a crash after grading topic 3 of 5
-                # would lose all grading progress.
-                try:
-                    from packages.core.supabase_client import get_supabase
-                    sb = get_supabase()
-                    sb.table("kanban_cards").insert({
-                        "title": title,
-                        "column_index": 2,  # Suggested Topics
-                        "status": "suggested",
-                        "metadata": {
-                            "topic_brief": {
-                                **topic,
-                                "viability_score": score,
-                                "score_breakdown": scores,
-                                "passed": score >= 60,
-                            },
-                            "viability_score": score,
-                        },
-                        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }).execute()
-                except Exception as checkpoint_err:
-                    # Checkpoint failure is non-fatal — topic is still in graded list
-                    logger.warning(f"topic_checkpoint_save_failed: {title} - {checkpoint_err}")
-                    
+                # NOTE: Topics are saved to kanban_cards by save_topics_node (next step).
+                # We don't insert here to avoid duplicates.
+                # LangGraph checkpointing handles crash recovery — if this node fails
+                # partway, the graph will restart from this node on retry.
         except Exception as e:
             logger.warning(f"topic_grading_failed: {title} - {e}")
             # Include with low score on failure
