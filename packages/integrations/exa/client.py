@@ -100,7 +100,7 @@ class ExaResearchClient:
 
             results = []
             for item in response.results:
-                snippet = (item.text or "")[:500].strip()
+                snippet = (item.text or "")[:2000].strip()
                 if snippet:
                     results.append({
                         "title": item.title or "Untitled",
@@ -158,8 +158,8 @@ class ExaResearchClient:
 
             results = []
             for item in response.results:
-                # Truncate text to first 500 chars for context efficiency
-                snippet = (item.text or "")[:500].strip()
+                # Use up to 2000 chars per result (deer-flow upgrade: was 500)
+                snippet = (item.text or "")[:2000].strip()
                 if snippet:
                     results.append({
                         "title": item.title or "Untitled",
@@ -280,7 +280,7 @@ class ExaResearchClient:
             context_parts.append(
                 f"\n[Source {i}] {r['title']}{date_str}\n"
                 f"URL: {r['url']}\n"
-                f"Key Info: {r['snippet'][:300]}"
+                f"Key Info: {r['snippet'][:800]}"
             )
 
         context_str = "\n".join(context_parts)

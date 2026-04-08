@@ -1,19 +1,30 @@
 """
-production/deep_research.py — Deep Research Engine (from deer-flow methodology).
+production/deep_research.py — Deep Research Engine (deer-flow v2 methodology).
 
 Context: This engine implements the systematic multi-angle research methodology
-from deer-flow's deep-research skill. It replaces the simple single-prompt
-research approach with a 4-phase systematic process.
+from ByteDance's deer-flow deep-research skill. It is the core of the Kerapathys
+content factory, providing rich research dossiers that the script writer uses
+to generate evidence-driven documentary scripts.
 
-PHASES:
-  1. Broad Exploration  — Understand the landscape, identify key dimensions
-  2. Deep Dive          — Targeted research on each dimension
-  3. Diversity & Validation — Ensure all information types are covered
-  4. Synthesis Check    — Verify quality bar before proceeding
+PHASES (from deer-flow deep-research SKILL.md):
+  0. Research Planning    — LLM creates structured JSON plan with typed steps
+  1. Broad Exploration     — Understand the landscape, identify key dimensions
+  1b. Deep Reading         — Fetch full article text for top sources (NEW: deer-flow)
+  2. Deep Dive             — Targeted research on each dimension with full text
+  3. Diversity & Validation — Ensure all 6 information types are covered
+  4. Synthesis Quality Check — Qualitative checklist before finalizing (UPGRADED)
 
-FIXES APPLIED:
-1. Added checkpoint system for partial results on failure
-2. Added cross-source fact validation
+DEER-FLOW v2 UPGRADES:
+1. Research Planning step — structured JSON plan before deep dive (deer-flow Planner)
+2. Deep Reading via fetch_contents() — full article text, not just snippets
+3. Temporal awareness — precise date formatting in queries
+4. Quality checklist — qualitative LLM assessment, not just count thresholds
+5. Citation enforcement — every fact in dossier includes source URL
+6. Increased text limits — 4000 chars per search result, 8000 per deep read
+
+PREVIOUS FIXES PRESERVED:
+1. Checkpoint system for partial results on failure
+2. Cross-source fact validation
 3. Fact deduplication using add_fact_if_unique()
 4. Accurate search count tracking (after search, not before)
 5. Resume from checkpoint capability
@@ -45,7 +56,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from packages.core.config import get_settings
-from packages.core.json_utils import extract_json_array
+from packages.core.json_utils import extract_json_array, extract_json_object
 from packages.core.logger import get_logger
 from packages.router.client import RouterClient
 from packages.router.web_search import WebSearchClient, SearchResult
@@ -64,7 +75,8 @@ from .models import (
 log = get_logger(__name__)
 
 
-# System prompts for different research phases
+# ─── System prompts for different research phases ─────────────────────────────
+
 SYSTEM_RESEARCHER = """You are an elite investigative researcher building the foundation for a Johnny Harris-style documentary.
 
 Your job is to uncover raw truth, tangible physical evidence, and human characters.
@@ -92,6 +104,33 @@ For each fact, identify:
 - The type of information (fact/data, example, opinion, trend, comparison, challenge)
 
 Return ONLY valid JSON."""
+
+# NEW: Research planning prompt (from deer-flow Planner node)
+SYSTEM_RESEARCH_PLANNER = """You are a research planning specialist. Given a topic and initial
+search results, create a structured research plan with specific search queries
+for each dimension that needs investigation.
+
+Your plan MUST include:
+- At least one dimension with need_search=true (web search required)
+- Specific, targeted search queries (not generic queries)
+- Multiple keyword phrasings per dimension for comprehensive coverage
+
+Current date: {current_date}
+Current time context: {time_context}"""
+
+# NEW: Quality assessment prompt (from deer-flow Phase 4 synthesis check)
+SYSTEM_QUALITY_CHECKER = """You are a research quality auditor. Evaluate whether the
+collected research is rich and specific enough to write a compelling documentary script.
+
+You are checking for:
+- Concrete facts with specific numbers, names, dates (not vague generalizations)
+- Real examples and case studies (not hypothetical scenarios)
+- Named people, organizations, and places (not anonymous references)
+- Specific events with dates (not "recently" or "in recent years")
+- Data and statistics from credible sources
+- Multiple perspectives and counterarguments
+
+Return ONLY a JSON object with your assessment."""
 
 
 class ResearchCheckpoint:
@@ -152,16 +191,21 @@ class ResearchCheckpoint:
 
 class DeepResearchEngine:
     """
-    Systematic research engine implementing deer-flow methodology.
+    Systematic research engine implementing deer-flow v2 methodology.
 
-    The engine orchestrates multiple search queries, extracts information
-    from results, and assembles a comprehensive ResearchDossier.
+    The engine orchestrates multiple search queries, performs deep reading
+    of full articles, extracts information from rich text, and assembles
+    a comprehensive ResearchDossier with citations.
 
-    Features:
+    Deer-Flow v2 Features:
+        - Research planning step with structured JSON plan
+        - Deep reading via Exa get_contents() for full article text
+        - Temporal awareness with precise date formatting
+        - Qualitative quality checklist before synthesis
+        - Citation enforcement on every fact
         - Checkpoint system for recovery from failures
         - Cross-source fact validation
         - Fact deduplication
-        - Rate-limited web searches
     """
 
     def __init__(
@@ -203,6 +247,40 @@ class DeepResearchEngine:
         "If", "So", "As", "Do", "Did", "Can", "Will", "May",
     })
 
+    # ─── Temporal Awareness (deer-flow GAP #5) ───────────────────────────────
+
+    def _get_current_date(self) -> str:
+        """Get current date in YYYY-MM-DD format (deer-flow temporal awareness)."""
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _get_time_context(self) -> str:
+        """Get human-readable time context for query generation."""
+        now = datetime.now()
+        return now.strftime("%B %Y")
+
+    def _get_current_year(self) -> int:
+        """Get the current year for temporal queries."""
+        return datetime.now().year
+
+    def _get_date_prefix_for_recency(self, days_back: int = 30) -> str:
+        """Get date prefix string based on how recent the info needs to be.
+
+        Deer-flow uses different temporal precision depending on recency:
+        - Very recent (< 30 days): "April 2026" or "March 2026"
+        - Recent (< 6 months): "2026"
+        - Older: just the year
+        """
+        now = datetime.now()
+        if days_back <= 30:
+            # Use month+year for very recent topics
+            return now.strftime("%B %Y")
+        elif days_back <= 180:
+            return str(now.year)
+        else:
+            return str(now.year)
+
+    # ─── Main Research Orchestration ─────────────────────────────────────────
+
     async def research(
         self,
         topic: str,
@@ -213,7 +291,15 @@ class DeepResearchEngine:
         resume_from_checkpoint: bool = True,
     ) -> ResearchDossier:
         """
-        Execute the full 4-phase research process.
+        Execute the full research process with deer-flow v2 methodology.
+
+        Pipeline:
+          0. Research Planning (NEW — deer-flow Planner)
+          1. Broad Exploration (upgraded with temporal awareness)
+          1b. Deep Reading (NEW — fetch full articles for top sources)
+          2. Deep Dive per dimension (with full article text)
+          3. Diversity & Validation
+          4. Synthesis Quality Check (UPGRADED — qualitative LLM assessment)
 
         Args:
             topic: The research topic
@@ -224,7 +310,7 @@ class DeepResearchEngine:
             resume_from_checkpoint: Whether to resume from previous checkpoint
 
         Returns:
-            ResearchDossier with all findings
+            ResearchDossier with all findings, citations, and quality assessment
         """
         start_time = time.time()
 
@@ -255,10 +341,17 @@ class DeepResearchEngine:
 
         try:
             for iteration in range(start_iteration, max_iterations):
-                log.info(f"research_iteration_{iteration + 1}: topic='{topic[:50]}...'")
+                log.info(f"research_iteration_{iteration + 1}: topic='{topic[:50]}...' searches_used={self._search_count}")
 
-                # Phase 1: Broad Exploration
-                if iteration == 0 and start_phase in ("begin", "phase_1"):
+                # Phase 0: Research Planning (NEW — from deer-flow Planner)
+                if iteration == 0 and start_phase in ("begin", "phase_0"):
+                    research_plan = await self._phase_research_planning(topic, dossier)
+                    dossier.research_plan = research_plan
+                    if self._checkpoint:
+                        self._checkpoint.save(topic, dossier, "phase_0_complete", iteration, self._search_count)
+
+                # Phase 1: Broad Exploration (upgraded with temporal awareness)
+                if iteration == 0 and start_phase in ("begin", "phase_0", "phase_1"):
                     dimensions = await self._phase_broad_exploration(topic, dossier)
                     dossier.dimensions_explored = dimensions
                     if self._checkpoint:
@@ -267,6 +360,12 @@ class DeepResearchEngine:
                     # Later iterations: find missing dimensions
                     missing = dossier.get_missing_elements()
                     dimensions = self._derive_dimensions_from_missing(missing)
+
+                # Phase 1b: Deep Reading (NEW — deer-flow web_fetch equivalent)
+                if iteration == 0 and start_phase in ("begin", "phase_0", "phase_1"):
+                    await self._phase_deep_reading(topic, dossier)
+                    if self._checkpoint:
+                        self._checkpoint.save(topic, dossier, "phase_1b_deep_read", iteration, self._search_count)
 
                 # Phase 2: Deep Dive
                 for dim in dimensions:
@@ -282,7 +381,10 @@ class DeepResearchEngine:
                 if self._checkpoint:
                     self._checkpoint.save(topic, dossier, "phase_3_complete", iteration, self._search_count)
 
-                # Phase 4: Synthesis Check
+                # Phase 4: Synthesis Quality Check (UPGRADED — qualitative LLM assessment)
+                quality_report = await self._phase_quality_check(topic, dossier)
+                dossier.quality_report = quality_report
+
                 if dossier.is_complete(target_completeness):
                     log.info(f"research_complete: {dossier.to_research_summary()}")
 
@@ -301,7 +403,8 @@ class DeepResearchEngine:
 
             log.info(
                 f"research_finished: completeness={dossier.completeness_score:.0%} "
-                f"searches={self._search_count} duration={dossier.research_duration_seconds:.1f}s"
+                f"searches={self._search_count} duration={dossier.research_duration_seconds:.1f}s "
+                f"sources={len(dossier.all_sources)} facts={len(dossier.all_facts)}"
             )
 
             # Clear checkpoint on successful completion
@@ -322,6 +425,100 @@ class DeepResearchEngine:
             if self._owns_router and self._router is not None:
                 await self._router.close()
 
+    # ─── Phase 0: Research Planning (NEW — deer-flow Planner) ────────────────
+
+    async def _phase_research_planning(
+        self,
+        topic: str,
+        dossier: ResearchDossier,
+    ) -> dict:
+        """
+        Phase 0: Create a structured research plan before searching.
+
+        From deer-flow's Planner node: analyzes the topic and creates a structured
+        JSON plan with typed steps, ensuring at least one search step and
+        multiple keyword phrasings per dimension.
+
+        Returns a dict with:
+            - thought: analysis of what needs researching
+            - dimensions: list of dimension names to explore
+            - has_enough_context: whether initial context is sufficient
+        """
+        log.info(f"phase_0_research_planning: topic='{topic[:50]}'")
+
+        current_date = self._get_current_date()
+        time_context = self._get_time_context()
+
+        prompt = f"""You are planning research for a documentary about: "{topic}"
+
+Current date: {current_date}
+Time context: {time_context}
+
+Create a research plan. Think about what specific angles, data, and evidence
+would make this documentary compelling and factually rich.
+
+Return a JSON object with this EXACT structure:
+{{
+    "thought": "Your analysis of what makes this topic interesting and what specific angles need investigation",
+    "has_enough_context": false,
+    "dimensions": [
+        {{
+            "name": "Dimension name",
+            "search_queries": ["query 1", "query 2", "query 3"],
+            "what_to_find": "Specific facts, names, numbers to look for"
+        }}
+    ]
+}}
+
+Rules:
+- Create 3-5 dimensions, each with 2-4 specific search queries
+- Every dimension MUST have search_queries (web search required)
+- Queries should be specific and targeted, NOT generic
+- Use the current date/time context to form precise queries
+- Include at least one dimension about challenges/criticism/counterarguments
+- Include at least one dimension seeking specific data/statistics
+- Think about what would surprise or challenge the viewer's assumptions
+
+Output ONLY the JSON object, nothing else."""
+
+        try:
+            response = await self._router.complete_text(
+                prompt,
+                system=SYSTEM_RESEARCH_PLANNER.format(
+                    current_date=current_date,
+                    time_context=time_context,
+                ),
+                model="researcher",
+                max_tokens=1500,
+                temperature=0.3,
+            )
+
+            plan_str = extract_json_object(response)
+            if plan_str:
+                plan = json.loads(plan_str)
+                if isinstance(plan, dict) and "dimensions" in plan:
+                    dimensions = []
+                    for dim in plan["dimensions"]:
+                        if isinstance(dim, dict) and "name" in dim:
+                            dimensions.append(dim["name"])
+                    log.info(f"phase_0_complete: planned_dimensions={dimensions}")
+                    return plan
+
+        except Exception as e:
+            log.warning(f"research_planning_failed: {e}")
+
+        # Fallback: return minimal plan
+        return {
+            "thought": f"Research planning failed, using default dimensions for {topic}",
+            "has_enough_context": False,
+            "dimensions": [
+                {"name": "Overview and Key Facts", "search_queries": [f"{topic} overview"]},
+                {"name": "Challenges and Criticism", "search_queries": [f"{topic} challenges"]},
+            ],
+        }
+
+    # ─── Phase 1: Broad Exploration (upgraded with temporal awareness) ───────
+
     async def _phase_broad_exploration(
         self,
         topic: str,
@@ -330,34 +527,141 @@ class DeepResearchEngine:
         """
         Phase 1: Broad exploration to identify key dimensions.
 
-        Executes multiple broad searches and extracts dimensions from results.
+        Upgraded from deer-flow: uses temporal awareness for precise date queries.
+        If a research plan exists (Phase 0), uses the planned queries.
         """
         log.info(f"phase_1_broad_exploration: topic='{topic[:50]}'")
 
-        # Build initial queries with current year for relevance
-        current_year = self._get_current_year()
-        queries = [
-            f"{topic} overview {current_year}",
-            f"{topic} key issues challenges",
-            f"{topic} stakeholders perspectives",
-            f"what is {topic} explained",
-        ]
+        # Use planned queries from Phase 0 if available
+        planned_queries = []
+        if dossier.research_plan and isinstance(dossier.research_plan, dict):
+            for dim in dossier.research_plan.get("dimensions", []):
+                if isinstance(dim, dict) and "search_queries" in dim:
+                    planned_queries.extend(dim["search_queries"][:2])  # Take first 2 per dimension
+
+        if planned_queries:
+            queries = planned_queries[:6]  # Limit to 6 broad queries
+        else:
+            # Fallback: build queries with temporal awareness
+            time_ctx = self._get_time_context()
+            year = self._get_current_year()
+            queries = [
+                f"{topic} overview {year}",
+                f"{topic} key issues challenges {time_ctx}",
+                f"{topic} stakeholders perspectives {year}",
+                f"what is {topic} explained {year}",
+            ]
 
         results = await self._multi_search(queries, num_per_query=5)
 
         # Extract text content from results
         all_snippets = []
+        all_urls = []
         for query, search_results in results.items():
             for r in search_results:
                 dossier.add_source(r.url)
+                all_urls.append(r.url)
                 all_snippets.append(f"{r.title}: {r.snippet}")
 
         # Use LLM to extract dimensions from snippets
         combined_text = "\n".join(all_snippets[:20])  # Limit context
         dimensions = await self._extract_dimensions(combined_text, topic)
 
-        log.info(f"phase_1_complete: dimensions={dimensions}")
+        # Store URLs for deep reading phase
+        dossier._broad_search_urls = all_urls[:10]  # Top 10 URLs for deep reading
+
+        log.info(f"phase_1_complete: dimensions={dimensions}, urls_collected={len(all_urls)}")
         return dimensions
+
+    # ─── Phase 1b: Deep Reading (NEW — deer-flow web_fetch equivalent) ──────
+
+    async def _phase_deep_reading(
+        self,
+        topic: str,
+        dossier: ResearchDossier,
+    ) -> None:
+        """
+        Phase 1b: Deep reading of top search results.
+
+        This is THE critical deer-flow improvement. After initial search returns
+        snippets, this method uses Exa's get_contents() API to fetch full article
+        text (up to 8000 chars per article) for the most relevant sources.
+
+        This gives the research engine rich, detailed text to extract specific
+        facts, names, numbers, and quotes — instead of vague snippets.
+
+        The deep-read content is stored in dossier.full_article_texts and used
+        by the deep dive phase for high-quality fact extraction.
+        """
+        log.info("phase_1b_deep_reading: fetching full article text for top sources")
+
+        # Get URLs from broad exploration
+        urls_to_read = getattr(dossier, "_broad_search_urls", [])
+        if not urls_to_read:
+            urls_to_read = dossier.all_sources[:10]
+
+        if not urls_to_read:
+            log.warning("phase_1b_no_urls_to_read")
+            return
+
+        # Fetch full article text in batches of 10 (Exa limit)
+        full_texts: dict[str, str] = {}
+
+        async with WebSearchClient() as client:
+            for i in range(0, len(urls_to_read), 10):
+                batch = urls_to_read[i:i + 10]
+                if self._search_count >= self.max_total_searches:
+                    break
+
+                try:
+                    contents = await client.fetch_contents(batch, max_characters=8000)
+                    full_texts.update(contents)
+                    # fetch_contents uses rate limiting internally, but we track it
+                    self._search_count += 1
+                except Exception as e:
+                    log.warning(f"deep_read_batch_failed: batch_{i}: {e}")
+
+        if not full_texts:
+            log.warning("phase_1b_no_full_texts_retrieved")
+            return
+
+        # Store full texts in dossier
+        dossier.full_article_texts = full_texts
+
+        # Extract facts from full article text (much richer than snippets!)
+        facts_from_reading = 0
+        for url, full_text in full_texts.items():
+            if len(full_text) < 200:
+                continue
+
+            # Find the source name from the URL
+            source_name = url
+            for src in dossier.all_sources:
+                if src == url:
+                    source_name = url
+                    break
+
+            # Extract facts from the full article text
+            facts = await self._extract_facts(full_text, url, source_name)
+            for fact in facts:
+                if dossier.add_fact_if_unique(fact):
+                    facts_from_reading += 1
+
+            # Also extract anchors and characters from full text
+            anchors = self._extract_anchors_from_text(full_text, url)
+            for anchor in anchors:
+                dossier.add_anchor(anchor)
+
+            characters = self._extract_characters_from_text(full_text, url)
+            for char in characters:
+                dossier.add_character(char)
+
+        log.info(
+            f"phase_1b_complete: articles_read={len(full_texts)}, "
+            f"new_facts_from_reading={facts_from_reading}"
+        )
+
+    # ─── Phase 2: Deep Dive (upgraded to use full text when available) ───────
 
     async def _phase_deep_dive(
         self,
@@ -368,17 +672,32 @@ class DeepResearchEngine:
         """
         Phase 2: Deep dive into a specific dimension.
 
-        Executes targeted searches and extracts facts, anchors, and characters.
+        Upgraded: builds temporally-aware queries. If full article texts are
+        available from Phase 1b, uses them for richer fact extraction.
         """
         log.info(f"phase_2_deep_dive: dimension='{dimension}'")
 
-        # Build dimension-specific queries
+        # Build dimension-specific queries with temporal awareness
+        year = self._get_current_year()
+        time_ctx = self._get_time_context()
         queries = [
-            f"{topic} {dimension} statistics data",
+            f"{topic} {dimension} statistics data {year}",
             f"{topic} {dimension} case study example",
             f"{topic} {dimension} expert analysis opinion",
             f"{topic} {dimension} Pakistan",  # Localize to Pakistan context
         ]
+
+        # Check if research plan has better queries for this dimension
+        if dossier.research_plan and isinstance(dossier.research_plan, dict):
+            for dim in dossier.research_plan.get("dimensions", []):
+                if isinstance(dim, dict):
+                    dim_name = dim.get("name", "")
+                    if dim_name.lower() in dimension.lower() or dimension.lower() in dim_name.lower():
+                        planned = dim.get("search_queries", [])
+                        if planned:
+                            queries = planned[:4]
+                            log.info(f"using_planned_queries: {queries}")
+                            break
 
         results = await self._multi_search(queries, num_per_query=3)
 
@@ -386,31 +705,67 @@ class DeepResearchEngine:
         dimension_findings = DimensionFindings(dimension_name=dimension)
         dimension_findings.search_queries_used = queries
 
+        # Collect URLs from this dimension for potential deep reading
+        dim_urls = []
+
         for query, search_results in results.items():
             for r in search_results:
                 dossier.add_source(r.url)
                 dimension_findings.sources_consulted.append(r.url)
+                dim_urls.append(r.url)
 
-                # Extract facts from each result
+                # Extract facts from search result (snippet level)
                 text = f"{r.title}\n{r.snippet}"
                 facts = await self._extract_facts(text, r.url, r.title)
                 for fact in facts:
-                    # Use deduplication
                     if dossier.add_fact_if_unique(fact):
                         dimension_findings.facts.append(fact)
 
-                # Check for anchors
+                # Check for anchors and characters
                 anchors = self._extract_anchors_from_text(text, r.url)
                 for anchor in anchors:
                     dossier.add_anchor(anchor)
 
-                # Check for human characters
                 characters = self._extract_characters_from_text(text, r.url)
                 for char in characters:
                     dossier.add_character(char)
 
+        # Deep read top 5 URLs from this dimension if we haven't already
+        new_urls = [u for u in dim_urls if u not in (getattr(dossier, 'full_article_texts', {}) or {})]
+        if new_urls and self._search_count < self.max_total_searches:
+            try:
+                async with WebSearchClient() as client:
+                    contents = await client.fetch_contents(new_urls[:5], max_characters=8000)
+                    self._search_count += 1
+
+                    for url, full_text in contents.items():
+                        if len(full_text) < 200:
+                            continue
+                        # Store in dossier
+                        if not hasattr(dossier, 'full_article_texts') or dossier.full_article_texts is None:
+                            dossier.full_article_texts = {}
+                        dossier.full_article_texts[url] = full_text
+
+                        # Extract rich facts from full text
+                        facts = await self._extract_facts(full_text, url, url)
+                        for fact in facts:
+                            if dossier.add_fact_if_unique(fact):
+                                dimension_findings.facts.append(fact)
+
+                        anchors = self._extract_anchors_from_text(full_text, url)
+                        for anchor in anchors:
+                            dossier.add_anchor(anchor)
+
+                        characters = self._extract_characters_from_text(full_text, url)
+                        for char in characters:
+                            dossier.add_character(char)
+            except Exception as e:
+                log.debug(f"dimension_deep_read_failed: {e}")
+
         dossier.dimension_findings[dimension] = dimension_findings
         log.info(f"phase_2_dimension_complete: facts={len(dimension_findings.facts)}")
+
+    # ─── Phase 3: Diversity & Validation ────────────────────────────────────
 
     async def _phase_diversity_validation(
         self,
@@ -420,17 +775,21 @@ class DeepResearchEngine:
         """
         Phase 3: Ensure all 6 information types are covered.
 
-        Checks for missing types and executes targeted searches.
+        Uses temporally-aware queries. Checks for missing types and executes
+        targeted searches with deep reading of top results.
         """
         log.info("phase_3_diversity_validation")
 
+        year = self._get_current_year()
+        time_ctx = self._get_time_context()
+
         # Check current coverage
         info_type_queries = {
-            InformationType.FACTS_DATA: f"{topic} statistics numbers data",
-            InformationType.EXAMPLES_CASES: f"{topic} case study example real world",
+            InformationType.FACTS_DATA: f"{topic} statistics numbers data {year}",
+            InformationType.EXAMPLES_CASES: f"{topic} case study example real world {year}",
             InformationType.EXPERT_OPINIONS: f"{topic} expert interview analysis opinion",
-            InformationType.TRENDS: f"{topic} trends forecast future {self._get_current_year()}",
-            InformationType.COMPARISONS: f"{topic} comparison vs alternatives",
+            InformationType.TRENDS: f"{topic} trends forecast future {year} {time_ctx}",
+            InformationType.COMPARISONS: f"{topic} comparison vs alternatives {year}",
             InformationType.CHALLENGES: f"{topic} criticism challenges limitations problems",
         }
 
@@ -457,14 +816,137 @@ class DeepResearchEngine:
             query = info_type_queries[info_type]
             results = await self._search(query, num_results=5)
 
+            urls_for_reading = []
             for r in results:
                 dossier.add_source(r.url)
                 text = f"{r.title}\n{r.snippet}"
                 facts = await self._extract_facts(text, r.url, r.title, info_type)
                 for fact in facts:
                     dossier.add_fact_if_unique(fact)
+                urls_for_reading.append(r.url)
+
+            # Deep read top results for missing types
+            if urls_for_reading and self._search_count < self.max_total_searches:
+                try:
+                    async with WebSearchClient() as client:
+                        contents = await client.fetch_contents(urls_for_reading[:3], max_characters=8000)
+                        self._search_count += 1
+                        for url, full_text in contents.items():
+                            if len(full_text) < 200:
+                                continue
+                            if not hasattr(dossier, 'full_article_texts') or dossier.full_article_texts is None:
+                                dossier.full_article_texts = {}
+                            dossier.full_article_texts[url] = full_text
+                            facts = await self._extract_facts(full_text, url, url, info_type)
+                            for fact in facts:
+                                dossier.add_fact_if_unique(fact)
+                except Exception as e:
+                    log.debug(f"diversity_deep_read_failed: {e}")
 
         log.info(f"phase_3_complete: coverage={dossier.information_type_coverage}")
+
+    # ─── Phase 4: Synthesis Quality Check (UPGRADED — qualitative LLM) ──────
+
+    async def _phase_quality_check(
+        self,
+        topic: str,
+        dossier: ResearchDossier,
+    ) -> dict:
+        """
+        Phase 4: Qualitative quality assessment before synthesis.
+
+        From deer-flow's synthesis check: instead of just counting facts,
+        uses an LLM to assess whether the research is actually rich enough
+        to write a compelling documentary.
+
+        Checks:
+        - Are facts specific (numbers, names, dates) or vague generalizations?
+        - Are there real case studies or just hypothetical scenarios?
+        - Are sources credible and authoritative?
+        - Is there enough material for a 5-7 minute video?
+        - Are counterarguments and challenges represented?
+
+        Returns dict with:
+            - is_rich_enough: bool
+            - score: 0-100
+            - strengths: list of str
+            - weaknesses: list of str
+            - recommendations: list of str
+        """
+        log.info("phase_4_quality_check")
+
+        # Build a summary of all collected facts for assessment
+        all_facts = dossier.all_facts
+        fact_summary = "\n".join([
+            f"- [{f.information_type.value}] {f.statement} (source: {f.source_name})"
+            for f in all_facts[:20]
+        ])
+
+        source_summary = "\n".join([f"- {url}" for url in dossier.all_sources[:10]])
+
+        prompt = f"""Evaluate this research dossier for the topic: "{topic}"
+
+COLLECTED FACTS ({len(all_facts)} total):
+{fact_summary}
+
+SOURCES ({len(dossier.all_sources)} total):
+{source_summary}
+
+DIMENSIONS EXPLORED: {dossier.dimensions_explored}
+
+Assess whether this research is specific and rich enough to write a compelling
+documentary script. A GOOD dossier has:
+- Specific numbers, percentages, dollar amounts (not "many" or "significant")
+- Named people, organizations, companies, government bodies
+- Specific dates and events (not "recently" or "in recent years")
+- Real case studies with locations and outcomes
+- Counterarguments and challenges to the mainstream narrative
+
+Return a JSON object:
+{{
+    "is_rich_enough": true/false,
+    "score": 75,
+    "strengths": ["Specific strength 1", "Specific strength 2"],
+    "weaknesses": ["What's missing or vague 1", "What's missing or vague 2"],
+    "recommendations": ["What to search for next 1", "What to search for next 2"]
+}}
+
+Be strict. A score below 60 means the research is too vague for a good script."""
+
+        try:
+            response = await self._router.complete_text(
+                prompt,
+                system=SYSTEM_QUALITY_CHECKER,
+                model="researcher",
+                max_tokens=800,
+                temperature=0.0,
+            )
+
+            report_str = extract_json_object(response)
+            if report_str:
+                report = json.loads(report_str)
+                if isinstance(report, dict):
+                    score = report.get("score", 50)
+                    log.info(
+                        f"phase_4_complete: quality_score={score}, "
+                        f"is_rich={report.get('is_rich_enough', False)}, "
+                        f"weaknesses={report.get('weaknesses', [])}"
+                    )
+                    return report
+
+        except Exception as e:
+            log.warning(f"quality_check_failed: {e}")
+
+        # Fallback
+        return {
+            "is_rich_enough": False,
+            "score": 0,
+            "strengths": [],
+            "weaknesses": ["Quality check failed"],
+            "recommendations": [],
+        }
+
+    # ─── Fact Validation ────────────────────────────────────────────────────
 
     async def _validate_facts(self, dossier: ResearchDossier) -> None:
         """
@@ -474,15 +956,7 @@ class DeepResearchEngine:
         """
         log.info("validating_facts_across_sources")
 
-        all_facts = (
-            dossier.facts_and_data +
-            dossier.examples_cases +
-            dossier.expert_opinions +
-            dossier.trends +
-            dossier.comparisons +
-            dossier.challenges
-        )
-
+        all_facts = dossier.all_facts
         validated_count = 0
 
         for fact in all_facts:
@@ -518,9 +992,7 @@ class DeepResearchEngine:
 
     def _extract_key_claim(self, statement: str) -> str:
         """Extract the key claim from a statement for verification search."""
-        # Simple approach: take first sentence, remove numbers and dates
         first_sentence = statement.split('.')[0]
-        # Remove numbers (dates, statistics)
         key_claim = re.sub(r'\d+[%\s]*(million|billion|thousand)?', '', first_sentence, flags=re.I)
         return key_claim.strip()[:100]
 
@@ -529,7 +1001,6 @@ class DeepResearchEngine:
         words1 = set(re.findall(r'\b[A-Z][a-z]+\b', statement1))
         words2 = set(re.findall(r'\b[A-Z][a-z]+\b', statement2))
 
-        # Remove stop words that create false positives
         words1 -= self._AGREEMENT_STOPWORDS
         words2 -= self._AGREEMENT_STOPWORDS
 
@@ -540,11 +1011,12 @@ class DeepResearchEngine:
 
         return False
 
+    # ─── Search Methods ────────────────────────────────────────────────────
+
     async def _search(self, query: str, num_results: int = 10) -> list[SearchResult]:
         """Execute a single search query with accurate count tracking."""
         async with WebSearchClient() as client:
             results = await client.search(query, num_results)
-            # Track count AFTER search completes
             self._search_count += 1
             return results
 
@@ -559,40 +1031,44 @@ class DeepResearchEngine:
         async with WebSearchClient() as client:
             for query in queries:
                 results = await client.search(query, num_per_query)
-                # Track count AFTER each search completes
                 self._search_count += 1
                 output[query] = results
 
-                # Check budget after each search
                 if self._search_count >= self.max_total_searches:
                     log.warning(f"search_budget_reached: {self._search_count}")
                     break
 
         return output
 
+    # ─── Extraction Methods ────────────────────────────────────────────────
+
     async def _extract_dimensions(self, text: str, topic: str) -> list[str]:
         """Use LLM to extract research dimensions from text."""
         try:
-            # Use the router client (sync or async depending on setup)
             if self._router is None:
                 self._router = RouterClient()
 
+            current_date = self._get_current_date()
+
             prompt = f"""Analyze this search result summary about "{topic}" and identify 3-5 key dimensions or subtopics that need deeper research.
 
-Search Results:
-{text[:2000]}
+Current date: {current_date}
 
-Return ONLY a JSON array of dimension names (short phrases).
-Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
+Search Results:
+{text[:3000]}
+
+Return ONLY a JSON array of dimension names (short phrases, 2-4 words each).
+Example: ["Economic Impact", "Political Response", "Public Opinion", "Historical Context"]
+
+IMPORTANT: Each dimension should represent a DISTINCT angle. Avoid overlapping dimensions."""
 
             response = await self._router.complete_text(
                 prompt,
                 system=SYSTEM_DIMENSION_EXTRACTOR,
-                model="researcher",  # Gemini for massive research context
+                model="researcher",
                 max_tokens=500,
             )
 
-            # Parse JSON array
             arr_str = extract_json_array(response)
             if arr_str:
                 dimensions = json.loads(arr_str)
@@ -602,7 +1078,6 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
         except Exception as e:
             log.warning(f"dimension_extraction_failed: {e}")
 
-        # Fallback dimensions
         return ["Overview", "Key Issues", "Impact"]
 
     async def _extract_facts(
@@ -612,15 +1087,12 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
         source_name: str,
         default_type: InformationType = InformationType.FACTS_DATA,
     ) -> list[ResearchFact]:
-        """Extract factual claims from text using LLM-based extraction.
+        """
+        Extract factual claims from text using LLM-based extraction.
 
-        Uses LLM to intelligently extract specific data points, names, quotes,
-        and evidence from article text. Falls back to heuristic regex extraction
-        if LLM is unavailable.
-
-        With real article text from Exa (up to 1000 chars per result), the LLM
-        can identify specific numbers, names, dates, and verifiable claims
-        that the old regex approach completely missed.
+        With deep reading (deer-flow upgrade), text can now be 4000-8000 chars
+        per article instead of 500-1000 char snippets. This gives the LLM
+        much richer context for identifying specific facts.
         """
         facts = []
 
@@ -633,7 +1105,7 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
             except Exception as e:
                 log.debug(f"llm_fact_extraction_failed_falling_back: {e}")
 
-        # Fallback: heuristic extraction (still better than nothing)
+        # Fallback: heuristic extraction
         sentences = text.split(". ")
         for sentence in sentences:
             sentence = sentence.strip()
@@ -660,7 +1132,7 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
                 source_url=source_url,
                 source_name=source_name,
                 information_type=fact_type,
-                confidence=0.5,  # Lower confidence for heuristic extraction
+                confidence=0.5,
             ))
 
         return facts[:5]
@@ -671,17 +1143,17 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
         source_url: str,
         source_name: str,
     ) -> list[ResearchFact]:
-        """Use LLM to extract high-quality factual claims from article text.
+        """
+        Use LLM to extract high-quality factual claims from article text.
 
-        This is the primary extraction method. It sends article text to the
-        researcher model and asks it to identify specific, verifiable claims
-        with their types and confidence scores.
+        Updated for deer-flow: handles longer text (up to 4000 chars) from
+        deep reading, extracts more facts per article, enforces specificity.
         """
         prompt = f"""Extract the 3-5 most important factual claims from this article text.
 For each claim, classify its type and assign a confidence score (0.0-1.0).
 
 Article text:
-{text[:2000]}
+{text[:4000]}
 
 Return ONLY a JSON array with this structure:
 [{{"statement": "specific factual claim with numbers/names/dates",
@@ -690,23 +1162,23 @@ Return ONLY a JSON array with this structure:
 
 Rules:
 - Only extract CLAIMS that are specific and verifiable (not vague opinions)
-- Include specific numbers, names, dates, and places when present in the text
-- type should be: facts_data for statistics/numbers, examples_cases for specific instances,
+- Prioritize claims with specific numbers, names, dates, and places
+- Include the full specific detail — don't truncate numbers or names
+- type: facts_data for statistics/numbers, examples_cases for specific instances,
   expert_opinions for attributed quotes, trends for predictions, comparisons for relative claims,
   challenges for problems/limitations
-- If the text has no specific factual claims, return an empty array []
-- Output ONLY the JSON array, nothing else"""
+- If text has no specific factual claims, return []
+- Output ONLY the JSON array"""
 
         try:
             response = await self._router.complete_text(
                 prompt,
                 system="You are a research fact extractor. Return ONLY valid JSON arrays.",
                 model="researcher",
-                max_tokens=1000,
+                max_tokens=1500,
                 temperature=0.0,
             )
 
-            import json
             arr_str = extract_json_array(response)
             if not arr_str:
                 return []
@@ -715,7 +1187,6 @@ Rules:
             if not isinstance(parsed, list):
                 return []
 
-            # Map type strings to InformationType enum
             type_map = {
                 "facts_data": InformationType.FACTS_DATA,
                 "examples_cases": InformationType.EXAMPLES_CASES,
@@ -755,7 +1226,6 @@ Rules:
         """Extract potential physical anchors from text."""
         anchors = []
 
-        # Patterns for different anchor types
         patterns = {
             AnchorType.DOCUMENT: [
                 r'(?:report|document|paper|study|file|records?)\s+(?:titled|called|named)?\s*["\']?([^"\']{5,50})["\']?',
@@ -788,16 +1258,16 @@ Rules:
                             source_url=source_url,
                         ))
 
-        return anchors[:3]  # Limit per text
+        return anchors[:3]
 
     def _estimate_hierarchy_level(self, anchor_type: AnchorType) -> int:
         """Estimate Anchor Substitution Hierarchy level based on type."""
         hierarchy = {
-            AnchorType.DOCUMENT: 1,  # Primary source artifacts
-            AnchorType.LOCATION: 2,  # Geographic proof
-            AnchorType.OBJECT: 2,    # Tangible objects
-            AnchorType.ARCHIVE: 2,   # Archive footage
-            AnchorType.DATA_VIZ: 4,  # Abstract data visualization
+            AnchorType.DOCUMENT: 1,
+            AnchorType.LOCATION: 2,
+            AnchorType.OBJECT: 2,
+            AnchorType.ARCHIVE: 2,
+            AnchorType.DATA_VIZ: 4,
         }
         return hierarchy.get(anchor_type, 3)
 
@@ -809,7 +1279,6 @@ Rules:
         """Extract potential human characters from text."""
         characters = []
 
-        # Pattern for named individuals with roles
         patterns = [
             r'([A-Z][a-z]+\s+[A-Z][a-z]+),?\s+(?:a\s+)?([a-z\s]+(?:expert|official|minister|director|CEO|advocate|victim|witness))',
             r'([A-Z][a-z]+\s+[A-Z][a-z]+),?\s+(?:who\s+)?([^\.]{10,50})',
@@ -821,7 +1290,6 @@ Rules:
                 name = match.group(1).strip()
                 role_or_story = match.group(2).strip()
 
-                # Avoid duplicates and generic names
                 if name.lower() in ("the government", "the ministry"):
                     continue
 
@@ -833,7 +1301,7 @@ Rules:
                     source_url=source_url,
                 ))
 
-        return characters[:2]  # Limit per text
+        return characters[:2]
 
     def _derive_dimensions_from_missing(self, missing: list[str]) -> list[str]:
         """Derive research dimensions from missing elements."""
@@ -853,8 +1321,3 @@ Rules:
                     dimensions.append(dimension)
 
         return dimensions if dimensions else ["Additional Research"]
-
-    def _get_current_year(self) -> int:
-        """Get the current year for temporal queries."""
-        from datetime import datetime
-        return datetime.now().year

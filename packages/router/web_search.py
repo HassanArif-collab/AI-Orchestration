@@ -12,6 +12,12 @@ entire research pipeline to produce lifeless scripts with no real data.
 FIX: Replaced with Exa.ai (exa_py) which is a native Python package already
 used in the discovery pipeline and proven to work.
 
+DEER-FLOW UPGRADES:
+1. Increased default text_length from 1000 to 4000 chars per search result
+2. Added fetch_contents() for deep article reading (deer-flow web_fetch equivalent)
+   - Retrieves full article text (up to 8000 chars) via Exa's get_contents API
+   - Used by DeepResearchEngine after initial search to get rich data for fact extraction
+
 Rate Limits:
     Exa free tier: 1000 searches/month
     Rate limited to ~2 searches/second to avoid API bans
@@ -85,13 +91,18 @@ class WebSearchClient:
     Fallback Behavior:
         - Returns empty list if Exa is unavailable
         - Does NOT generate fake URLs (no hallucination fallback)
+
+    Deep Reading (deer-flow methodology):
+        - fetch_contents() retrieves full article text for top search results
+        - This gives the research engine 8000+ chars per article instead of snippets
+        - Used after search to do deep reading of most relevant sources
     """
 
     def __init__(
         self,
         rate_limit_per_second: float = 2.0,
         days_back: int = 30,
-        text_length: int = 1000,
+        text_length: int = 4000,
     ) -> None:
         """
         Initialize the web search client.
@@ -99,7 +110,7 @@ class WebSearchClient:
         Args:
             rate_limit_per_second: Maximum searches per second (default: 2.0)
             days_back: Only include content from last N days (default: 30)
-            text_length: Max characters of article text per result (default: 1000)
+            text_length: Max characters of article text per result (default: 4000)
         """
         self._exa_client = None
         self._rate_limit_per_second = rate_limit_per_second
@@ -216,6 +227,53 @@ class WebSearchClient:
         except Exception as e:
             log.error(f"exa_web_search_failed: {e}")
             return []
+
+    async def fetch_contents(self, urls: list[str], max_characters: int = 8000) -> dict[str, str]:
+        """
+        Fetch full article text for a list of URLs using Exa's get_contents API.
+
+        This is the deep reading capability from deer-flow's methodology.
+        After initial search returns snippets, this method retrieves full article
+        content for the most relevant sources, giving the research engine rich
+        data for fact extraction.
+
+        Args:
+            urls: List of URLs to fetch content from (max 10)
+            max_characters: Maximum characters of text per article (default: 8000)
+
+        Returns:
+            Dict mapping URL -> full article text string
+        """
+        await self._acquire_rate_limit()
+
+        if self._exa_client is None:
+            log.warning("exa_fetch_contents_unavailable: client not initialized")
+            return {}
+
+        if not urls:
+            return {}
+
+        try:
+            batch = urls[:10]  # Exa allows max 10 URLs per call
+            response = self._exa_client.get_contents(
+                urls=batch,
+                text={"max_characters": max_characters},
+            )
+
+            contents = {}
+            if hasattr(response, "results"):
+                for item in response.results:
+                    url = getattr(item, "url", "")
+                    text = getattr(item, "text", "") or ""
+                    if url and text.strip():
+                        contents[url] = text.strip()
+
+            log.info(f"exa_fetch_contents_complete: requested={len(batch)} retrieved={len(contents)}")
+            return contents
+
+        except Exception as e:
+            log.error(f"exa_fetch_contents_failed: {e}")
+            return {}
 
     async def multi_search(
         self,
