@@ -268,7 +268,7 @@ class RouterClient:
         route = cls._embedded_routes.get(model)
         if route:
             models = []
-            for key in ('model', 'fallback', 'fallback2', 'fallback3'):
+            for key in ('model', 'fallback', 'fallback2', 'fallback3', 'fallback4', 'fallback5'):
                 val = route.get(key)
                 if val:
                     models.append(val)
