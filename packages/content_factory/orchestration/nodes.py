@@ -408,14 +408,21 @@ async def research_node(state: ProductionState) -> dict:
     
     topic_title = topic_brief.get("title", "Unknown topic") if isinstance(topic_brief, dict) else str(topic_brief)
     
-    # Step 1: Check research cache
-    await report_thought(card_id, "researcher", "🔍 Checking for existing research cache...")
+    # Step 1: Check research cache (skip if topic_brief has force_research flag)
+    force_research = False
+    if isinstance(topic_brief, dict):
+        force_research = topic_brief.get("force_research", False)
+
+    if not force_research:
+        await report_thought(card_id, "researcher", "🔍 Checking for existing research cache...")
+    else:
+        await report_thought(card_id, "researcher", "🔍 Force-research requested, skipping cache...")
     
     try:
         from packages.core.research_cache import ResearchCache
         cache = ResearchCache()
         
-        cached = cache.get(topic_statement=topic_title)
+        cached = cache.get(topic_statement=topic_title) if not force_research else None
         if cached:
             dossier_text = cached.get("dossier", "")
             # Handle string or dict dossier from cache
@@ -448,10 +455,19 @@ async def research_node(state: ProductionState) -> dict:
         from packages.router.client import RouterClient
         
         async with RouterClient() as router:
-            engine = DeepResearchEngine(router_client=router)
+            engine = DeepResearchEngine(
+                router_client=router,
+                max_searches_per_dimension=4,   # More searches per dimension
+                max_total_searches=30,           # Bigger search budget
+            )
             
-            # Run deep research
-            dossier = await engine.research(topic_title)
+            # Run deep research with higher completeness target
+            dossier = await engine.research(
+                topic_title,
+                target_completeness=0.7,  # Slightly lower to avoid excessive retries
+                max_iterations=3,
+                resume_from_checkpoint=False,  # Fresh research each time
+            )
             
             if dossier:
                 dossier_text = dossier.to_markdown() if hasattr(dossier, 'to_markdown') else str(dossier)
@@ -524,12 +540,12 @@ async def draft_node(state: ProductionState) -> dict:
     try:
         from packages.router.client import RouterClient
         
-        # Build context
+        # Build context — give the LLM maximum research material
         context_parts = []
         if learnings:
-            context_parts.append(f"PAST WINNING PATTERNS:\n{learnings[:1000]}")
+            context_parts.append(f"PAST WINNING PATTERNS:\n{learnings[:1500]}")
         if research:
-            context_parts.append(f"RESEARCH:\n{research[:3000]}")
+            context_parts.append(f"RESEARCH DOSSIER:\n{research[:8000]}")
         if human_feedback:
             context_parts.append(f"HUMAN FEEDBACK TO ADDRESS:\n{human_feedback}")
         elif evaluation_feedback:
@@ -537,24 +553,36 @@ async def draft_node(state: ProductionState) -> dict:
         
         context = "\n\n---\n\n".join(context_parts)
         
-        prompt = f"""Write a compelling documentary script about: {topic_title}
+        prompt = f"""You are writing a Johnny Harris-style documentary script. This is NOT a generic overview — this is a specific, evidence-driven story.
+
+TOPIC: {topic_title}
 
 {context}
 
-Create a script with these sections:
-1. HOOK - A startling opening that grabs attention
-2. ANCHOR - The core evidence/data that grounds the story
-3. BRIDGE - Connect the evidence to broader implications
-4. REVEAL - The key insight that changes understanding
-5. CONCLUSION - A memorable closing that lingers
+CRITICAL RULES — YOUR SCRIPT WILL BE REJECTED IF YOU VIOLATE THESE:
+1. You MUST cite at least 3 specific numbers, statistics, or data points from the research above
+2. You MUST name at least 2 real people, organizations, companies, or places mentioned in the research
+3. You MUST reference at least 1 specific event, case study, or real-world example
+4. NEVER write vague statements like "a new generation is emerging" or "things are changing" — be SPECIFIC
+5. NEVER write filler like "in a country often defined by its tumultuous politics" — get straight to the point
+6. Every paragraph must contain a concrete fact, name, number, or specific example from the research
+7. Use active voice. Name who did what. Give numbers. Be specific about where and when.
 
-Output ONLY the script narration text. Keep it conversational, active voice, and under 300 words total."""
+STRUCTURE:
+**HOOK** — Open with a specific, surprising fact or number. NOT a vague scene-setter.
+**ANCHOR** — Ground the story in specific evidence: names, data, places, dates.
+**BRIDGE** — Connect the specific evidence to the bigger picture. Show the mechanism.
+**REVEAL** — The key insight that challenges the mainstream assumption. Back it with evidence.
+**CONCLUSION** — End with a specific forward-looking fact or prediction. NOT a vague inspirational statement.
+
+Write 500-700 words of narration text. Output ONLY the script with section headers. No meta-commentary."""
         
         async with RouterClient() as router:
             draft = await router.complete_text(
                 prompt,
-                system="You are a documentary scriptwriter. Write engaging, conversational narration.",
-                model="script_writer"
+                system="You are an elite documentary scriptwriter in the style of Johnny Harris. You write scripts that are dense with specific facts, names, numbers, and real-world examples. You never write vague filler. Every sentence carries concrete information.",
+                model="script_writer",
+                max_tokens=2000,
             )
         
         await report_thought(

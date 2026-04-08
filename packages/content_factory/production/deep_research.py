@@ -612,52 +612,140 @@ Example: ["Economic Impact", "Political Response", "Public Opinion"]"""
         source_name: str,
         default_type: InformationType = InformationType.FACTS_DATA,
     ) -> list[ResearchFact]:
-        """Extract factual claims from text."""
+        """Extract factual claims from text using LLM-based extraction.
+
+        Uses LLM to intelligently extract specific data points, names, quotes,
+        and evidence from article text. Falls back to heuristic regex extraction
+        if LLM is unavailable.
+
+        With real article text from Exa (up to 1000 chars per result), the LLM
+        can identify specific numbers, names, dates, and verifiable claims
+        that the old regex approach completely missed.
+        """
         facts = []
 
-        # Simple heuristic extraction (can be enhanced with LLM)
+        # Try LLM-based extraction first (much higher quality)
+        if self._router and len(text) > 100:
+            try:
+                facts = await self._extract_facts_llm(text, source_url, source_name)
+                if facts:
+                    return facts[:5]
+            except Exception as e:
+                log.debug(f"llm_fact_extraction_failed_falling_back: {e}")
+
+        # Fallback: heuristic extraction (still better than nothing)
         sentences = text.split(". ")
         for sentence in sentences:
             sentence = sentence.strip()
             if not sentence or len(sentence) < 20:
                 continue
 
-            # Heuristics for different fact types
             fact_type = default_type
 
-            # Check for statistics/numbers
             if re.search(r'\d+%|\d+\s*(million|billion|thousand)|\$\d+', sentence, re.I):
                 fact_type = InformationType.FACTS_DATA
-
-            # Check for expert/expert opinion indicators
             elif re.search(r'expert|analyst|professor|researcher says|according to', sentence, re.I):
                 fact_type = InformationType.EXPERT_OPINIONS
-
-            # Check for case/example indicators
             elif re.search(r'for example|case study|such as|instance of', sentence, re.I):
                 fact_type = InformationType.EXAMPLES_CASES
-
-            # Check for trend indicators
             elif re.search(r'trend|forecast|future|will|expected to|projected', sentence, re.I):
                 fact_type = InformationType.TRENDS
-
-            # Check for comparison
             elif re.search(r'compared to|versus|vs\.|than|more than|less than', sentence, re.I):
                 fact_type = InformationType.COMPARISONS
-
-            # Check for challenges
             elif re.search(r'however|but|challenge|problem|limitation|critics', sentence, re.I):
                 fact_type = InformationType.CHALLENGES
 
             facts.append(ResearchFact(
-                statement=sentence[:500],  # Limit length
+                statement=sentence[:500],
                 source_url=source_url,
                 source_name=source_name,
                 information_type=fact_type,
-                confidence=0.7,  # Default confidence
+                confidence=0.5,  # Lower confidence for heuristic extraction
             ))
 
-        return facts[:5]  # Limit per source
+        return facts[:5]
+
+    async def _extract_facts_llm(
+        self,
+        text: str,
+        source_url: str,
+        source_name: str,
+    ) -> list[ResearchFact]:
+        """Use LLM to extract high-quality factual claims from article text.
+
+        This is the primary extraction method. It sends article text to the
+        researcher model and asks it to identify specific, verifiable claims
+        with their types and confidence scores.
+        """
+        prompt = f"""Extract the 3-5 most important factual claims from this article text.
+For each claim, classify its type and assign a confidence score (0.0-1.0).
+
+Article text:
+{text[:2000]}
+
+Return ONLY a JSON array with this structure:
+[{{"statement": "specific factual claim with numbers/names/dates",
+  "type": "facts_data|examples_cases|expert_opinions|trends|comparisons|challenges",
+  "confidence": 0.9}}]
+
+Rules:
+- Only extract CLAIMS that are specific and verifiable (not vague opinions)
+- Include specific numbers, names, dates, and places when present in the text
+- type should be: facts_data for statistics/numbers, examples_cases for specific instances,
+  expert_opinions for attributed quotes, trends for predictions, comparisons for relative claims,
+  challenges for problems/limitations
+- If the text has no specific factual claims, return an empty array []
+- Output ONLY the JSON array, nothing else"""
+
+        try:
+            response = await self._router.complete_text(
+                prompt,
+                system="You are a research fact extractor. Return ONLY valid JSON arrays.",
+                model="researcher",
+                max_tokens=1000,
+                temperature=0.0,
+            )
+
+            import json
+            arr_str = extract_json_array(response)
+            if not arr_str:
+                return []
+
+            parsed = json.loads(arr_str)
+            if not isinstance(parsed, list):
+                return []
+
+            # Map type strings to InformationType enum
+            type_map = {
+                "facts_data": InformationType.FACTS_DATA,
+                "examples_cases": InformationType.EXAMPLES_CASES,
+                "expert_opinions": InformationType.EXPERT_OPINIONS,
+                "trends": InformationType.TRENDS,
+                "comparisons": InformationType.COMPARISONS,
+                "challenges": InformationType.CHALLENGES,
+            }
+
+            facts = []
+            for item in parsed:
+                if not isinstance(item, dict) or "statement" not in item:
+                    continue
+                fact_type = type_map.get(item.get("type", ""), InformationType.FACTS_DATA)
+                confidence = float(item.get("confidence", 0.7))
+                confidence = max(0.0, min(1.0, confidence))
+
+                facts.append(ResearchFact(
+                    statement=item["statement"][:500],
+                    source_url=source_url,
+                    source_name=source_name,
+                    information_type=fact_type,
+                    confidence=confidence,
+                ))
+
+            return facts
+
+        except Exception as e:
+            log.debug(f"llm_fact_parse_failed: {e}")
+            return []
 
     def _extract_anchors_from_text(
         self,
