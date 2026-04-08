@@ -125,16 +125,19 @@ def should_continue(state: ProductionState) -> Literal["mutate", "done", "error"
     The core Karpathy decision function.
     
     Rules:
-    1. If there's an error → route to error handler
-    2. If score >= 85% → we have a winner, exit loop
-    3. If iterations >= 20 → exhausted attempts, exit loop with best draft
-    4. Otherwise → mutate and try again
+    1. If there's an error -> route to error handler
+    2. If score >= 85% -> we have a winner, exit loop
+    3. If iterations >= 20 -> exhausted attempts, exit loop with best draft
+    4. Otherwise -> mutate and try again
     """
     if state.get("error"):
         return "error"
     
     score = state.get("evaluation_score", 0)
     iterations = state.get("iteration_count", 0)
+    
+    # Clamp score to valid range (LLM may return out-of-bounds values)
+    score = max(0, min(100, int(score)))
     
     # Quality threshold from Phase 3
     if score >= 85:

@@ -19,6 +19,7 @@ REMOVED (Phase 3 dead code cleanup):
 """
 
 from __future__ import annotations
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -342,8 +343,13 @@ async def produce_content(
         "evaluation_feedback": "",
         "iteration_count": 0,
         "visual_plan": "",
+        "score_categories": {},
         "human_feedback": None,
         "approved": False,
+        "revision_count": 0,
+        "risk_tier": None,
+        "review_requested_at": None,
+        "sla_deadline": None,
         "pipeline_status": "starting",
         "error": None,
     }

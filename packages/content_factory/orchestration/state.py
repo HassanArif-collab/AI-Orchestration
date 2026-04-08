@@ -106,10 +106,18 @@ class ProductionState(TypedDict):
     # ─── Visual Planning ──────────────────────────────────────────────────────
     visual_plan: str                    # Simple text visual cues (from Phase 2d)
     
+    # ─── Score Breakdown (per-category from scorer) ───────────────────────────
+    score_categories: dict              # Category scores: structure, hook, clarity, etc.
+    
     # ─── Human Review ─────────────────────────────────────────────────────────
     human_feedback: Optional[str]       # Feedback from human if they reject
     approved: bool                      # Whether human approved the final script
     revision_count: int                 # Number of human revision cycles (C7)
+    
+    # ─── Risk Tier & SLA (Issue 6) ───────────────────────────────────────────
+    risk_tier: Optional[str]            # "low", "medium", or "high"
+    review_requested_at: Optional[str]  # ISO timestamp when review was requested
+    sla_deadline: Optional[str]         # ISO timestamp of SLA deadline
     
     # ─── Pipeline Control ─────────────────────────────────────────────────────
     pipeline_status: str                # "researching", "drafting", "scoring", "mutating",
