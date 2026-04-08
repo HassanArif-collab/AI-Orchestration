@@ -720,7 +720,15 @@ class RouterClient:
                 }
             except Exception as e:
                 last_error = e
-                log.warning(f"embedded_model_failed model={m} error={e}")
+                error_str = str(e)
+                # If rate-limited (429), wait before trying next model
+                # Free models share a 20 req/min limit across all users
+                if '429' in error_str or 'rate' in error_str.lower():
+                    wait = 3
+                    log.warning(f"embedded_rate_limited model={m} waiting_{wait}s")
+                    await asyncio.sleep(wait)
+                else:
+                    log.warning(f"embedded_model_failed model={m} error={e}")
                 continue
 
         raise LLMClientError(

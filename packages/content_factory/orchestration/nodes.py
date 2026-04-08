@@ -163,7 +163,8 @@ Output ONLY valid JSON array, no markdown."""
             response = await router.complete_text(
                 prompt,
                 system="You are a documentary topic researcher. Output ONLY valid JSON.",
-                model="topic_finder"
+                model="topic_finder",
+                max_tokens=1500,
             )
         
         # Parse JSON response
@@ -179,12 +180,16 @@ Output ONLY valid JSON array, no markdown."""
                     topics = []
             except json.JSONDecodeError as e:
                 logger.warning(f"topic_json_parse_failed: {e}")
+                logger.warning(f"topic_json_raw_response: {response[:500]}")
                 topics = []
         else:
+            # Log raw response for debugging when extraction fails
+            logger.warning(f"topic_json_extract_failed: {response[:500]}")
             topics = []
 
         if not topics:
             logger.warning(f"topic_generation_empty: LLM returned unparseable response for card {card_id}")
+            logger.warning(f"topic_generation_raw_response: {response[:500]}")
             return {"generated_topics": [], "error": "LLM returned empty or unparseable topic list"}
         
         await report_thought(
@@ -1138,7 +1143,6 @@ async def error_handler_node(state) -> dict:
         sb = get_supabase()
         sb.table("kanban_cards").update({
             "status": "error",
-            "error_message": error,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", card_id).execute()
     except Exception as e:

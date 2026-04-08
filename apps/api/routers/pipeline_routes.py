@@ -269,6 +269,25 @@ async def discover_topics(
     if not card_id:
         card_id = str(uuid.uuid4())
 
+    # Pre-create the kanban card so FK constraints on agent_thoughts work.
+    # Without this, thoughts from gather_context_node / search_web_node fail
+    # because agent_thoughts.card_id references kanban_cards.id.
+    try:
+        from packages.core.supabase_client import get_supabase
+        sb = get_supabase()
+        sb.table("kanban_cards").upsert({
+            "id": card_id,
+            "title": f"Discovery: {seed_hint or 'Auto'}",
+            "column_index": 1,
+            "status": "discovering",
+            "metadata": {"seed_hint": seed_hint},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="id").execute()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"pre_create_card_failed: {e}")
+
     initial_state = {
         "card_id": card_id,
         "seed_hint": seed_hint,
