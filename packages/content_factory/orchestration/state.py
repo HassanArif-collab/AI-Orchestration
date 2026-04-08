@@ -65,16 +65,30 @@ class ProductionState(TypedDict):
     
     Flow:
     START → load_learnings → research → draft → score → {should_continue?}
+                                                        ├── "needs_research" → research_gap → draft (RESEARCH FEEDBACK LOOP)
                                                         ├── "mutate" → mutate → score (CYCLE)
-                                                        ├── "done" → capture_learning → visuals → human_review ⏸️
-                                                        │                                           ├── "approve" → publish → END
-                                                        │                                           └── "revise" → draft (CYCLE)
+                                                        ├── "done" → capture_learning → visuals → {visuals_ok?}
+                                                                                        ├── "revise_visual" → draft (VISUAL FEEDBACK LOOP)
+                                                                                        └── "ok" → human_review ⏸️
+                                                                                                                ├── "approve" → publish → END
+                                                                                                                └── "revise" → draft (CYCLE)
                                                         └── "error" → error_handler → END
     
     The Karpathy Loop:
       - After scoring, check: score >= 85% OR iterations >= 20?
       - If YES: exit loop → capture learnings → visuals
       - If NO: mutate the draft → re-score → check again
+    
+    Research Feedback Loop (NEW):
+      - If the scorer detects a research gap (low credibility, thin evidence),
+        the pipeline routes to research_gap node which requests targeted re-search,
+        then routes back to draft with enriched dossier.
+      - Maximum 1 additional research pass to avoid infinite loops.
+    
+    Visual Feedback Loop (NEW):
+      - The visual annotator can flag that the script needs structural changes
+        (not just visual annotations) before proceeding to human review.
+      - Routes back to draft with visual_feedback.
     
     Human Review Gate:
       - After visuals, the graph PAUSES (interrupt)
@@ -91,6 +105,8 @@ class ProductionState(TypedDict):
     # ─── Research Phase ──────────────────────────────────────────────────────
     research_dossier: str               # Full research text
     research_sources: list              # URLs and titles of sources
+    research_round: int                 # How many times research has run (max 2)
+    research_gap_query: Optional[str]   # Targeted query from research gap detection
     
     # ─── Zep Learning (Cross-Script Intelligence) ─────────────────────────────
     zep_learnings: str                  # Past winning mutations loaded from Zep
@@ -105,6 +121,8 @@ class ProductionState(TypedDict):
     
     # ─── Visual Planning ──────────────────────────────────────────────────────
     visual_plan: str                    # Simple text visual cues (from Phase 2d)
+    visual_needs_revision: bool         # Whether visual annotator flagged structural issues
+    visual_feedback: Optional[str]      # Feedback from visual annotator about script structure
     
     # ─── Score Breakdown (per-category from scorer) ───────────────────────────
     score_categories: dict              # Category scores: structure, hook, clarity, etc.

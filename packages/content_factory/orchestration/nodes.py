@@ -12,14 +12,132 @@ Each node calls the agent's core method ONCE. LangGraph handles repetition via c
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Optional
 
 from .state import DiscoveryState, ProductionState
 from .thoughts import pipeline_node, report_thought, update_card_stage
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# STYLE & GENRE LOADING (cached at module level)
+# ============================================================
+
+def _load_style_reference() -> dict:
+    """Load style_reference.json — the Johnny Harris constitution."""
+    style_path = Path(__file__).parent.parent / "style_reference.json"
+    try:
+        return json.loads(style_path.read_text())
+    except Exception as e:
+        logger.warning(f"style_reference_load_failed: {e}")
+        return {}
+
+
+def _load_genre_schema() -> dict:
+    """Load genre_schema.json — genre-specific structural rules."""
+    genre_path = Path(__file__).parent.parent / "genre_schema.json"
+    try:
+        return json.loads(genre_path.read_text())
+    except Exception as e:
+        logger.warning(f"genre_schema_load_failed: {e}")
+        return {}
+
+
+def _build_style_context(style: dict) -> str:
+    """Extract key style rules into a compact prompt block."""
+    if not style:
+        return ""
+    
+    parts = []
+    
+    # Core philosophy
+    philosophy = style.get("core_philosophy", {})
+    if philosophy:
+        parts.append(f"CORE PHILOSOPHY: {philosophy.get('summary', '')}")
+    
+    # Anchor-Bridge formula
+    anchor_bridge = style.get("anchor_bridge_formula", {})
+    if anchor_bridge:
+        parts.append(f"RHYTHM: {anchor_bridge.get('rhythm', {}).get('rule', '')}")
+        anchor_reqs = anchor_bridge.get("visual_anchor", {}).get("requirements", [])
+        if anchor_reqs:
+            parts.append(f"ANCHOR REQUIREMENTS: {'; '.join(anchor_reqs[:4])}")
+    
+    # Classic Style Writing rules
+    csw = style.get("classic_style_writing", {})
+    if csw:
+        rules = csw.get("rules", [])
+        for r in rules[:5]:
+            parts.append(f"WRITING RULE [{r.get('name', '')}]: {r.get('description', '')}")
+            if r.get('bad_example') and r.get('good_example'):
+                parts.append(f"  BAD: {r['bad_example']}")
+                parts.append(f"  GOOD: {r['good_example']}")
+    
+    # Peer-to-peer framing
+    p2p = style.get("peer_to_peer_framing", {})
+    if p2p:
+        phrases = p2p.get("direction_phrases", [])
+        if phrases:
+            parts.append(f"USE THESE PHRASES (pick 2-3): {', '.join(phrases[:6])}")
+        anti = p2p.get("anti_patterns", [])
+        if anti:
+            parts.append(f"NEVER sound like: {'; '.join(anti[:3])}")
+    
+    # Motive loading
+    ml = style.get("motive_loading", {})
+    if ml:
+        parts.append(f"MOTIVE LOADING: {ml.get('rule', '')}")
+        parts.append(f"  GOOD EXAMPLE: {ml.get('good_example', '')}")
+    
+    # Conclusion shift
+    cs = style.get("conclusion_shift", {})
+    if cs:
+        struct = cs.get("structure", {})
+        thinky = cs.get("thinky_mode", {}).get("description", "")
+        feely = cs.get("feely_mode", {}).get("description", "")
+        parts.append(f"CONCLUSION SHIFT: First {struct.get('thinky_percent', '80%')} {thinky}")
+        parts.append(f"  Then shift to {struct.get('feely_percent', '10-20%')} {feely}")
+        parts.append(f"  FINAL LINE RULE: {cs.get('final_line_rule', '')}")
+    
+    # Pakistani adaptation
+    pa = style.get("pakistani_adaptation", {})
+    if pa:
+        rules = pa.get("rules", [])
+        if rules:
+            parts.append(f"PAKISTANI ADAPTATION: {'; '.join(rules)}")
+    
+    return "\n".join(parts)
+
+
+def _get_genre_rules(genre_id: str, genre_schema: dict) -> str:
+    """Get genre-specific structural backbone and rules."""
+    if not genre_schema:
+        return ""
+    
+    genres = genre_schema.get("genres", [])
+    for g in genres:
+        if g.get("genre_id") == genre_id:
+            parts = [f"GENRE: {g.get('name', genre_id)}"]
+            parts.append(f"STRUCTURAL BACKBONE: {g.get('structural_backbone', '')}")
+            parts.append(f"KEY CHALLENGE: {g.get('key_challenge', '')}")
+            parts.append(f"CONCLUSION PATTERN: {g.get('conclusion_pattern', '')}")
+            desc = g.get("description", "")
+            if desc:
+                parts.append(f"GENRE DESCRIPTION: {desc}")
+            return "\n".join(parts)
+    
+    return ""
+
+
+# Cache loaded files at module level (reloaded on server restart)
+_STYLE_REFERENCE = _load_style_reference()
+_GENRE_SCHEMA = _load_genre_schema()
+_STYLE_CONTEXT = _build_style_context(_STYLE_REFERENCE)
 
 
 # ============================================================
@@ -505,6 +623,117 @@ async def research_node(state: ProductionState) -> dict:
         return {"error": f"Research failed: {str(e)}"}
 
 
+@pipeline_node("researcher")
+async def research_gap_node(state: ProductionState) -> dict:
+    """
+    FIX #3: Research Feedback Loop.
+    
+    When the scorer detects thin evidence (credibility < 60%), this node
+    runs a targeted supplementary search on the weak area, appends findings
+    to the existing dossier, then routes back to draft.
+    
+    Only runs ONCE per pipeline (research_round == 1) to avoid infinite loops.
+    Uses model: researcher
+    """
+    card_id = state.get("card_id", "unknown")
+    topic_brief = state.get("topic_brief", {})
+    current_dossier = state.get("research_dossier", "")
+    score_categories = state.get("score_categories", {})
+    evaluation_feedback = state.get("evaluation_feedback", "")
+    research_round = state.get("research_round", 1)
+    
+    topic_title = topic_brief.get("title", "Unknown topic") if isinstance(topic_brief, dict) else str(topic_brief)
+    
+    await report_thought(card_id, "researcher", "🔍 Research gap detected — running targeted supplementary search...")
+    
+    try:
+        from packages.router.client import RouterClient
+        
+        # Build a targeted research query from the scorer's feedback
+        async with RouterClient() as router:
+            gap_prompt = f"""Based on this script evaluation, identify what specific information is missing or thin.
+
+EVALUATION FEEDBACK:
+{evaluation_feedback}
+
+SCORE CATEGORIES: {json.dumps(score_categories)}
+
+CURRENT RESEARCH DOSSIER (first 3000 chars):
+{current_dossier[:3000]}
+
+Identify the TOP 2-3 specific things the research is missing. For each, write a targeted search query.
+Return JSON: {{"gaps": [{{"area": "...", "query": "..."}}, ...]}}"""
+            
+            gap_analysis = await router.complete_text(
+                gap_prompt,
+                system="You are a research gap analyst. Identify what specific facts, names, numbers, or examples are missing from research. Return ONLY valid JSON.",
+                model="researcher",
+                temperature=0.0,
+            )
+            
+            from packages.core.json_utils import extract_json_object
+            gap_json = extract_json_object(gap_analysis)
+            
+            if not gap_json:
+                await report_thought(card_id, "researcher", "⚠️ Could not parse research gaps, skipping supplementary search")
+                return {"pipeline_status": "researching"}
+            
+            gaps = json.loads(gap_json).get("gaps", [])
+            if not gaps:
+                await report_thought(card_id, "researcher", "⚠️ No specific gaps identified, skipping supplementary search")
+                return {"pipeline_status": "researching"}
+            
+            await report_thought(
+                card_id, "researcher",
+                f"🔍 Found {len(gaps)} research gaps: {', '.join(g.get('area', '?') for g in gaps[:3])}"
+            )
+            
+            # Run targeted searches for each gap
+            from packages.router.web_search import WebSearchClient
+            search_client = WebSearchClient()
+            
+            supplementary_facts = []
+            for gap in gaps[:3]:
+                query = gap.get("query", "")
+                if not query:
+                    continue
+                try:
+                    results = await search_client.search(query, num_results=5)
+                    for r in results:
+                        text = getattr(r, 'text', '') or ''
+                        if text:
+                            supplementary_facts.append(f"### {getattr(r, 'title', 'Source')}:\n{text}")
+                except Exception as e:
+                    logger.warning(f"supplementary_search_failed: {e}")
+            
+            if supplementary_facts:
+                # Append supplementary findings to the existing dossier
+                supplementary_section = f"\n\n---\n\n## SUPPLEMENTARY RESEARCH (Round 2 — Gap Fill)\n\n" + "\n\n".join(supplementary_facts)
+                enriched_dossier = current_dossier + supplementary_section
+                
+                await report_thought(
+                    card_id, "researcher",
+                    f"📄 Supplementary research complete: +{len(supplementary_section)} chars added to dossier",
+                    "success",
+                    metadata={"gap_count": len(gaps), "chars_added": len(supplementary_section)}
+                )
+                
+                return {
+                    "research_dossier": enriched_dossier,
+                    "research_round": 2,  # Mark that we've done round 2
+                    "pipeline_status": "researching",
+                }
+            else:
+                await report_thought(card_id, "researcher", "⚠️ Supplementary searches returned no results")
+                return {"research_round": 2, "pipeline_status": "researching"}
+    
+    except Exception as e:
+        logger.error(f"research_gap_failed: {e}")
+        # Don't fail the pipeline — just continue with what we have
+        await report_thought(card_id, "researcher", f"⚠️ Research gap search failed: {str(e)[:100]}")
+        return {"research_round": 2, "pipeline_status": "researching"}
+
+
 @pipeline_node("script_writer")
 async def draft_node(state: ProductionState) -> dict:
     """
@@ -526,12 +755,18 @@ async def draft_node(state: ProductionState) -> dict:
     learnings = state.get("zep_learnings", "")
     human_feedback = state.get("human_feedback")
     evaluation_feedback = state.get("evaluation_feedback")
+    visual_feedback = state.get("visual_feedback")
+    research_round = state.get("research_round", 1)
     iteration = state.get("iteration_count", 0)
     
     topic_title = topic_brief.get("title", "Unknown") if isinstance(topic_brief, dict) else str(topic_brief)
     
     if human_feedback:
         await report_thought(card_id, "script_writer", "✍️ Rewriting based on human feedback...")
+    elif visual_feedback:
+        await report_thought(card_id, "script_writer", "✍️ Rewriting based on visual annotator feedback...")
+    elif research_round > 1 and iteration == 0:
+        await report_thought(card_id, "script_writer", "✍️ Rewriting with enriched research (round 2)...")
     elif iteration > 0 and evaluation_feedback:
         await report_thought(card_id, "script_writer", f"✍️ Writing iteration {iteration + 1}...")
     else:
@@ -541,21 +776,36 @@ async def draft_node(state: ProductionState) -> dict:
         from packages.router.client import RouterClient
         
         # Build context — give the LLM maximum research material
+        # FIX #4: Increased research window from 8000 → 16000 chars
         context_parts = []
         if learnings:
             context_parts.append(f"PAST WINNING PATTERNS:\n{learnings[:1500]}")
         if research:
-            context_parts.append(f"RESEARCH DOSSIER:\n{research[:8000]}")
+            context_parts.append(f"RESEARCH DOSSIER:\n{research[:16000]}")
         if human_feedback:
             context_parts.append(f"HUMAN FEEDBACK TO ADDRESS:\n{human_feedback}")
+        elif visual_feedback:
+            context_parts.append(f"VISUAL ANNOTATOR FEEDBACK TO ADDRESS:\n{visual_feedback}")
         elif evaluation_feedback:
             context_parts.append(f"EVALUATION FEEDBACK:\n{evaluation_feedback}")
         
         context = "\n\n---\n\n".join(context_parts)
         
+        # FIX #1 & #6: Inject style reference and genre-specific rules
+        genre_id = topic_brief.get("genre_id", "current_situation") if isinstance(topic_brief, dict) else "current_situation"
+        genre_rules = _get_genre_rules(genre_id, _GENRE_SCHEMA)
+        
+        style_block = _STYLE_CONTEXT or ""
+        if style_block:
+            style_block = f"\n\n=== JOHNNY HARRIS STYLE CONSTITUTION ===\n{style_block}"
+        
+        genre_block = f"\n\n=== GENRE-SPECIFIC RULES ===\n{genre_rules}" if genre_rules else ""
+        
         prompt = f"""You are writing a Johnny Harris-style documentary script. This is NOT a generic overview — this is a specific, evidence-driven story.
 
 TOPIC: {topic_title}
+{genre_block}
+{style_block}
 
 {context}
 
@@ -568,19 +818,40 @@ CRITICAL RULES — YOUR SCRIPT WILL BE REJECTED IF YOU VIOLATE THESE:
 6. Every paragraph must contain a concrete fact, name, number, or specific example from the research
 7. Use active voice. Name who did what. Give numbers. Be specific about where and when.
 
+VOICE RULES:
+- Write like a friend who just discovered something fascinating: "Look at this." "Wait, come with me on this."
+- Assign HUMAN MOTIVES to every entity (fear, ambition, desperation, pride). Entities without motives are abstract forces.
+- Use Anchor-Bridge rhythm: drop the viewer into something REAL (an object, a document, a person), THEN explain.
+- NEVER use nominalizations (globalization, implementation, utilization). Replace with plain actions.
+- The last 10-20% of the script must shift from precise evidence to personal, poetic, emotionally resonant.
+
 STRUCTURE:
-**HOOK** — Open with a specific, surprising fact or number. NOT a vague scene-setter.
-**ANCHOR** — Ground the story in specific evidence: names, data, places, dates.
-**BRIDGE** — Connect the specific evidence to the bigger picture. Show the mechanism.
-**REVEAL** — The key insight that challenges the mainstream assumption. Back it with evidence.
-**CONCLUSION** — End with a specific forward-looking fact or prediction. NOT a vague inspirational statement.
+**HOOK** — Open IN MEDIAS RES. Drop the viewer into a surprising action, a specific number, a physical object. NOT an abstract intro.
+**ANCHOR** — Ground in something tangible the camera can point at: a document, a place, a person's face.
+**BRIDGE** — Connect the anchor evidence to the bigger picture. Show the mechanism. Who did what to whom.
+**REVEAL** — The key insight that challenges the mainstream assumption. Back it with evidence. Name who loses and who wins.
+**CONCLUSION** — Shift to personal/poetic mode. Include unexpected praise. End with a resonant line, not a summary.
 
 Write 500-700 words of narration text. Output ONLY the script with section headers. No meta-commentary."""
         
+        system_prompt = """You are an elite documentary scriptwriter in the style of Johnny Harris.
+
+Your writing obeys these IRON RULES:
+1. INVESTIGATION OVER EXPLANATION — Show the audience something real. Let meaning emerge from what they see.
+2. EXPERIENCE OVER INFORMATION — Viewers retain experiences, not lectures. Create discovery, not instruction.
+3. AGENT-ACTION-OBJECT — Every sentence has a visible agent doing something to a visible object. Can the viewer form a mental image? If not, rewrite.
+4. ANTI-ABSTRACTION — Never use nominalizations ("the globalization of trade led to..."). Write "America sent its factories to China and a million workers in Ohio lost their jobs."
+5. PEER-TO-PEER — You are NOT a professor or journalist. You are a friend saying "wait, look at this."
+6. CONCRETE FACTS ONLY — Every sentence carries specific names, numbers, dates, or places. NO vague generalizations.
+7. PAKISTANI AUDIENCE — Use PKR, Pakistani locations, Pakistani cultural context. No Western defaults.
+
+You NEVER write: "In a country often defined by...", "Things are changing", "A new era is dawning", "The stakes are high", "It's not just about X, it's about Y."
+You ALWAYS write: "On February 14th, 2025, the federal cabinet approved...", "i2i PSER's report shows...", "Hub Copilot increased completed tasks by 26%..."""
+
         async with RouterClient() as router:
             draft = await router.complete_text(
                 prompt,
-                system="You are an elite documentary scriptwriter in the style of Johnny Harris. You write scripts that are dense with specific facts, names, numbers, and real-world examples. You never write vague filler. Every sentence carries concrete information.",
+                system=system_prompt,
                 model="script_writer",
                 max_tokens=2000,
             )
@@ -600,6 +871,16 @@ Write 500-700 words of narration text. Output ONLY the script with section heade
                 "revision_count": state.get("revision_count", 0) + 1,  # Track revision cycles
                 "pipeline_status": "drafting",
                 "human_feedback": None,  # Clear after using
+                "visual_feedback": None,  # Clear visual feedback too
+                "visual_needs_revision": False,
+            }
+        elif visual_feedback:
+            return {
+                "current_draft": draft,
+                "iteration_count": 0,  # Fresh mutation budget for visual revision
+                "pipeline_status": "drafting",
+                "visual_feedback": None,  # Clear after using
+                "visual_needs_revision": False,
             }
         else:
             return {
@@ -812,23 +1093,53 @@ async def mutate_node(state: ProductionState) -> dict:
     try:
         from packages.router.client import RouterClient
         
-        prompt = f"""You are improving a documentary script. Here is the current draft and feedback.
+        # FIX #2: Inject Johnny Harris style rules into the mutator too
+        style_block = _STYLE_CONTEXT or ""
+        if style_block:
+            style_block = f"\n\n=== JOHNNY HARRIS STYLE CONSTITUTION ===\n{style_block}"
+        
+        # Also give the mutator access to the research for fact-checking
+        research = state.get("research_dossier", "")
+        research_block = f"\n\nRESEARCH FACTS (use these to replace vague claims):\n{research[:8000]}" if research else ""
+        
+        prompt = f"""You are improving a Johnny Harris-style documentary script. Preserve the voice. Kill the generic AI sound.
 
 CURRENT DRAFT:
 {draft}
 
 FEEDBACK ON WEAKNESS:
 {feedback}
+{style_block}
+{research_block}
 
-Improve the WEAK sections while keeping strong sections intact.
-Focus on addressing the specific issues mentioned in feedback.
+MUTATION RULES:
+1. ONLY rewrite the sections the feedback calls out as weak. Keep strong sections EXACTLY as they are.
+2. Replace any vague/abstract sentences with concrete facts from the research above.
+3. If a sentence has no specific name, number, date, or place — it MUST be replaced.
+4. Use active voice: Name who did what to whom.
+5. Use peer-to-peer phrases: "Look at this", "Wait, come with me", "Here's what I found"
+6. Assign human motives to every entity mentioned (fear, ambition, desperation, pride).
+7. NEVER add filler like "the stakes are high", "in a country defined by", "things are changing"
+8. The conclusion should shift from evidence to personal/poetic mode.
 
-Output the improved script narration text only."""
+Output ONLY the complete improved script with section headers. Do NOT add meta-commentary."""
         
+        system_prompt = """You are a Johnny Harris script doctor. You fix weak writing by making it more specific, more human, more grounded in evidence.
+
+Your fixes follow these rules:
+- Replace abstractions with Agent-Action-Object sentences
+- Replace vague claims with specific numbers, names, dates from the research
+- Add peer-to-peer framing ("wait, look at this")
+- Add human motives to entities
+- Kill all filler phrases and AI-sounding generalizations
+- Preserve the strong sections exactly as-is
+
+Output the complete improved script only. No commentary."""
+
         async with RouterClient() as router:
             challenger_draft = await router.complete_text(
                 prompt,
-                system="You are a script improvement specialist. Output improved script only.",
+                system=system_prompt,
                 model="challenger"
             )
         
@@ -921,6 +1232,10 @@ async def visual_node(state: ProductionState) -> dict:
     """
     Read the finished script and add simple text visual directions.
     
+    FIX #5: Also acts as a STRUCTURAL REVIEWER — if the script has
+    structural problems that visual annotations can't fix, it sets
+    visual_needs_revision=True and provides feedback for the writer.
+    
     From Phase 2d: Output is flowing text with labels like [B-ROLL], [MAP], [DATA], [SOUND].
     NO JSON. Just human-readable suggestions for a video editor.
     
@@ -929,11 +1244,12 @@ async def visual_node(state: ProductionState) -> dict:
     card_id = state.get("card_id", "unknown")
     draft = state.get("current_draft", "")
     
-    await report_thought(card_id, "visual_annotator", "🎬 Adding visual cues to script...")
+    await report_thought(card_id, "visual_annotator", "🎬 Adding visual cues and reviewing script structure...")
     
     try:
         from packages.router.client import RouterClient
         from pathlib import Path
+        from packages.core.json_utils import extract_json_object
         
         # Load skill prompt from file (Code is Truth)
         skill_path = Path(__file__).parent.parent.parent / "data" / "skills" / "visual_planner.md"
@@ -944,6 +1260,51 @@ async def visual_node(state: ProductionState) -> dict:
 Use labels: [B-ROLL], [MAP], [DATA], [ARCHIVAL], [GRAPHIC], [TRANSITION], [SOUND].
 Keep notes short — one sentence each."""
         
+        # Step 1: Structural review — does the script need rewriting?
+        review_prompt = f"""You are a video director reviewing a script for producibility.
+
+SCRIPT:
+{draft}
+
+As a director, check if this script has STRUCTURAL issues that would make it impossible or very difficult to produce as a video:
+- Is it too abstract (no visual anchors, no physical objects/places/people the camera can point at)?
+- Is the structure broken (no clear sections, no narrative arc)?
+- Does it read like an essay rather than a script (too much telling, not enough showing)?
+- Are there sections that are visually unproduceable?
+
+Return JSON: {{
+  "needs_revision": true/false,
+  "reason": "Brief explanation if revision needed",
+  "feedback": "Specific feedback for the script writer about what to change"
+}}"""
+        
+        async with RouterClient() as router:
+            review_response = await router.complete_text(
+                review_prompt,
+                system="You are a video director reviewing scripts for producibility. Return ONLY valid JSON.",
+                model="annotator",
+                temperature=0.0,
+            )
+            
+            review_json = extract_json_object(review_response)
+            needs_revision = False
+            visual_feedback_text = ""
+            
+            if review_json:
+                try:
+                    review = json.loads(review_json)
+                    needs_revision = review.get("needs_revision", False)
+                    visual_feedback_text = review.get("feedback", "")
+                    if needs_revision:
+                        await report_thought(
+                            card_id, "visual_annotator",
+                            f"🎬 Script needs structural revision: {visual_feedback_text[:100]}",
+                            "warning"
+                        )
+                except Exception:
+                    pass
+        
+        # Step 2: Add visual annotations
         prompt = f"""{skill_prompt}
 
 ---
@@ -960,16 +1321,29 @@ Add visual directions to each section."""
                 model="annotator"
             )
         
-        await report_thought(
-            card_id, "visual_annotator",
-            "🎬 Visual annotations complete — ready for human review",
-            "success"
-        )
-        
-        return {
+        result = {
             "visual_plan": annotated,
             "pipeline_status": "visuals",
+            "visual_needs_revision": needs_revision,
         }
+        
+        if needs_revision and visual_feedback_text:
+            result["visual_feedback"] = visual_feedback_text
+        
+        if not needs_revision:
+            await report_thought(
+                card_id, "visual_annotator",
+                "🎬 Visual annotations complete — script structure OK, ready for human review",
+                "success"
+            )
+        else:
+            await report_thought(
+                card_id, "visual_annotator",
+                "🎬 Visual annotations done — routing script back for structural revision",
+                "warning"
+            )
+        
+        return result
         
     except Exception as e:
         logger.error(f"visual_annotation_failed: {e}")

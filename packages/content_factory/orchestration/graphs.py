@@ -2,12 +2,13 @@
 
 Two graphs:
 1. Discovery Graph: Find topics → Grade → Save to Kanban (no loops, no human gates)
-2. Production Graph: Research → Script → Visuals → Publish (with Karpathy loop and human review)
+2. Production Graph: Research → Script → Visuals → Publish (with Karpathy loop, research feedback, and human review)
 
-The Production Graph contains the conditional Karpathy loop:
-  - After scoring, check: score >= 85% OR iterations >= 20?
-  - If YES: exit loop → capture learnings → visuals
-  - If NO: mutate the draft → re-score → check again
+The Production Graph contains THREE feedback loops:
+  1. Karpathy Loop: score → mutate → score (up to 20 iterations)
+  2. Research Feedback Loop: score → research_gap → draft (if credibility < 60%, max once)
+  3. Visual Feedback Loop: visuals → draft (if structural issues detected)
+  4. Human Review Loop: human_review → draft (if human rejects)
 
 Human Review Gate:
   - After visuals, the graph PAUSES (interrupt)
@@ -35,6 +36,7 @@ from .nodes import (
     # Production nodes
     load_learnings_node,
     research_node,
+    research_gap_node,
     draft_node,
     score_node,
     mutate_node,
@@ -120,24 +122,39 @@ def build_discovery_graph():
 # PRODUCTION GRAPH
 # ============================================================
 
-def should_continue(state: ProductionState) -> Literal["mutate", "done", "error"]:
+def should_continue(state: ProductionState) -> Literal["mutate", "needs_research", "done", "error"]:
     """
-    The core Karpathy decision function.
+    The core Karpathy decision function — UPDATED with research feedback loop.
     
     Rules:
     1. If there's an error -> route to error handler
-    2. If score >= 85% -> we have a winner, exit loop
-    3. If iterations >= 20 -> exhausted attempts, exit loop with best draft
-    4. Otherwise -> mutate and try again
+    2. If credibility score < 60% AND research hasn't been supplemented yet ->
+       route to research_gap for targeted supplementary research
+    3. If score >= 85% -> we have a winner, exit loop
+    4. If iterations >= 20 -> exhausted attempts, exit loop with best draft
+    5. Otherwise -> mutate and try again
     """
     if state.get("error"):
         return "error"
     
     score = state.get("evaluation_score", 0)
     iterations = state.get("iteration_count", 0)
+    research_round = state.get("research_round", 1)
+    score_categories = state.get("score_categories", {})
     
     # Clamp score to valid range (LLM may return out-of-bounds values)
     score = max(0, min(100, int(score)))
+    
+    # FIX #3: Research Feedback Loop
+    # If credibility is critically low (< 60%) and we haven't done
+    # supplementary research yet, send it back for more research
+    credibility = score_categories.get("credibility", 100)
+    if (
+        int(credibility) < 60
+        and research_round < 2
+        and iterations == 0  # Only on first scoring pass
+    ):
+        return "needs_research"
     
     # Quality threshold from Phase 3
     if score >= 85:
@@ -145,6 +162,21 @@ def should_continue(state: ProductionState) -> Literal["mutate", "done", "error"
     if iterations >= 20:
         return "done"
     return "mutate"
+
+
+def after_visuals(state: ProductionState) -> Literal["ok", "revise_visual", "error"]:
+    """
+    FIX #5: Visual Feedback Loop.
+    
+    After the visual annotator runs, check if it flagged structural issues.
+    If visual_needs_revision is True, route back to draft with feedback.
+    Otherwise, proceed to human review.
+    """
+    if state.get("error"):
+        return "error"
+    if state.get("visual_needs_revision", False):
+        return "revise_visual"
+    return "ok"
 
 
 def after_review(state: ProductionState) -> Literal["approve", "revise", "error"]:
@@ -160,18 +192,40 @@ def after_review(state: ProductionState) -> Literal["approve", "revise", "error"
 
 def build_production_graph():
     """
-    Production Graph: Research → Draft → Score → (Mutation Loop) → Visuals → Review → Publish
+    Production Graph: Research → Draft → Score → (Feedback Loops) → Visuals → Review → Publish
     
-    The Karpathy Loop:
-      - After scoring, check: score >= 85% OR iterations >= 20?
-      - If YES: exit loop → capture learnings → visuals
-      - If NO: mutate the draft → re-score → check again
+    FOUR Feedback Loops:
+    1. Karpathy Loop: score → mutate → score (up to 20 iterations)
+    2. Research Feedback: score → research_gap → draft (if credibility < 60%, max once)
+    3. Visual Feedback: visuals → draft (if structural issues detected by annotator)
+    4. Human Review: human_review → draft (if human rejects the script)
     
-    Human Review Gate:
-      - After visuals, the graph PAUSES (interrupt)
-      - Human reviews and either approves or sends feedback
-      - If approved: publish to Notion
-      - If rejected: go back to draft node with feedback
+    Flow:
+    START → load_learnings → research → draft → score
+                                              │
+                                    ┌─────────┼──────────┐
+                                    │         │          │
+                              needs_research  mutate     done
+                                    │         │          │
+                                    ↓         ↓          ↓
+                              research_gap  → score  capture_learning
+                                    │                    │
+                                    ↓                    ↓
+                                   draft               visuals
+                                                         │
+                                                   ┌─────┴──────┐
+                                                   │            │
+                                              revise_visual     ok
+                                                   │            │
+                                                   ↓            ↓
+                                                  draft    human_review
+                                                                │
+                                                          ┌─────┴──────┐
+                                                          │            │
+                                                       approve      revise
+                                                          │            │
+                                                          ↓            ↓
+                                                       publish      draft → ...
     """
     workflow = StateGraph(ProductionState)
     
@@ -179,6 +233,7 @@ def build_production_graph():
     # retry= ensures transient API failures don't kill the pipeline
     workflow.add_node("load_learnings", load_learnings_node, retry=LLM_RETRY)
     workflow.add_node("research", research_node, retry=LLM_RETRY)
+    workflow.add_node("research_gap", research_gap_node, retry=LLM_RETRY)
     workflow.add_node("draft", draft_node, retry=LLM_RETRY)
     workflow.add_node("score", score_node, retry=LLM_RETRY)
     workflow.add_node("mutate", mutate_node, retry=LLM_RETRY)
@@ -188,29 +243,43 @@ def build_production_graph():
     workflow.add_node("publish", publish_notion_node, retry=PUBLISH_RETRY)
     workflow.add_node("error_handler", error_handler_node)
     
-    # ── Linear flow: Start → Research ──
+    # ── Linear flow: Start → Research → Draft → Score ──
     workflow.set_entry_point("load_learnings")
     workflow.add_edge("load_learnings", "research")
     workflow.add_edge("research", "draft")
     workflow.add_edge("draft", "score")
     
-    # ── Karpathy Loop: Score → Continue? ──
+    # ── Karpathy Loop + Research Feedback: Score → Continue? ──
     workflow.add_conditional_edges(
         "score",
         should_continue,
         {
             "mutate": "mutate",
+            "needs_research": "research_gap",
             "done": "capture_learning",
             "error": "error_handler",
         }
     )
+    
+    # FIX #3: Research gap → back to draft with enriched dossier
+    workflow.add_edge("research_gap", "draft")
     
     # Mutation cycles back to scoring
     workflow.add_edge("mutate", "score")
     
     # ── Post-loop flow ──
     workflow.add_edge("capture_learning", "visuals")
-    workflow.add_edge("visuals", "human_review")
+    
+    # FIX #5: Visual annotator can route back to draft or proceed
+    workflow.add_conditional_edges(
+        "visuals",
+        after_visuals,
+        {
+            "ok": "human_review",
+            "revise_visual": "draft",
+            "error": "error_handler",
+        }
+    )
     
     # ── Human review decision ──
     workflow.add_conditional_edges(
