@@ -1,4 +1,3 @@
-```
 # Compiled and build artifacts
 *.pyc
 __pycache__/
@@ -32,6 +31,7 @@ target/
 .env
 .env.local
 *.env.*
+! .env.example
 
 # Editors
 .vscode/
@@ -69,4 +69,18 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```
+
+# opensrc - source code for packages
+opensrc/
+
+# Python build artifacts
+*.egg-info/
+
+# Database and runtime data
+*.db
+*.jsonl
+packages/data/
+
+# Agent/Local Configuration
+.claude/
+.agent/settings.json
