@@ -106,17 +106,30 @@ async def step_1_research():
 
 
 async def step_2_script_writing(research_markdown: str):
-    """Step 2: Write a documentary script from research."""
+    """Step 2: Write a documentary script from research — using the SAME prompt as draft_node."""
     print("\n" + "=" * 70)
-    print("STEP 2: SCRIPT WRITING")
+    print("STEP 2: SCRIPT WRITING (with style constitution + genre rules)")
     print("=" * 70)
+
+    # Load style reference and genre rules (same as nodes.py does)
+    from packages.content_factory.orchestration.nodes import (
+        _STYLE_CONTEXT, _get_genre_rules, _GENRE_SCHEMA,
+    )
+    genre_rules = _get_genre_rules("current_situation", _GENRE_SCHEMA)
+
+    style_block = _STYLE_CONTEXT or ""
+    if style_block:
+        style_block = f"\n\n=== JOHNNY HARRIS STYLE CONSTITUTION ===\n{style_block}"
+    genre_block = f"\n\n=== GENRE-SPECIFIC RULES ===\n{genre_rules}" if genre_rules else ""
 
     prompt = f"""You are writing a Johnny Harris-style documentary script. This is NOT a generic overview — this is a specific, evidence-driven story.
 
 TOPIC: {TOPIC}
+{genre_block}
+{style_block}
 
 RESEARCH DOSSIER:
-{research_markdown[:8000]}
+{research_markdown[:16000]}
 
 CRITICAL RULES — YOUR SCRIPT WILL BE REJECTED IF YOU VIOLATE THESE:
 1. You MUST cite at least 3 specific numbers, statistics, or data points from the research above
@@ -127,20 +140,41 @@ CRITICAL RULES — YOUR SCRIPT WILL BE REJECTED IF YOU VIOLATE THESE:
 6. Every paragraph must contain a concrete fact, name, number, or specific example from the research
 7. Use active voice. Name who did what. Give numbers. Be specific about where and when.
 
+VOICE RULES:
+- Write like a friend who just discovered something fascinating: "Look at this." "Wait, come with me on this."
+- Assign HUMAN MOTIVES to every entity (fear, ambition, desperation, pride).
+- Use Anchor-Bridge rhythm: drop the viewer into something REAL, THEN explain.
+- NEVER use nominalizations. Replace with plain actions.
+- The last 10-20% must shift from precise evidence to personal, poetic, emotionally resonant.
+
 STRUCTURE:
-**HOOK** — Open with a specific, surprising fact or number. NOT a vague scene-setter.
-**ANCHOR** — Ground the story in specific evidence: names, data, places, dates.
-**BRIDGE** — Connect the specific evidence to the bigger picture. Show the mechanism.
-**REVEAL** — The key insight that challenges the mainstream assumption. Back it with evidence.
-**CONCLUSION** — End with a specific forward-looking fact or prediction. NOT a vague inspirational statement.
+**HOOK** — Open IN MEDIAS RES. Drop the viewer into a surprising action, a specific number, a physical object.
+**ANCHOR** — Ground in something tangible the camera can point at.
+**BRIDGE** — Connect the anchor evidence to the bigger picture. Who did what to whom.
+**REVEAL** — The key insight that challenges the mainstream assumption. Name who loses and who wins.
+**CONCLUSION** — Shift to personal/poetic mode. Include unexpected praise. End with a resonant line.
 
 Write 500-700 words of narration text. Output ONLY the script with section headers. No meta-commentary."""
+
+    system_prompt = """You are an elite documentary scriptwriter in the style of Johnny Harris.
+
+Your writing obeys these IRON RULES:
+1. INVESTIGATION OVER EXPLANATION — Show the audience something real. Let meaning emerge.
+2. EXPERIENCE OVER INFORMATION — Create discovery, not instruction.
+3. AGENT-ACTION-OBJECT — Every sentence: visible agent doing something to visible object.
+4. ANTI-ABSTRACTION — Never "the globalization of trade led to..." — write "America sent its factories to China and a million workers in Ohio lost their jobs."
+5. PEER-TO-PEER — You are a friend saying "wait, look at this."
+6. CONCRETE FACTS ONLY — Every sentence carries specific names, numbers, dates, or places.
+7. PAKISTANI AUDIENCE — Use PKR, Pakistani locations, Pakistani cultural context.
+
+You NEVER write: "In a country often defined by...", "Things are changing", "A new era is dawning", "The stakes are high"
+You ALWAYS write: "On February 14th, 2025, the federal cabinet approved...", "i2i PSER's report shows..." """
 
     start = time.time()
     async with RouterClient() as router:
         draft = await router.complete_text(
             prompt,
-            system="You are an elite documentary scriptwriter in the style of Johnny Harris. You write scripts that are dense with specific facts, names, numbers, and real-world examples. You never write vague filler. Every sentence carries concrete information.",
+            system=system_prompt,
             model="script_writer",
             max_tokens=2000,
         )
@@ -149,6 +183,8 @@ Write 500-700 words of narration text. Output ONLY the script with section heade
     word_count = len(draft.split())
     print(f"Draft generated in {elapsed:.1f}s")
     print(f"Word count: {word_count}")
+    print(f"Style context injected: {len(_STYLE_CONTEXT)} chars")
+    print(f"Genre rules injected: {len(genre_rules)} chars")
     print(f"\n--- SCRIPT ---\n{draft}\n")
     return draft
 
