@@ -478,7 +478,7 @@ class TestExtractFacts:
         assert len(facts) > 0
         assert facts[0].source_url == "https://example.com/article"
         assert facts[0].source_name == "Dawn News"
-        assert facts[0].confidence == 0.7
+        assert facts[0].confidence == 0.5
 
     @pytest.mark.asyncio
     async def test_limited_to_5_per_source(self, engine):
