@@ -9,6 +9,7 @@ This file consolidates the implementation history and serves as a single source 
 ## [Unreleased]
 
 ### Changed
+- **Inter-Call Rate Limiter**: Added a global 5-second cooldown between consecutive LLM calls in `RouterClient` to prevent burning through OpenRouter free-tier credits. All LLM calls (both FreeRouter proxy and embedded LiteLLM) are throttled. Configurable via `_CALL_COOLDOWN_SECONDS` module constant.
 - **Pipeline Voice & Feedback Overhaul (improving-deep-research branch)**: 7 critical fixes to eliminate generic AI-sounding scripts and add back-and-forth feedback between pipeline nodes.
   - **Fix #1 — Style Constitution in Script Writer**: `draft_node` now loads `style_reference.json` and injects the full Johnny Harris style guide (anchor-bridge rhythm, classic style writing rules, peer-to-peer framing, motive loading, conclusion shift, Pakistani adaptation) into both the user prompt and system prompt. System prompt rewritten with 7 IRON RULES and explicit anti-patterns.
   - **Fix #2 — Style-Aware Mutation**: `mutate_node` now receives the same Johnny Harris style rules plus research facts. System prompt changed from generic "improve this script" to "Johnny Harris script doctor" that enforces Agent-Action-Object, kills filler, and preserves voice.

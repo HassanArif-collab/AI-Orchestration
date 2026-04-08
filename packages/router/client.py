@@ -34,6 +34,7 @@ import asyncio
 import ipaddress
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional, Type, TypeVar
 from urllib.parse import urlparse
@@ -50,6 +51,13 @@ T = TypeVar("T")
 
 # Lock for thread-safe shared client creation
 _shared_client_lock = threading.Lock()
+
+# ─── Inter-Call Rate Limiter (saves OpenRouter credits) ─────────────────────
+# Minimum seconds between consecutive LLM calls (any provider).
+# This prevents burning through free-tier rate limits on OpenRouter.
+_CALL_COOLDOWN_SECONDS: float = 5.0
+_last_call_time: float = 0.0
+_call_time_lock = threading.Lock()
 
 
 # ─── Rate Limit Header Parsing ─────────────────────────────────────────────────────
@@ -213,6 +221,32 @@ class RouterClient:
     # Class-level cached AsyncOpenAI client for structured completions
     _shared_openai_client: Optional[Any] = None
     _shared_openai_base_url: Optional[str] = None
+
+    @staticmethod
+    async def _rate_limit_wait() -> None:
+        """Sleep if the last LLM call was less than _CALL_COOLDOWN_SECONDS ago.
+
+        This is a simple global throttle that prevents burning through
+        OpenRouter free-tier credits by spacing out all LLM calls by at
+        least 5 seconds.  The lock makes it safe across concurrent tasks.
+        """
+        global _last_call_time
+        with _call_time_lock:
+            now = time.monotonic()
+            elapsed = now - _last_call_time
+            if elapsed < _CALL_COOLDOWN_SECONDS:
+                wait = _CALL_COOLDOWN_SECONDS - elapsed
+                log.info(f"rate_limit_sleep: {wait:.1f}s between LLM calls")
+                asyncio.get_event_loop().call_soon_threadsafe(
+                    lambda: None
+                )  # ensure loop exists
+            else:
+                wait = 0.0
+            # Record the *intended* next-call time immediately so that
+            # concurrent callers also wait.
+            _last_call_time = now + max(wait, 0.0)
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     # Class-level circuit breaker to prevent cascading failures.
     # NOTE: threshold is deliberately higher (10) because the pipeline makes
@@ -506,6 +540,9 @@ class RouterClient:
         if not self._circuit_breaker.allow_request():
             raise LLMClientError("Circuit breaker is OPEN for RouterClient")
 
+        # Rate-limit: enforce minimum gap between consecutive LLM calls
+        await self._rate_limit_wait()
+
         body = {
             "model": model,
             "messages": messages,
@@ -675,6 +712,9 @@ class RouterClient:
         self._init_embedded_mode()
         if not self._embedded_mode:
             raise LLMClientError("Embedded LiteLLM mode not available")
+
+        # Rate-limit: enforce minimum gap between consecutive LLM calls
+        await self._rate_limit_wait()
 
         import litellm
         litellm.drop_params = True

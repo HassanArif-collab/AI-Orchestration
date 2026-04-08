@@ -331,6 +331,18 @@ packages/content_factory ← Depends on: core, router, memory (via orchestration
 
 ---
 
+## Rate Limiting (Credit Conservation)
+
+To prevent burning through free-tier LLM credits (OpenRouter, Groq), `RouterClient` enforces a **5-second minimum cooldown** between consecutive LLM calls. This applies to both FreeRouter proxy calls and embedded LiteLLM fallback.
+
+**Why?** Free-tier models share rate limits (e.g., 20 requests/minute across all users). Without throttling, a pipeline run with 15+ LLM calls can exhaust credits in seconds.
+
+**Where?** `packages/router/client.py` — `_rate_limit_wait()` static method, called before every `complete()` and `_complete_embedded()`.
+
+**Configurable:** `_CALL_COOLDOWN_SECONDS` module constant (default: 5.0).
+
+---
+
 ## When to Revisit These Decisions
 
 | Decision | Revisit When |
@@ -339,3 +351,4 @@ packages/content_factory ← Depends on: core, router, memory (via orchestration
 | Two-service architecture | Need to eliminate network latency |
 | 9 stages | Business requirements change |
 | SSE for updates | Need bidirectional real-time |
+| 5s rate limiter | Have paid API keys with higher limits |
