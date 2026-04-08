@@ -832,7 +832,7 @@ STRUCTURE:
 **REVEAL** — The key insight that challenges the mainstream assumption. Back it with evidence. Name who loses and who wins.
 **CONCLUSION** — Shift to personal/poetic mode. Include unexpected praise. End with a resonant line, not a summary.
 
-Write 500-700 words of narration text. Output ONLY the script with section headers. No meta-commentary."""
+Write 1500-2000 words of narration text (approximately 10-13 minutes when read aloud). This is a FULL documentary script, not a teaser or summary. Every section (HOOK, ANCHOR, BRIDGE, REVEAL, CONCLUSION) must be substantially developed with specific facts, scenes, and evidence. Output ONLY the script with section headers. No meta-commentary."""
         
         system_prompt = """You are an elite documentary scriptwriter in the style of Johnny Harris.
 
@@ -853,7 +853,7 @@ You ALWAYS write: "On February 14th, 2025, the federal cabinet approved...", "i2
                 prompt,
                 system=system_prompt,
                 model="script_writer",
-                max_tokens=2000,
+                max_tokens=4000,
             )
         
         await report_thought(
@@ -936,7 +936,7 @@ Score = (points / 56) * 100, rounded to nearest integer.
 3. Does each section flow logically to the next?
 4. Is the script divided into clear segments/acts?
 5. Does the ending tie back to the opening hook?
-6. Is the total length appropriate (3-10 minutes when read)?
+6. Is the total length appropriate (10-13 minutes when read, approximately 1500-2000 words)?
 7. Are transitions smooth between topics?
 8. Is there a clear thesis statement?
 
@@ -1121,6 +1121,7 @@ MUTATION RULES:
 6. Assign human motives to every entity mentioned (fear, ambition, desperation, pride).
 7. NEVER add filler like "the stakes are high", "in a country defined by", "things are changing"
 8. The conclusion should shift from evidence to personal/poetic mode.
+9. CRITICAL: The output MUST be at least as long as the current draft. Do NOT shorten or summarize any section. If expanding, target 1500-2000 words total. This is a FULL documentary script.
 
 Output ONLY the complete improved script with section headers. Do NOT add meta-commentary."""
         
@@ -1140,7 +1141,8 @@ Output the complete improved script only. No commentary."""
             challenger_draft = await router.complete_text(
                 prompt,
                 system=system_prompt,
-                model="challenger"
+                model="challenger",
+                max_tokens=4000,
             )
         
         await report_thought(

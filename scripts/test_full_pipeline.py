@@ -160,7 +160,7 @@ STRUCTURE:
 **REVEAL** — The key insight that challenges the mainstream assumption. Name who loses and who wins.
 **CONCLUSION** — Shift to personal/poetic mode. Include unexpected praise. End with a resonant line.
 
-Write 500-700 words of narration text. Output ONLY the script with section headers. No meta-commentary."""
+Write 1500-2000 words of narration text (approximately 10-13 minutes when read aloud). This is a FULL documentary script, not a teaser or summary. Every section (HOOK, ANCHOR, BRIDGE, REVEAL, CONCLUSION) must be substantially developed with specific facts, scenes, and evidence. Output ONLY the script with section headers. No meta-commentary."""
 
     system_prompt = """You are an elite documentary scriptwriter in the style of Johnny Harris.
 
@@ -182,7 +182,7 @@ You ALWAYS write: "On February 14th, 2025, the federal cabinet approved...", "i2
             prompt,
             system=system_prompt,
             model="script_writer",
-            max_tokens=2000,
+            max_tokens=4000,
         )
 
     elapsed = time.time() - start
