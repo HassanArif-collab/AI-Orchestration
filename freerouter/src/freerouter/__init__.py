@@ -1,18 +1,19 @@
 """
-FreeRouter — LiteLLM-based task router v3.1.
+FreeRouter — LiteLLM-based task router v4.0.
 
-2 providers (OpenRouter, Ollama Cloud), 7 named routes with
-multi-fallback chains. Delegates provider management to LiteLLM.
-Keeps only the task-based routing logic and pipeline task storage.
+4 providers (Zhipu AI, Google AI Studio, Ollama Cloud, OpenRouter),
+7 named routes with deep 6-level fallback chains.
 
-v3.1 Changes:
-  - Removed Groq as a provider
-  - 2 providers remaining: OpenRouter (primary) + Ollama Cloud (creative)
-  - Multi-fallback chains: primary → fallback → fallback2
-  - StepFun 3.5 Flash as primary for auto/scorer
+v4.0 Changes:
+  - Added Zhipu AI (glm-4-plus, glm-4-0520, glm-4-flash) as PRIMARY provider
+  - Added Google AI Studio (gemini-2.0-flash) as secondary
+  - Ollama Cloud as tertiary (weekly limits)
+  - OpenRouter free models as last resort
+  - 6-level fallback chains per route
+  - Exponential backoff on rate limits (429)
 """
 
-__version__ = "3.4.0"
+__version__ = "4.0.0"
 __author__ = "FreeRouter"
 
 from freerouter.config import ROUTES

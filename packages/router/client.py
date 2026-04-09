@@ -264,10 +264,13 @@ class RouterClient:
     _embedded_routes: Optional[dict] = None
     _embedded_ollama_base: Optional[str] = None
     _embedded_ollama_key: Optional[str] = None
+    _embedded_google_key: Optional[str] = None
+    _embedded_zhipu_key: Optional[str] = None
+    _embedded_openrouter_key: Optional[str] = None
 
     @classmethod
     def _init_embedded_mode(cls):
-        """Initialize embedded LiteLLM mode with FreeRouter routing table."""
+        """Initialize embedded LiteLLM mode with FreeRouter routing table + all provider keys."""
         if cls._embedded_routes is not None:
             return
         try:
@@ -279,7 +282,7 @@ class RouterClient:
             from freerouter.config import ROUTES
             cls._embedded_routes = ROUTES
 
-            # Load Ollama config from freerouter/.env
+            # Load all provider keys from freerouter/.env
             import os
             from dotenv import load_dotenv
             freerouter_env = os.path.join('/home/z/AI-Orchestration', 'freerouter', '.env')
@@ -287,10 +290,19 @@ class RouterClient:
                 load_dotenv(freerouter_env, override=True)
             cls._embedded_ollama_base = os.getenv('OLLAMA_API_BASE', 'https://ollama.com')
             cls._embedded_ollama_key = os.getenv('OLLAMA_API_KEY', '')
+            cls._embedded_google_key = os.getenv('GOOGLE_API_KEY', '')
+            cls._embedded_zhipu_key = os.getenv('ZHIPU_API_KEY', '')
+            cls._embedded_openrouter_key = os.getenv('OPENROUTER_API_KEY', '')
 
             cls._embedded_mode = True
+            log.info(
+                'embedded_mode_initialized',
+                ollama=bool(cls._embedded_ollama_key),
+                google=bool(cls._embedded_google_key),
+                zhipu=bool(cls._embedded_zhipu_key),
+                openrouter=bool(cls._embedded_openrouter_key),
+            )
         except Exception as e:
-            # Use print to avoid structlog issues during class init
             print(f"Warning: embedded_mode_init_failed: {e}")
             cls._embedded_mode = False
 
@@ -309,14 +321,34 @@ class RouterClient:
             return models
         return [model]
 
+    _ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4'
+
     @classmethod
     def _build_litellm_kwargs(cls, model_str: str) -> dict:
-        """Build extra kwargs for litellm based on provider."""
+        """Build extra kwargs for litellm based on provider.
+
+        Provider detection:
+        - ollama_chat/* / ollama/* → Ollama Cloud
+        - gemini/* → Google AI Studio
+        - openrouter/* → OpenRouter
+        - openai/glm-4-* → Zhipu AI (OpenAI-compatible at open.bigmodel.cn)
+        """
         kwargs = {}
         if model_str.startswith('ollama'):
             kwargs['api_base'] = cls._embedded_ollama_base
             if cls._embedded_ollama_key:
                 kwargs['api_key'] = cls._embedded_ollama_key
+        elif model_str.startswith('gemini'):
+            if cls._embedded_google_key:
+                kwargs['api_key'] = cls._embedded_google_key
+        elif model_str.startswith('openrouter'):
+            if cls._embedded_openrouter_key:
+                kwargs['api_key'] = cls._embedded_openrouter_key
+        elif 'glm' in model_str:
+            # Zhipu AI uses OpenAI-compatible endpoint
+            kwargs['api_base'] = cls._ZHIPU_API_BASE
+            if cls._embedded_zhipu_key:
+                kwargs['api_key'] = cls._embedded_zhipu_key
         return kwargs
 
     @classmethod
@@ -325,6 +357,12 @@ class RouterClient:
         prefix = model_str.split('/')[0]
         if prefix.startswith('ollama'):
             return 'ollama'
+        if prefix == 'gemini':
+            return 'google_ai_studio'
+        if prefix == 'openrouter':
+            return 'openrouter'
+        if 'glm' in model_str:
+            return 'zhipu'
         return prefix
 
     @classmethod

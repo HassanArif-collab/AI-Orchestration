@@ -1,25 +1,22 @@
 """
-server.py — LiteLLM-backed proxy with multi-fallback chains.
+server.py — LiteLLM-backed proxy with multi-provider fallback chains.
+
+v4.0 changes:
+  - 4 providers: Zhipu AI (primary), Google AI Studio, Ollama Cloud, OpenRouter
+  - Deep fallback chains (6 levels per route)
+  - Auto-retry on rate limits (429) with exponential backoff
 
 Accepts POST /v1/chat/completions with model= set to either:
   - A task name:  "researcher", "scorer", "auto", etc.
-  - A direct LiteLLM string: "openrouter/qwen/qwen3.6-plus:free" (passed through)
-
-Returns standard OpenAI-compatible JSON + two headers:
-  x-freerouter-model     — actual model used
-  x-freerouter-provider  — provider (openrouter / ollama)
+  - A direct LiteLLM string: "openai/glm-4-plus"
 
 Run:  python -m freerouter
-
-v3.1 changes:
-  - Multi-fallback chains: primary → fallback → fallback2
-  - Ollama Cloud support (ollama_chat/ prefix + api_base + api_key)
-  - 2 providers: OpenRouter, Ollama Cloud
 """
 
 import json
 import logging
 import os
+import asyncio
 from typing import AsyncIterator
 
 import litellm
@@ -28,14 +25,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .config import ROUTES
+from .config import ROUTES, ZHIPU_API_BASE
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-# Load from freerouter/.env
 _env_candidates = [
-    os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # freerouter/.env
-    os.path.join(os.path.dirname(__file__), ".env"),               # freerouter/src/freerouter/.env
+    os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+    os.path.join(os.path.dirname(__file__), ".env"),
 ]
 for _env_path in _env_candidates:
     _env_path = os.path.normpath(_env_path)
@@ -43,48 +39,51 @@ for _env_path in _env_candidates:
         load_dotenv(_env_path)
         break
 
-litellm.drop_params = True          # ignore params unsupported by a model silently
+litellm.drop_params = True
 litellm.set_verbose = False
 
 log = logging.getLogger("freerouter")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
-app = FastAPI(title="FreeRouter", version="3.1.0")
+app = FastAPI(title="FreeRouter", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── Ollama Cloud config ───────────────────────────────────────────────────────
+# ── Provider config ───────────────────────────────────────────────────────────
 
 OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "https://ollama.com")
-OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
+OLLAMA_API_KEY  = os.getenv("OLLAMA_API_KEY", "")
+GOOGLE_API_KEY  = os.getenv("GOOGLE_API_KEY", "")
+ZHIPU_API_KEY   = os.getenv("ZHIPU_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 
 # ── Routing helpers ───────────────────────────────────────────────────────────
 
 def _resolve(model: str) -> list[str]:
-    """Return ordered list of LiteLLM model strings to try.
-
-    For a task name, returns [primary, fallback, fallback2].
-    For a direct litellm string, returns [model, auto_fallback].
-    """
+    """Return ordered list of LiteLLM model strings to try."""
     route = ROUTES.get(model)
     if route:
-        # Build list from route keys (model, fallback, fallback2, fallback3) — skip missing
         models = []
-        for key in ("model", "fallback", "fallback2", "fallback3"):
+        for key in ("model", "fallback", "fallback2", "fallback3", "fallback4", "fallback5"):
             val = route.get(key)
             if val:
                 models.append(val)
         return models
-    # Already a litellm string — pass through with auto fallback
     return [model, ROUTES["auto"]["model"]]
 
 
 def _provider(model_str: str) -> str:
     """Extract provider name from litellm model string."""
     prefix = model_str.split("/")[0]
-    # Normalize ollama_chat → ollama
     if prefix.startswith("ollama"):
         return "ollama"
+    if prefix == "gemini":
+        return "google_ai_studio"
+    if prefix == "openrouter":
+        return "openrouter"
+    # Zhipu models use "openai/glm-4-*" with custom api_base
+    if "glm" in model_str:
+        return "zhipu"
     return prefix
 
 
@@ -95,6 +94,17 @@ def _build_call_kwargs(model_str: str) -> dict:
         kwargs["api_base"] = OLLAMA_API_BASE
         if OLLAMA_API_KEY:
             kwargs["api_key"] = OLLAMA_API_KEY
+    elif model_str.startswith("gemini"):
+        if GOOGLE_API_KEY:
+            kwargs["api_key"] = GOOGLE_API_KEY
+    elif model_str.startswith("openrouter"):
+        if OPENROUTER_API_KEY:
+            kwargs["api_key"] = OPENROUTER_API_KEY
+    elif "glm" in model_str:
+        # Zhipu AI uses OpenAI-compatible endpoint
+        kwargs["api_base"] = ZHIPU_API_BASE
+        if ZHIPU_API_KEY:
+            kwargs["api_key"] = ZHIPU_API_KEY
     return kwargs
 
 
@@ -103,7 +113,7 @@ def _build_call_kwargs(model_str: str) -> dict:
 async def _complete(model_chain: list[str], messages: list, params: dict):
     """Try each model in the chain until one succeeds."""
     last_error = None
-    for model in model_chain:
+    for i, model in enumerate(model_chain):
         try:
             extra = _build_call_kwargs(model)
             resp = await litellm.acompletion(model=model, messages=messages, **params, **extra)
@@ -111,15 +121,25 @@ async def _complete(model_chain: list[str], messages: list, params: dict):
             return resp
         except Exception as exc:
             last_error = exc
-            log.warning(
-                "model_failed model=%s error=%s remaining=%d",
-                model, exc, len(model_chain) - model_chain.index(model) - 1,
-            )
+            remaining = len(model_chain) - i - 1
+            error_str = str(exc)
 
-    # Return 503 so RouterClient retries with "auto"
+            if "429" in error_str or "rate" in error_str.lower():
+                wait = min(2 ** i, 8)
+                log.warning(
+                    "rate_limited model=%s error=%s waiting_%ss remaining=%d",
+                    model, exc, wait, remaining,
+                )
+                await asyncio.sleep(wait)
+            else:
+                log.warning(
+                    "model_failed model=%s error=%s remaining=%d",
+                    model, exc, remaining,
+                )
+
     raise HTTPException(
         status_code=503,
-        detail=f"All models failed: {[m for m in model_chain]}. Last error: {last_error}",
+        detail=f"All models failed: {model_chain}. Last error: {last_error}",
     )
 
 
@@ -170,9 +190,7 @@ async def chat_completions(request: Request):
     resp = await _complete(model_chain, messages, params)
     used = getattr(resp, "_used_model", primary)
 
-    # Normalize response for reasoning models (e.g., StepFun):
-    # Some models put output in reasoning_content with content=null.
-    # Fix: copy reasoning_content into content so all clients work.
+    # Normalize response for reasoning models
     data = resp.model_dump()
     for choice in data.get("choices", []):
         msg = choice.get("message", {})
@@ -195,7 +213,7 @@ async def list_models():
     models = []
     for task_name, route in ROUTES.items():
         chain = []
-        for key in ("model", "fallback", "fallback2", "fallback3"):
+        for key in ("model", "fallback", "fallback2", "fallback3", "fallback4", "fallback5"):
             val = route.get(key)
             if val:
                 chain.append(val)
@@ -204,9 +222,6 @@ async def list_models():
             "object": "model",
             "owned_by": _provider(route["model"]),
             "primary": route["model"],
-            "fallback": route.get("fallback", ""),
-            "fallback2": route.get("fallback2", ""),
-            "fallback3": route.get("fallback3", ""),
             "chain": chain,
         })
     return {"object": "list", "data": models}
@@ -214,14 +229,15 @@ async def list_models():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
+    """Health check endpoint — shows all provider statuses."""
     return {
         "status": "ok",
-        "version": "3.1.0",
+        "version": "4.0.0",
         "providers": {
-            "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
+            "zhipu": bool(ZHIPU_API_KEY),
+            "google_ai_studio": bool(GOOGLE_API_KEY),
             "ollama": bool(OLLAMA_API_KEY),
+            "openrouter": bool(OPENROUTER_API_KEY),
         },
-        "ollama_base": OLLAMA_API_BASE,
         "tasks": list(ROUTES.keys()),
     }
