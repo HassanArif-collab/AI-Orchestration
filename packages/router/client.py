@@ -55,7 +55,7 @@ _shared_client_lock = threading.Lock()
 # ─── Inter-Call Rate Limiter (saves OpenRouter credits) ─────────────────────
 # Minimum seconds between consecutive LLM calls (any provider).
 # This prevents burning through free-tier rate limits on OpenRouter.
-_CALL_COOLDOWN_SECONDS: float = 5.0
+_CALL_COOLDOWN_SECONDS: float = 8.0
 _last_call_time: float = 0.0
 _call_time_lock = threading.Lock()
 
