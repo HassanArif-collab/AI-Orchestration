@@ -81,7 +81,9 @@ async function refreshProviders() {
           </tr>`).join('')}
         </tbody></table>`
       : '<p style="color:var(--text-muted);font-size:12px">No usage recorded yet</p>';
-  } catch {}
+  } catch (err) {
+    console.warn('Failed to render provider stats:', err);
+  }
 }
 
 async function saveKey(name) {

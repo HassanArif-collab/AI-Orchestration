@@ -16,10 +16,9 @@ ROUTES (all prefixed with their router):
   /events              — SSE stream for real-time pipeline updates
 
 STATIC DASHBOARD:
-  apps/api/static/index.html — the web UI
-  JavaScript files in apps/api/static/js/ correspond to each route:
-    pipeline.js, providers.js, chat.js, memory.js, analytics.js,
-    visual.js, settings.js
+  apps/web/dist/ — React + Vite production build (Phase 1-8)
+  Old dashboard preserved at apps/api/static/ for reference only.
+  To rebuild: cd apps/web && npm run build
 
 FREEROUTER PROXY:
   Provider and chat routes proxy requests to FreeRouter at :4000.
@@ -37,7 +36,7 @@ import os
 
 # ── MUST run before any litellm import (triggered by crewai) ────────────
 # Prevents LiteLLM from blocking startup with a remote HTTP fetch
-to GitHub for model pricing data. Uses bundled local copy instead.
+# to GitHub for model pricing data. Uses bundled local copy instead.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from contextlib import asynccontextmanager
@@ -61,6 +60,7 @@ from apps.api.routers import (
     topic_routes,
     health_routes,
     kanban_routes,
+    dlq_routes,
 )
 from packages.core.config import get_settings
 
@@ -72,21 +72,12 @@ async def lifespan(app: FastAPI):
     Initializes databases on startup and cleans up on shutdown.
     """
 
-    # Bootstrap agents into registry
-    try:
-        from packages.agents.bootstrap import bootstrap_agents
-        bootstrap_agents()
-    except Exception as e:
-        print(f"Warning: Agent bootstrap failed (non-fatal): {e}")
-    
-    # Start the orchestration scheduler
-    try:
-        from apps.api.background_tasks import start_scheduler
-        if not start_scheduler():
-            print("Warning: Scheduler startup failed (non-fatal)")
-    except Exception as e:
-        print(f"Warning: Scheduler startup failed (non-fatal): {e}")
-    
+    # NOTE: bootstrap_agents() removed in Phase 3 — packages.agents.bootstrap deleted
+    # (CrewAI agents were dead code; LangGraph nodes handle content creation)
+
+    # NOTE: start_scheduler() removed in Phase 3 — MasterOrchestrator deprecated
+    # (LangGraph pipeline handles topic discovery and production natively)
+
     # Start the expired card cleanup task
     try:
         from apps.api.background_tasks import start_cleanup_task
@@ -102,9 +93,62 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Chat agent startup failed (non-fatal): {e}")
     
+    # Startup health validation — check all services and log warnings
+    try:
+        from packages.core.config import get_settings as _get_settings
+        _settings = _get_settings()
+        service_status = _settings.get_service_status()
+        unavailable = [svc for svc, status in service_status.items() if status != "available"]
+        if unavailable:
+            print(f"Warning: {len(unavailable)} service(s) not available at startup: {', '.join(unavailable)}")
+            for svc in unavailable:
+                print(f"  - {svc}: {service_status[svc]}")
+        # Store initial health status for dashboard consumption
+        app.state.initial_health = service_status
+
+        # ── Configuration completeness validation (Issue 18) ──
+        # Check critical vs optional config keys and log warnings for missing optional ones
+        critical_keys = {
+            "FREEROUTER_URL": _settings.FREEROUTER_URL,
+        }
+        optional_keys = {
+            "NOTION_API_KEY": _settings.NOTION_API_KEY,
+            "ZEP_API_KEY": _settings.ZEP_API_KEY,
+            "EXA_API_KEY": _settings.EXA_API_KEY,
+            "SUPABASE_URL": _settings.SUPABASE_URL,
+            "YOUTUBE_API_KEY": _settings.YOUTUBE_API_KEY,
+        }
+
+        missing_critical = [k for k, v in critical_keys.items() if not v]
+        missing_optional = [k for k, v in optional_keys.items() if not v]
+
+        if missing_critical:
+            print(f"ERROR: {len(missing_critical)} critical config key(s) missing: {', '.join(missing_critical)}")
+        if missing_optional:
+            print(f"Info: {len(missing_optional)} optional service(s) not configured: {', '.join(missing_optional)}")
+            print("  These services will operate in degraded mode. Set the corresponding env vars to enable them.")
+
+        # Store config status for the /api/health/config endpoint
+        app.state.config_status = {
+            "critical": {k: bool(v) for k, v in critical_keys.items()},
+            "optional": {k: bool(v) for k, v in optional_keys.items()},
+            "missing_critical": missing_critical,
+            "missing_optional": missing_optional,
+        }
+    except Exception as e:
+        print(f"Warning: Startup health validation failed (non-fatal): {e}")
+        app.state.initial_health = {}
+        app.state.config_status = {}
+
     print("\nFreeRouter Dashboard - http://localhost:3000")
     print("   LLM proxy: python -m freerouter proxy  (port 4000)\n")
     yield
+    # Stop the expired card cleanup task
+    try:
+        from apps.api.background_tasks import stop_cleanup_task
+        await stop_cleanup_task()
+    except Exception as e:
+        print(f"Warning: Cleanup task stop failed (non-fatal): {e}")
     await close_all()
 
 
@@ -141,14 +185,22 @@ app.include_router(visual_routes,   prefix="/api/visual",    tags=["visual"])
 app.include_router(settings_routes, prefix="/api/settings",  tags=["settings"])
 app.include_router(topic_routes,    prefix="/api/topics",    tags=["topics"])
 app.include_router(kanban_routes, prefix="/api/kanban", tags=["kanban"])
+app.include_router(dlq_routes, tags=["dlq"])
 
 # SSE endpoint
 app.add_api_route("/api/events", sse_endpoint, methods=["GET"])
 
 # Static frontend — MUST be last
-import os
-_static_dir = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")
+# Serves the legacy vanilla-JS dashboard from apps/api/static/ (fixed to match
+# current backend API contracts). React build is preserved at apps/web/dist/.
+# To switch back to React: set _frontend_dir = _react_dist below.
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_react_dist = os.path.join(_project_root, "apps", "web", "dist")
+_legacy_static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_frontend_dir = _legacy_static
+_frontend_label = "Legacy (vanilla JS)"
+print(f"  Frontend: {_frontend_label} from {_frontend_dir}")
+app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="static")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,6 @@ Cron Example:
 import argparse
 import asyncio
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +45,7 @@ class TrendScanner:
     """
     
     def __init__(self):
-        self.youtube_api_key = os.getenv("YOUTUBE_API_KEY", "")
+        self.youtube_api_key = get_settings().YOUTUBE_API_KEY
     
     async def scan_youtube_trends(self, region: str = "PK") -> list[dict]:
         """

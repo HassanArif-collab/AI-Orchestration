@@ -1,49 +1,57 @@
-import { useState, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import useSWR from 'swr';
+import Markdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
+import { AlertTriangle } from 'lucide-react';
+import { getKnowledgeBase } from '@/lib/api';
+import { mapApiError } from '@/lib/errorMapper';
 
 export function KnowledgeBase() {
-  const [content, setContent] = useState<string>('');
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data, error, isLoading, mutate } = useSWR('knowledge-base', () => getKnowledgeBase());
 
-  useEffect(() => {
-    fetch(`${API_BASE}/api/settings/knowledge-base`)
-      .then((res) => res.json())
-      .then((data) => {
-        setContent(data.content || '');
-        setFilePath(data.path || null);
-      })
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
-  }, []);
+  const content: string = data?.content || '';
+  const filePath: string | null = data?.path || null;
 
-  if (isLoading) return <div className="p-4 text-gray-500 text-sm">Loading knowledge base...</div>;
+  if (isLoading) return <div className="p-4 text-[hsl(var(--neutral-400))] text-sm">Loading knowledge base...</div>;
+
+  if (error) {
+    const friendlyError = mapApiError(error);
+    return (
+      <div className="p-4">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
+          <p className="text-red-300 text-sm font-medium">Failed to load knowledge base</p>
+          <p className="text-red-200/70 text-xs mt-1">{friendlyError.message}</p>
+        </div>
+        <button
+          onClick={() => mutate()}
+          className="text-xs text-[hsl(var(--brand-300))] hover:text-[hsl(var(--brand-500))] underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4">
-      {/* Code is Truth banner */}
-      <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 mb-4">
-        <p className="text-xs text-amber-400 font-medium">
-          ⚠ Code is Truth — Read-only view
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-4">
+        <p className="text-xs text-amber-400 font-medium flex items-center gap-1.5">
+          <AlertTriangle className="w-3 h-3" strokeWidth={1.5} />
+          Code is Truth — Read-only view
         </p>
         {filePath && (
           <p className="text-xs text-amber-400/70 mt-1">
-            Source: <code className="bg-gray-800 px-1 rounded">{filePath}</code>
+            Source: <code className="bg-[hsl(var(--neutral-800))] px-1 rounded text-amber-300">{filePath}</code>
           </p>
         )}
       </div>
 
-      {/* Markdown content */}
-      <div className="prose prose-sm prose-invert max-w-none bg-gray-800 rounded-lg p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
+      <div className="prose prose-sm prose-invert max-w-none bg-[hsl(var(--surface-glass))] rounded-xl p-4 max-h-[60vh] overflow-y-auto border border-[hsl(var(--surface-glass-border))]">
         {content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <Markdown rehypePlugins={[rehypeSanitize]}>
             {content}
-          </ReactMarkdown>
+          </Markdown>
         ) : (
-          <p className="text-gray-500">No knowledge base content available.</p>
+          <p className="text-[hsl(var(--neutral-500))]">No knowledge base content available.</p>
         )}
       </div>
     </div>

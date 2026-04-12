@@ -33,19 +33,31 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import re
+import threading
+import time
 from datetime import datetime, timezone
-from typing import Any, Type, TypeVar
+from typing import Any, Optional, Type, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-import requests
 
+from packages.core.circuit_breaker import CircuitBreaker
 from packages.core.config import get_settings
 from packages.core.errors import LLMClientError, RateLimitError
 from packages.core.logger import get_logger
 
 log = get_logger(__name__)
 T = TypeVar("T")
+
+# Lock for thread-safe shared client creation
+_shared_client_lock = threading.Lock()
+
+# ─── Inter-Call Rate Limiter (saves OpenRouter credits) ─────────────────────
+# Minimum seconds between consecutive LLM calls (any provider).
+# This prevents burning through free-tier rate limits on OpenRouter.
+_CALL_COOLDOWN_SECONDS: float = 8.0
+_last_call_time: float = 0.0
+_call_time_lock = threading.Lock()
 
 
 # ─── Rate Limit Header Parsing ─────────────────────────────────────────────────────
@@ -178,26 +190,219 @@ def validate_health_check_url(url: str, allowed_hosts: set[str] | None = None) -
             if is_private_ip(ip_str):
                 return False, f"Hostname '{hostname}' resolves to private IP '{ip_str}'"
     except socket.gaierror as e:
-        log.debug(f"DNS resolution failed for health check URL: {hostname}: {e}")
+        log.warning(f"DNS resolution failed for health check URL: {hostname}: {e}")
         # Don't block on DNS failure - let the request proceed and fail naturally
         pass
     except Exception as e:
-        log.debug(f"Error checking DNS for health check URL: {e}")
+        log.warning(f"Error checking DNS for health check URL: {e}")
 
     return True, ""
 
 
 class RouterClient:
-    """
-    Async HTTP client for FreeRouter proxy.
+    """Client for the FreeRouter LLM proxy with connection pooling.
+
     Use as an async context manager or call close() when done.
 
     Features:
+        - Shared class-level HTTP client with connection pooling
         - Startup health check to ensure FreeRouter is running
         - Async health_check() method for monitoring
         - Automatic retry with exponential backoff
         - Fallback to "auto" model on 503 errors
+        - Cached AsyncOpenAI client for structured completions
+        - Direct LiteLLM fallback when FreeRouter is not running (embedded mode)
     """
+
+    # Class-level shared HTTP client for connection pooling
+    _shared_client: Optional[httpx.AsyncClient] = None
+    _shared_client_refcount: int = 0
+
+    # Class-level cached AsyncOpenAI client for structured completions
+    _shared_openai_client: Optional[Any] = None
+    _shared_openai_base_url: Optional[str] = None
+
+    @staticmethod
+    async def _rate_limit_wait() -> None:
+        """Sleep if the last LLM call was less than _CALL_COOLDOWN_SECONDS ago.
+
+        This is a simple global throttle that prevents burning through
+        OpenRouter free-tier credits by spacing out all LLM calls by at
+        least 5 seconds.  The lock makes it safe across concurrent tasks.
+        """
+        global _last_call_time
+        with _call_time_lock:
+            now = time.monotonic()
+            elapsed = now - _last_call_time
+            if elapsed < _CALL_COOLDOWN_SECONDS:
+                wait = _CALL_COOLDOWN_SECONDS - elapsed
+                log.info(f"rate_limit_sleep: {wait:.1f}s between LLM calls")
+                asyncio.get_event_loop().call_soon_threadsafe(
+                    lambda: None
+                )  # ensure loop exists
+            else:
+                wait = 0.0
+            # Record the *intended* next-call time immediately so that
+            # concurrent callers also wait.
+            _last_call_time = now + max(wait, 0.0)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+    # Class-level circuit breaker to prevent cascading failures.
+    # NOTE: threshold is deliberately higher (10) because the pipeline makes
+    # many LLM calls across stages (trend_analysis alone does 6+ calls with
+    # 3 retries each). A threshold of 5 would trip the breaker during normal
+    # transient failures and block subsequent stages like research.
+    _circuit_breaker = CircuitBreaker(
+        name="RouterClient",
+        failure_threshold=10,
+        recovery_timeout=30,
+    )
+
+    # Embedded mode: when FreeRouter is not reachable, use LiteLLM directly
+    _embedded_mode: bool = False
+    _embedded_routes: Optional[dict] = None
+    _embedded_ollama_base: Optional[str] = None
+    _embedded_ollama_key: Optional[str] = None
+    _embedded_google_key: Optional[str] = None
+    _embedded_zhipu_key: Optional[str] = None
+    _embedded_openrouter_key: Optional[str] = None
+
+    @classmethod
+    def _init_embedded_mode(cls):
+        """Initialize embedded LiteLLM mode with FreeRouter routing table + all provider keys."""
+        if cls._embedded_routes is not None:
+            return
+        try:
+            # Import FreeRouter config to get routing table
+            import sys
+            freerouter_src = '/home/z/AI-Orchestration/freerouter/src'
+            if freerouter_src not in sys.path:
+                sys.path.insert(0, freerouter_src)
+            from freerouter.config import ROUTES
+            cls._embedded_routes = ROUTES
+
+            # Load all provider keys from freerouter/.env
+            import os
+            from dotenv import load_dotenv
+            freerouter_env = os.path.join('/home/z/AI-Orchestration', 'freerouter', '.env')
+            if os.path.exists(freerouter_env):
+                load_dotenv(freerouter_env, override=True)
+            cls._embedded_ollama_base = os.getenv('OLLAMA_API_BASE', 'https://ollama.com')
+            cls._embedded_ollama_key = os.getenv('OLLAMA_API_KEY', '')
+            cls._embedded_google_key = os.getenv('GOOGLE_API_KEY', '')
+            cls._embedded_zhipu_key = os.getenv('ZHIPU_API_KEY', '')
+            cls._embedded_openrouter_key = os.getenv('OPENROUTER_API_KEY', '')
+
+            cls._embedded_mode = True
+            log.info(
+                'embedded_mode_initialized',
+                ollama=bool(cls._embedded_ollama_key),
+                google=bool(cls._embedded_google_key),
+                zhipu=bool(cls._embedded_zhipu_key),
+                openrouter=bool(cls._embedded_openrouter_key),
+            )
+        except Exception as e:
+            print(f"Warning: embedded_mode_init_failed: {e}")
+            cls._embedded_mode = False
+
+    @classmethod
+    def _resolve_model_chain(cls, model: str) -> list[str]:
+        """Resolve a task name to a chain of LiteLLM model strings."""
+        if cls._embedded_routes is None:
+            return [model]
+        route = cls._embedded_routes.get(model)
+        if route:
+            models = []
+            for key in ('model', 'fallback', 'fallback2', 'fallback3', 'fallback4', 'fallback5'):
+                val = route.get(key)
+                if val:
+                    models.append(val)
+            return models
+        return [model]
+
+    _ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4'
+
+    @classmethod
+    def _build_litellm_kwargs(cls, model_str: str) -> dict:
+        """Build extra kwargs for litellm based on provider.
+
+        Provider detection:
+        - ollama_chat/* / ollama/* → Ollama Cloud
+        - gemini/* → Google AI Studio
+        - openrouter/* → OpenRouter
+        - openai/glm-4-* → Zhipu AI (OpenAI-compatible at open.bigmodel.cn)
+        """
+        kwargs = {}
+        if model_str.startswith('ollama'):
+            kwargs['api_base'] = cls._embedded_ollama_base
+            if cls._embedded_ollama_key:
+                kwargs['api_key'] = cls._embedded_ollama_key
+        elif model_str.startswith('gemini'):
+            if cls._embedded_google_key:
+                kwargs['api_key'] = cls._embedded_google_key
+        elif model_str.startswith('openrouter'):
+            if cls._embedded_openrouter_key:
+                kwargs['api_key'] = cls._embedded_openrouter_key
+        elif 'glm' in model_str:
+            # Zhipu AI uses OpenAI-compatible endpoint
+            kwargs['api_base'] = cls._ZHIPU_API_BASE
+            if cls._embedded_zhipu_key:
+                kwargs['api_key'] = cls._embedded_zhipu_key
+        return kwargs
+
+    @classmethod
+    def _extract_provider(cls, model_str: str) -> str:
+        """Extract provider name from LiteLLM model string."""
+        prefix = model_str.split('/')[0]
+        if prefix.startswith('ollama'):
+            return 'ollama'
+        if prefix == 'gemini':
+            return 'google_ai_studio'
+        if prefix == 'openrouter':
+            return 'openrouter'
+        if 'glm' in model_str:
+            return 'zhipu'
+        return prefix
+
+    @classmethod
+    def reset_circuit_breaker(cls) -> None:
+        """Reset the class-level circuit breaker to CLOSED state.
+
+        Call this before starting a new pipeline stage to avoid a stale
+        OPEN breaker (caused by failures in a previous stage) from
+        blocking all LLM calls in the current stage.
+        """
+        cls._circuit_breaker.reset()
+        log.info("circuit_breaker_reset: RouterClient")
+
+    @classmethod
+    def _get_shared_client(cls, base_url: str, timeout: float = 90.0) -> httpx.AsyncClient:
+        """Get or create the shared HTTP client with connection pooling."""
+        global _shared_client_lock
+        with _shared_client_lock:
+            if cls._shared_client is None or cls._shared_client.is_closed:
+                cls._shared_client = httpx.AsyncClient(
+                    base_url=base_url,
+                    timeout=httpx.Timeout(timeout, connect=10.0),
+                    limits=httpx.Limits(
+                        max_connections=100,
+                        max_keepalive_connections=20,
+                        keepalive_expiry=30.0,
+                    ),
+                )
+                cls._shared_client_refcount = 0
+            cls._shared_client_refcount += 1
+            return cls._shared_client
+
+    @classmethod
+    async def _release_shared_client(cls):
+        """Decrement reference count; close when last user releases."""
+        cls._shared_client_refcount -= 1
+        if cls._shared_client_refcount <= 0 and cls._shared_client is not None:
+            await cls._shared_client.aclose()
+            cls._shared_client = None
+            cls._shared_client_refcount = 0
 
     def __init__(
         self,
@@ -222,11 +427,14 @@ class RouterClient:
         self._healthy: bool | None = None  # None = unchecked, True/False = checked
         self._startup_check_enabled = startup_check and settings.FREEROUTER_STARTUP_CHECK
 
-        self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        self._http = self._get_shared_client(self.base_url, timeout)
 
-    def _startup_health_check(self) -> None:
+        # Pre-initialize embedded mode so it's ready when needed
+        self._init_embedded_mode()
+
+    async def _startup_health_check(self) -> None:
         """
-        Synchronous health check at initialization with SSRF prevention.
+        Async health check at initialization with SSRF prevention.
 
         Raises:
             LLMClientError: If FreeRouter is not accessible or URL is invalid
@@ -241,17 +449,14 @@ class RouterClient:
             )
 
         try:
-            response = requests.get(
-                f"{self.base_url}/health",
-                timeout=5.0,
-            )
+            response = await self._http.get("/health")
             if response.status_code == 200:
                 self._healthy = True
                 log.info("freerouter_startup_check_passed", url=self.base_url)
                 return
-        except requests.exceptions.ConnectionError:
+        except httpx.ConnectError:
             pass
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             pass
         except Exception as e:
             log.warning(f"freerouter_startup_check_exception: {e}")
@@ -272,14 +477,13 @@ class RouterClient:
         """
         start = datetime.now(timezone.utc)
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/health")
-                if response.status_code == 200:
-                    latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
-                    self._healthy = True
-                    return {"healthy": True, "latency_ms": latency}
+            response = await self._http.get("/health")
+            if response.status_code == 200:
+                latency = (datetime.now(timezone.utc) - start).total_seconds() * 1000
+                self._healthy = True
+                return {"healthy": True, "latency_ms": latency}
         except Exception as e:
-            log.debug(f"health_check_failed: {e}")
+            log.warning(f"health_check_failed: {e}")
 
         self._healthy = False
         return {"healthy": False, "latency_ms": None}
@@ -294,7 +498,7 @@ class RouterClient:
         return self
 
     async def __aexit__(self, *_: Any) -> None:
-        await self.close()
+        await self._release_shared_client()
 
     # P2-06: Sync context manager support
     def __enter__(self) -> RouterClient:
@@ -317,25 +521,29 @@ class RouterClient:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # We're in an async context - can't use run_until_complete
-                # Schedule the close for later (not ideal but prevents crash)
+                # Use a synchronous close by creating a new event loop in a thread
                 log.warning(
                     "sync_context_manager_in_async_context: "
                     "Consider using async with RouterClient() instead"
                 )
-                # Create a task to close later
-                loop.create_task(self._http.aclose())
+                # Use concurrent.futures to run async close in a separate thread
+                # with its own event loop to avoid conflicts
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self.close())
+                    future.result(timeout=30)  # Wait up to 30 seconds
             else:
                 # No running loop, we can close synchronously
-                loop.run_until_complete(self._http.aclose())
+                loop.run_until_complete(self.close())
         except RuntimeError:
             # No event loop exists - create one to close
-            asyncio.run(self._http.aclose())
+            asyncio.run(self.close())
         except Exception as e:
-            log.debug(f"context_manager_close_error: {e}")
+            log.warning(f"context_manager_close_error: {e}")
 
     async def close(self) -> None:
-        """Close the HTTP client connection."""
-        await self._http.aclose()
+        """Release the shared HTTP client (closes when last user releases)."""
+        await self._release_shared_client()
 
     async def complete(
         self,
@@ -348,6 +556,8 @@ class RouterClient:
         """
         Call FreeRouter and return parsed response with exponential backoff retries.
 
+        Falls back to embedded LiteLLM mode if FreeRouter is not reachable.
+
         Returns dict with keys:
             content  (str)  — the model's reply
             model    (str)  — actual model used (from x-freerouter-model header)
@@ -358,6 +568,19 @@ class RouterClient:
         If a specific model returns 503, automatically retries with model="auto"
         so FreeRouter's fallback chain kicks in.
         """
+        # If in embedded mode (FreeRouter not running), use direct LiteLLM
+        if self._healthy is False or (self._healthy is None and not self._startup_check_enabled):
+            return await self._complete_embedded(
+                messages, model=model, max_tokens=max_tokens, temperature=temperature
+            )
+
+        # Circuit breaker check — reject immediately if OPEN
+        if not self._circuit_breaker.allow_request():
+            raise LLMClientError("Circuit breaker is OPEN for RouterClient")
+
+        # Rate-limit: enforce minimum gap between consecutive LLM calls
+        await self._rate_limit_wait()
+
         body = {
             "model": model,
             "messages": messages,
@@ -379,6 +602,20 @@ class RouterClient:
                 if resp.status_code == 429:
                     wait_time = (2**attempt) + 1
                     log.warning(f"rate_limit_hit_waiting_{wait_time}s")
+                    # Emit rate_limit SSE event for frontend awareness (Issue 15)
+                    try:
+                        from apps.api.events import event_bus as _event_bus
+                        # BUGFIX: Do NOT re-import asyncio here — it shadows the module-level
+                        # import (line 33) and causes UnboundLocalError in Python 3.12+
+                        # when asyncio.sleep() is called after this try/except block.
+                        asyncio.ensure_future(_event_bus.publish("rate_limit", {
+                            "wait_time": wait_time,
+                            "attempt": attempt + 1,
+                            "max_retries": retries,
+                            "model": body.get("model", "auto"),
+                        }))
+                    except Exception:
+                        pass  # Non-critical: SSE emission must not break the retry loop
                     await asyncio.sleep(wait_time)
                     continue
 
@@ -418,6 +655,8 @@ class RouterClient:
                     # Never crash the pipeline because tracking failed
                     log.debug(f"usage_tracking_failed_non_blocking: {tracker_error}")
 
+                self._circuit_breaker.record_success()
+
                 log.info(
                     "llm_call_ok",
                     provider=result["provider"],
@@ -430,23 +669,149 @@ class RouterClient:
 
             except httpx.HTTPStatusError as e:
                 last_error = e
+                self._circuit_breaker.record_failure()
                 if attempt < retries - 1:
                     wait_time = (2**attempt) + 1
                     log.warning(f"http_error_{e.response.status_code}_retrying_in_{wait_time}s")
                     await asyncio.sleep(wait_time)
                 continue
-            except httpx.ConnectError as e:
-                raise LLMClientError(
-                    f"Cannot connect to FreeRouter at {self.base_url}. "
-                    "Start it with: python -m freerouter proxy"
-                ) from e
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                last_error = e
+                self._circuit_breaker.record_failure()
+                if attempt < retries - 1:
+                    wait_time = (2**attempt) + 1
+                    log.warning(f"connection_or_timeout_error_retrying_in_{wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                continue
             except Exception as e:
                 last_error = e
                 if attempt < retries - 1:
                     await asyncio.sleep(1)
                 continue
 
+        # ─── Fallback Router URL ─────────────────────────────────────────────
+        fallback_url = get_settings().FALLBACK_ROUTER_URL
+        if fallback_url:
+            log.warning(
+                "primary_router_failed_trying_fallback",
+                fallback_url=fallback_url,
+                last_error=str(last_error),
+            )
+            try:
+                async with httpx.AsyncClient(
+                    base_url=fallback_url.rstrip("/"),
+                    timeout=httpx.Timeout(self.timeout, connect=10.0),
+                ) as fallback_client:
+                    fallback_resp = await fallback_client.post(
+                        "/v1/chat/completions", json=body,
+                    )
+                    fallback_resp.raise_for_status()
+                    fallback_data = fallback_resp.json()
+                    self._circuit_breaker.record_success()
+                    log.info(
+                        "llm_call_ok_via_fallback",
+                        fallback_url=fallback_url,
+                    )
+                    return {
+                        "content": fallback_data["choices"][0]["message"]["content"],
+                        "model": fallback_resp.headers.get("x-freerouter-model", body["model"]),
+                        "provider": fallback_resp.headers.get("x-freerouter-provider", "fallback"),
+                        "usage": fallback_data.get("usage", {}),
+                        "limits": _parse_provider_limits(
+                            fallback_resp.headers,
+                            fallback_resp.headers.get("x-freerouter-provider", "fallback"),
+                        ),
+                    }
+            except Exception as fallback_error:
+                log.error(
+                    "fallback_router_also_failed",
+                    fallback_url=fallback_url,
+                    error=str(fallback_error),
+                )
+                raise LLMClientError(
+                    f"LLM call failed after {retries} attempts on primary, and fallback "
+                    f"router also failed: {fallback_error}"
+                ) from fallback_error
+
         raise LLMClientError(f"LLM call failed after {retries} attempts: {last_error}")
+
+    async def _complete_embedded(
+        self,
+        messages: list[dict],
+        model: str = "auto",
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> dict:
+        """Direct LiteLLM call with FreeRouter routing table (embedded mode).
+
+        Used when FreeRouter proxy is not running. Tries each model in the
+        fallback chain until one succeeds.
+        """
+        self._init_embedded_mode()
+        if not self._embedded_mode:
+            raise LLMClientError("Embedded LiteLLM mode not available")
+
+        # Rate-limit: enforce minimum gap between consecutive LLM calls
+        await self._rate_limit_wait()
+
+        import litellm
+        litellm.drop_params = True
+        model_chain = self._resolve_model_chain(model)
+        last_error = None
+
+        for m in model_chain:
+            try:
+                extra = self._build_litellm_kwargs(m)
+                resp = await litellm.acompletion(
+                    model=m,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    **extra,
+                )
+                content = resp.choices[0].message.content or ''
+                # Fix reasoning models that put output in reasoning_content
+                if not content and hasattr(resp.choices[0].message, 'reasoning_content'):
+                    content = resp.choices[0].message.reasoning_content or ''
+
+                provider = self._extract_provider(m)
+                usage = {}
+                if hasattr(resp, 'usage'):
+                    usage = {
+                        'prompt_tokens': getattr(resp.usage, 'prompt_tokens', 0),
+                        'completion_tokens': getattr(resp.usage, 'completion_tokens', 0),
+                        'total_tokens': getattr(resp.usage, 'total_tokens', 0),
+                    }
+
+                log.info(
+                    'llm_embedded_call_ok',
+                    provider=provider,
+                    model=m,
+                    tokens=usage.get('total_tokens', 0),
+                )
+                return {
+                    'content': content,
+                    'model': m,
+                    'provider': provider,
+                    'usage': usage,
+                    'limits': {'rpm_remaining': -1, 'tpm_remaining': -1, 'provider': provider},
+                }
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                # If rate-limited (429), wait before trying next model
+                # Free models share a 20 req/min limit across all users
+                if '429' in error_str or 'rate' in error_str.lower():
+                    wait = 3
+                    log.warning(f"embedded_rate_limited model={m} waiting_{wait}s")
+                    await asyncio.sleep(wait)
+                else:
+                    log.warning(f"embedded_model_failed model={m} error={e}")
+                continue
+
+        raise LLMClientError(
+            f"All embedded LiteLLM models failed: {model_chain}. Last error: {last_error}"
+        ) from last_error
 
     async def complete_text(
         self,
@@ -456,22 +821,26 @@ class RouterClient:
         **kwargs: Any,
     ) -> str:
         """Convenience wrapper: single prompt string in, text string out."""
-        # Lazy health check on first call
+        # Lazy health check on first call — use embedded mode if FreeRouter is down
         if self._healthy is None and self._startup_check_enabled:
             try:
-                self._startup_health_check()
+                await self._startup_health_check()
                 self._healthy = True
             except LLMClientError:
                 self._healthy = False
-                raise LLMClientError(
-                    f"FreeRouter not running at {self.base_url}. "
-                    "Run: cd freerouter && python -m freerouter proxy"
-                )
+                log.warning("freerouter_not_running_falling_back_to_embedded_litellm")
+                self._init_embedded_mode()
 
         messages: list[dict] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+
+        # If FreeRouter is not healthy or startup check was skipped, use embedded LiteLLM
+        if self._healthy is False or (self._healthy is None and not self._startup_check_enabled):
+            result = await self._complete_embedded(messages, model=model, **kwargs)
+            return result["content"]
+
         result = await self.complete(messages, model=model, **kwargs)
         return result["content"]
 
@@ -489,7 +858,7 @@ class RouterClient:
         # Lazy health check on first call
         if self._healthy is None and self._startup_check_enabled:
             try:
-                self._startup_health_check()
+                await self._startup_health_check()
                 self._healthy = True
             except LLMClientError:
                 self._healthy = False
@@ -498,20 +867,52 @@ class RouterClient:
                     "Run: cd freerouter && python -m freerouter proxy"
                 )
 
-        try:
-            import instructor
-            from openai import AsyncOpenAI
+        import instructor
+        from openai import AsyncOpenAI
 
-            openai_client = AsyncOpenAI(
-                base_url=f"{self.base_url}/v1",
+        # Reuse cached AsyncOpenAI client if base URL matches
+        base_url = f"{self.base_url}/v1"
+        if (RouterClient._shared_openai_client is None
+                or RouterClient._shared_openai_base_url != base_url):
+            RouterClient._shared_openai_client = AsyncOpenAI(
+                base_url=base_url,
                 api_key="not-needed",
+                timeout=self.timeout,
             )
-            client = instructor.from_openai(openai_client)
-            return await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                response_model=response_model,
-                **kwargs,
-            )
-        except Exception as e:
-            raise LLMClientError(f"Structured completion failed: {e}") from e
+            RouterClient._shared_openai_base_url = base_url
+        openai_client = RouterClient._shared_openai_client
+        client = instructor.from_openai(openai_client)
+
+        last_error = None
+        current_model = model
+        for attempt in range(3):
+            try:
+                return await client.chat.completions.create(
+                    model=current_model,
+                    messages=messages,
+                    response_model=response_model,
+                    **kwargs,
+                )
+            except Exception as e:
+                last_error = e
+                # If model is unavailable and not already on auto, fall back
+                if "503" in str(e) and current_model != "auto":
+                    log.warning(
+                        "structured_provider_unavailable",
+                        model=current_model,
+                        retrying_with="auto",
+                    )
+                    current_model = "auto"
+                    continue
+                if attempt < 2:
+                    wait_time = (2 ** attempt) + 1
+                    log.warning(
+                        f"structured_completion_retry_{attempt+1}_in_{wait_time}s",
+                        error=str(e),
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
+        raise LLMClientError(
+            f"Structured completion failed after 3 attempts: {last_error}"
+        ) from last_error

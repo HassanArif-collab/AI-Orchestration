@@ -1,44 +1,77 @@
 import { useState, useEffect } from 'react';
 import { differenceInSeconds, parseISO } from 'date-fns';
-import { EXPIRATION_MS } from '../lib/constants';
+import { EXPIRATION_MS } from '@/lib/constants';
 
-interface TimerResult {
-  remainingMinutes: number;   // Minutes left (for display)
-  remainingSeconds: number;   // Total seconds left (for precision)
-  isExpired: boolean;          // True when time's up
-  percentage: number;          // 0-100, how much time has passed (for progress bar)
+export interface TimerState {
+  remainingMinutes: number;
+  remainingSeconds: number;
+  isExpired: boolean;
+  percentage: number;
+  isCritical: boolean;
+  isWarning: boolean;
+  timeString: string;
 }
 
-/**
- * Calculates countdown for a card's 3-hour expiration timer.
- * Only meaningful for Column 2 (Suggested Topics) cards.
- *
- * Updates every 30 seconds to avoid unnecessary re-renders.
- * (We don't need per-second precision for a 3-hour window.)
- */
-export function useCardTimer(expiresAt: string | null): TimerResult {
+export function useCardTimer(expiresAt: string | null): TimerState {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     if (!expiresAt) return;
-    const interval = setInterval(() => setNow(Date.now()), 30_000); // every 30s
+    const interval = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(interval);
   }, [expiresAt]);
 
   if (!expiresAt) {
-    return { remainingMinutes: Infinity, remainingSeconds: Infinity, isExpired: false, percentage: 0 };
+    return {
+      remainingMinutes: 0,
+      remainingSeconds: 0,
+      isExpired: false,
+      isCritical: false,
+      isWarning: false,
+      timeString: '',
+      percentage: 0,
+    };
   }
 
   const expiry = parseISO(expiresAt).getTime();
   const totalSeconds = EXPIRATION_MS / 1000;
   const secondsLeft = Math.max(0, differenceInSeconds(expiry, now));
-  const minutesLeft = Math.ceil(secondsLeft / 60);
+
+  if (secondsLeft <= 0) {
+    return {
+      remainingMinutes: 0,
+      remainingSeconds: 0,
+      isExpired: true,
+      isCritical: false,
+      isWarning: false,
+      timeString: 'Expired',
+      percentage: 100,
+    };
+  }
+
+  const totalMinutes = Math.floor(secondsLeft / 60);
+  const secs = secondsLeft % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  let timeString = '';
+  if (hours > 0) {
+    timeString = `${hours}h ${minutes}m`;
+  } else if (minutes > 0) {
+    timeString = `${minutes}m`;
+  } else {
+    timeString = `${secs}s`;
+  }
+
   const percentage = Math.min(100, ((totalSeconds - secondsLeft) / totalSeconds) * 100);
 
   return {
-    remainingMinutes: minutesLeft,
+    remainingMinutes: totalMinutes,
     remainingSeconds: secondsLeft,
-    isExpired: secondsLeft <= 0,
+    isExpired: false,
+    isCritical: totalMinutes < 15,
+    isWarning: totalMinutes >= 15 && totalMinutes < 30,
+    timeString,
     percentage,
   };
 }

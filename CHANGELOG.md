@@ -8,8 +8,49 @@ This file consolidates the implementation history and serves as a single source 
 
 ## [Unreleased]
 
+### Changed
+- **Inter-Call Rate Limiter**: Added a global 5-second cooldown between consecutive LLM calls in `RouterClient` to prevent burning through OpenRouter free-tier credits. All LLM calls (both FreeRouter proxy and embedded LiteLLM) are throttled. Configurable via `_CALL_COOLDOWN_SECONDS` module constant.
+- **Pipeline Voice & Feedback Overhaul (improving-deep-research branch)**: 7 critical fixes to eliminate generic AI-sounding scripts and add back-and-forth feedback between pipeline nodes.
+  - **Fix #1 — Style Constitution in Script Writer**: `draft_node` now loads `style_reference.json` and injects the full Johnny Harris style guide (anchor-bridge rhythm, classic style writing rules, peer-to-peer framing, motive loading, conclusion shift, Pakistani adaptation) into both the user prompt and system prompt. System prompt rewritten with 7 IRON RULES and explicit anti-patterns.
+  - **Fix #2 — Style-Aware Mutation**: `mutate_node` now receives the same Johnny Harris style rules plus research facts. System prompt changed from generic "improve this script" to "Johnny Harris script doctor" that enforces Agent-Action-Object, kills filler, and preserves voice.
+  - **Fix #3 — Research Feedback Loop (NEW NODE)**: Added `research_gap_node` — when the scorer detects credibility < 60% on the first pass, the pipeline routes to this node which identifies 2-3 specific research gaps, runs targeted supplementary searches, and appends findings to the existing dossier. Max 1 additional research round (safety limit). `should_continue()` in `graphs.py` now returns `"needs_research"` as a third routing option.
+  - **Fix #4 — Research Dossier Limit**: Increased from 8,000 → 16,000 characters in `draft_node` context building. Script writer now sees approximately 2x more research material.
+  - **Fix #5 — Visual Feedback Loop (NEW EDGE)**: `visual_node` now runs a structural review before adding annotations. If the script is too abstract or visually unproduceable, it sets `visual_needs_revision=True` and provides feedback. New `after_visuals()` conditional edge in `graphs.py` routes back to `draft` when structural issues are detected.
+  - **Fix #6 — Genre-Specific Prompting**: `draft_node` now loads `genre_schema.json` and injects genre-specific structural backbone, key challenge, and conclusion pattern into the prompt based on the topic's `genre_id` field.
+  - **Fix #7 — Visual Planner Skill File**: Created `packages/content_factory/data/skills/visual_planner.md` — a comprehensive director's guide with color-coding system (TALKING HEAD, B-ROLL, ANIMATION, ARCHIVAL, DATA VIZ, SOUL MOMENT), pacing rules, anchor-first visual requirements, and Pakistani audience adaptation for visual planning.
+  - **State changes** (`state.py`): Added `research_round`, `research_gap_query`, `visual_needs_revision`, `visual_feedback` fields to `ProductionState`.
+  - **Graph changes** (`graphs.py`): Added `research_gap` node. New conditional edges: `needs_research` (score → research_gap → draft), `after_visuals` (visuals → draft or human_review). Pipeline now has 4 feedback loops: Karpathy mutation, research gap, visual feedback, human review.
+
 ### Added
-- Documentation implementation plan (`docs/DOCUMENTATION_IMPLEMENTATION_PLAN.md`)
+- `packages/content_factory/data/skills/visual_planner.md` — Visual planning skill file (was missing, causing fallback to minimal inline prompt)
+- `research_gap_node` in `orchestration/nodes.py` — Targeted supplementary research on scorer-identified gaps
+
+- **Dead Code Removal (Phases 1-5)**: Systematic cleanup of deprecated code across the codebase.
+  - **Phase 1**: Relocated `research_cache.py` from `packages/pipeline/` to `packages/core/`; updated 6 consumer files.
+  - **Phase 2**: Deleted 8 fully dead packages — `script_generator/`, `adaptation/`, `evaluation/`, `error_log.py`, `router.py`, `production/workflow.py` + `agents.py`, `apps/worker/`, `scripts/run_pipeline.py`.
+  - **Phase 3**: Pruned `pipeline_routes.py` (861 lines removed), deleted `bootstrap.py` + `crew_config.py`, fixed `kanban_routes.py` bug, pruned `background_tasks.py` + `dependencies.py`.
+  - **Phase 4**: Removed dead `YouTubeAnalyticsClient` from `analytics.py`, fixed broken `YouTubeAnalytics` import in `scheduler.py`, updated `core/thoughts.py` and `orchestration/thoughts.py` docstrings.
+  - **Phase 5**: Rewrote `kanban_routes.py` to use `kanban_cards` directly, deleted `packages/pipeline/` directory (10 files), deleted `apps/worker/` (2 files), deleted 3 orphan test files.
+  - **Net result**: ~12,000 lines of dead code removed. Zero errors in production code. All 154 Python files pass AST validation.
+
+### Removed
+- `packages/pipeline/` — entire directory (state machine, runner, handlers, hooks, iteration_store, kanban_store, stages)
+- `packages/content_factory/adaptation/` — 4-stage adaptation pipeline (replaced by LangGraph nodes)
+- `packages/content_factory/evaluation/` — A-B evaluation loop (replaced by LangGraph nodes)
+- `packages/content_factory/script_generator/` — complexity assessor, decision log, evolution loop
+- `packages/content_factory/router.py` — ContentCreationRouter
+- `packages/content_factory/error_log.py` — ErrorLogger
+- `packages/content_factory/production/workflow.py` + `agents.py`
+- `packages/agents/bootstrap.py` + `crew_config.py`
+- `apps/worker/main.py` + `orchestrator_worker.py`
+- `scripts/run_pipeline.py` + `scripts/auto_production.py`
+- `packages/integrations/youtube/analytics.py` — removed dead `YouTubeAnalyticsClient` class
+- 6 orphan test files: `test_pipeline_wire.py`, `test_iteration_log.py`, `test_visual.py`, `test_adaptation_router.py`, `test_cross_script_learning.py`, `test_evaluation_loop.py`
+
+### Deprecated
+- `packages/content_factory/orchestration/master.py` — marked as deprecated; LangGraph is the active system
+- `packages/content_factory/orchestration/scheduler.py` — still functional but references deprecated master.py
+- 2 orphan test files remain: `tests/test_crew_config.py`, `tests/test_agent_bootstrap.py` (import deleted modules)
 
 ---
 
@@ -227,7 +268,8 @@ Foundation for AI-powered video script generation with human oversight.
 
 | Date | Version | Key Changes |
 |------|---------|-------------|
-| 2025-03-28 | Current | Kanban fixes, Human Review UI, Iteration graph |
+| 2026-04-09 | Current | Pipeline voice overhaul: style constitution, 4 feedback loops, research gap, visual feedback |
+| 2025-03-28 | 0.6.0 | Kanban fixes, Human Review UI, Iteration graph |
 | 2025-03-27 | 0.5.0 | RouterClient lazy health check |
 | 2025-03-26 | 0.4.0 | 11 systematic bug fixes |
 | 2025-03-25 | 0.3.0 | Multi-provider FreeRouter |

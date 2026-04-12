@@ -9,6 +9,10 @@ Key features:
 2. update_card_stage() - Move the Kanban card to the correct column
 3. @pipeline_node decorator - Automatic thought reporting, error capture, and Kanban updates
 
+Related modules:
+- packages.core.thoughts — core CRUD operations (get_thoughts_for_card, delete_thoughts_for_card)
+  and the sync report_thought() used by API routes and external agents.
+
 CRITICAL: All functions must NEVER crash the pipeline.
 If Supabase is down, we log locally and continue.
 """
@@ -35,6 +39,7 @@ STAGE_TO_COLUMN = {
     "review": 5,
     "publishing": 6,
     "complete": 6,
+    "completed": 6,  # C12 compat: PipelineRunner uses "completed"
     "error": None,  # Don't move on error
 }
 
@@ -48,6 +53,23 @@ AGENT_COLORS = {
     "visual_annotator": "cyan",
     "system": "gray",
     "notion_publisher": "indigo",
+}
+
+
+# Maps application-level thought_type values to DB-level CHECK constraint values.
+# The DB CHECK constraint only allows: thinking, search, output, error,
+# memory_read, memory_write. Application code uses broader categories
+# (info, success, milestone) which we map here.
+_THOUGHT_TYPE_MAP = {
+    "info": "thinking",
+    "thinking": "thinking",
+    "success": "output",
+    "milestone": "output",
+    "error": "error",
+    "search": "search",
+    "memory_read": "memory_read",
+    "memory_write": "memory_write",
+    "output": "output",
 }
 
 
@@ -79,14 +101,15 @@ async def report_thought(
     try:
         from packages.core.supabase_client import get_supabase
         sb = get_supabase()
+
+        # Map application thought types to DB CHECK constraint values
+        db_thought_type = _THOUGHT_TYPE_MAP.get(thought_type, "thinking")
         
         sb.table("agent_thoughts").insert({
             "card_id": card_id,
             "agent_name": agent_name,
-            "thought_type": thought_type,
+            "thought_type": db_thought_type,
             "content": thought,
-            "metadata": metadata or {},
-            "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
         
         logger.debug(f"thought_reported: agent={agent_name} type={thought_type}")
@@ -120,7 +143,7 @@ async def update_card_stage(card_id: str, stage: str) -> bool:
         sb = get_supabase()
         
         sb.table("kanban_cards").update({
-            "column": column,
+            "column_index": column,
             "status": stage,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", card_id).execute()

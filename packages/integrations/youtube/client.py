@@ -38,7 +38,9 @@ class YouTubeClient:
                 settings.YOUTUBE_API_KEY. If no key is available, the client
                 will operate in degraded mode (all methods return defaults).
         """
-        self.api_key = api_key or get_settings().YOUTUBE_API_KEY
+        # Use api_key if explicitly provided (even empty string = degraded mode).
+        # Fall back to settings only when no argument is passed (api_key is None).
+        self.api_key = api_key if api_key is not None else get_settings().YOUTUBE_API_KEY
         self._service = None
 
         if self.api_key:
@@ -327,6 +329,8 @@ class YouTubeClient:
 
         Uses youtube-transcript-api (does not require YouTube Data API key).
         Falls back to auto-generated captions if manual captions unavailable.
+        Supports both v0.x (static methods) and v1.x (instance methods) of
+        the library since v1.2.0 removed the old static API entirely.
 
         Args:
             video_id: The YouTube video ID.
@@ -346,7 +350,17 @@ class YouTubeClient:
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
 
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            # v1.x uses instance methods (v1.2.0+ removed static methods entirely)
+            # v0.x used static methods: YouTubeTranscriptApi.list_transcripts(video_id)
+            _api = YouTubeTranscriptApi()
+            use_v1_api = hasattr(_api, 'list') and not hasattr(YouTubeTranscriptApi, 'list_transcripts')
+
+            if use_v1_api:
+                # v1.x API: YouTubeTranscriptApi().list(video_id) → .find_*() → .fetch()
+                transcript_list = _api.list(video_id)
+            else:
+                # v0.x API: YouTubeTranscriptApi.list_transcripts(video_id)
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
 
             # Try manual captions first, then auto-generated
             caption_type = "manual"
@@ -360,17 +374,31 @@ class YouTubeClient:
                     logger.warning(f"youtube_no_transcript: {video_id} — no captions in {languages}")
                     return {}
 
-            segments = transcript.fetch()
-
-            # Convert FetchedTranscript to plain dicts
-            segment_list = [
-                {
-                    "text": seg.text if hasattr(seg, 'text') else seg.get("text", ""),
-                    "start": seg.start if hasattr(seg, 'start') else seg.get("start", 0.0),
-                    "duration": seg.duration if hasattr(seg, 'duration') else seg.get("duration", 0.0),
-                }
-                for seg in segments
-            ]
+            # Fetch the actual transcript data
+            if use_v1_api:
+                # v1.x: transcript.fetch() returns FetchedTranscript (iterable dataclass)
+                fetched = transcript.fetch()
+                segment_list = [
+                    {
+                        "text": seg.text if hasattr(seg, 'text') else seg.get("text", ""),
+                        "start": seg.start if hasattr(seg, 'start') else seg.get("start", 0.0),
+                        "duration": seg.duration if hasattr(seg, 'duration') else seg.get("duration", 0.0),
+                    }
+                    for seg in fetched
+                ]
+                lang_code = getattr(fetched, 'language_code', languages[0])
+            else:
+                # v0.x: transcript.fetch() returns a list of dicts
+                segments = transcript.fetch()
+                segment_list = [
+                    {
+                        "text": seg.text if hasattr(seg, 'text') else seg.get("text", ""),
+                        "start": seg.start if hasattr(seg, 'start') else seg.get("start", 0.0),
+                        "duration": seg.duration if hasattr(seg, 'duration') else seg.get("duration", 0.0),
+                    }
+                    for seg in segments
+                ]
+                lang_code = getattr(transcript, 'language_code', languages[0])
 
             full_text = " ".join(s["text"] for s in segment_list)
             word_count = len(full_text.split())
@@ -378,7 +406,7 @@ class YouTubeClient:
             return {
                 "segments": segment_list,
                 "caption_type": caption_type,
-                "language": transcript.language_code if hasattr(transcript, 'language_code') else languages[0],
+                "language": lang_code,
                 "word_count": word_count,
             }
         except ImportError:
@@ -401,7 +429,14 @@ class YouTubeClient:
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
 
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            _api = YouTubeTranscriptApi()
+            use_v1_api = hasattr(_api, 'list') and not hasattr(YouTubeTranscriptApi, 'list_transcripts')
+
+            if use_v1_api:
+                transcript_list = _api.list(video_id)
+            else:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
             captions = []
 
             for transcript in transcript_list:

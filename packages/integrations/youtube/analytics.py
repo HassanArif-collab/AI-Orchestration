@@ -7,7 +7,6 @@ for YouTube channel and video performance data.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from packages.integrations.youtube.client import YouTubeClient
 from packages.core.logger import get_logger
@@ -212,95 +211,3 @@ class AnalyticsTracker:
             return 0.0
 
         return round(((likes + comments) / views) * 100, 2)
-
-
-class YouTubeAnalyticsClient:
-    """Client for YouTube Analytics API with graceful degradation."""
-
-    def __init__(self, use_mock: bool = True) -> None:
-        """Initialize Analytics API.
-        
-        Using use_mock by default in this orchestration system unless explicitly
-        configured with OAuth 2.0 credentials for a specific channel.
-        """
-        self.use_mock = use_mock
-        self._service = None
-        
-        # Real OAuth initialization would happen here in production.
-        # Developer keys do not work for Analytics API (requires user token).
-        logger.debug("YouTubeAnalyticsClient initialized in mock mode.")
-
-    def get_video_performance(self, video_id: str, days_since_publish: int) -> dict[str, Any]:
-        """Fetch post-publish metrics for a specific video.
-        
-        Returns:
-            Dictionary containing retention metrics, CTR, Watch Time, Views, etc.
-        """
-        if self.use_mock:
-            # Generate simulated Analytics data based on Harris patterns
-            return self._mock_performance_data(video_id, days_since_publish)
-            
-        if not self._service:
-            logger.warning("youtube_analytics_unavailable")
-            return {}
-
-        # Actual API call would go here
-        # E.g. self._service.reports().query(ids=f"channel==mine", metrics="views,estimatedMinutesWatched,averageViewDuration", dimensions="video", filters=f"video=={video_id}").execute()
-        return {}
-
-    def _mock_performance_data(self, video_id: str, days: int) -> dict[str, Any]:
-        """Mock realistic Pakistani audience retention data to feed the loop."""
-        base_views = 50000 * days
-        if days == 30:
-            return {
-                "views": base_views,
-                "average_view_percentage": 58.5,
-                "retention_curve_shape": "Harris-Pattern",
-                "subscriber_conversion_rate": 0.05,
-                "shares": base_views * 0.02,
-                "return_viewer_percentage": 65.0,
-                "anchor_avg_retention": 65.0,
-                "bridge_avg_retention": 52.0
-            }
-        return {
-            "views": base_views,
-            "average_view_percentage": 50.0,
-            "retention_curve_shape": "Continuous Decline",
-            "subscriber_conversion_rate": 0.02,
-            "shares": base_views * 0.01,
-            "return_viewer_percentage": 40.0,
-            "anchor_avg_retention": 55.0,
-            "bridge_avg_retention": 45.0
-        }
-
-    def calculate_engagement_score(self, analytics_data: dict) -> float:
-        """Calculate the composite Engagement Score.
-        
-        Weights:
-        - View duration %: 40%
-        - Curve shape: 25% (Harris-Pattern = 100, else = 50, early exit = 0)
-        - Sub conversion: 20%
-        - Share rate: 10%
-        - Return viewer %: 5%
-        """
-        if not analytics_data:
-            return 0.0
-            
-        avp_score = min(100.0, analytics_data.get("average_view_percentage", 0.0) * 1.5) * 0.40
-        
-        shape = analytics_data.get("retention_curve_shape")
-        shape_score = 100.0 if shape == "Harris-Pattern" else 50.0 if shape == "Continuous Decline" else 0.0
-        shape_score *= 0.25
-        
-        sub_conv = analytics_data.get("subscriber_conversion_rate", 0.0)
-        sub_score = min(100.0, sub_conv * 1000) * 0.20 # 10% conversion = 100
-        
-        shares = analytics_data.get("shares", 0.0)
-        views = analytics_data.get("views", 1.0)
-        share_rate = shares / views
-        share_score = min(100.0, share_rate * 2000) * 0.10 # 5% share rate = 100
-        
-        return_viewer = analytics_data.get("return_viewer_percentage", 0.0)
-        return_score = return_viewer * 0.05
-        
-        return avp_score + shape_score + sub_score + share_score + return_score

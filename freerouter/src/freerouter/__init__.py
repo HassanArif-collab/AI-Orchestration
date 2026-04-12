@@ -1,37 +1,40 @@
 """
-FreeRouter — Smart AI proxy that routes to the best free provider automatically.
+FreeRouter — LiteLLM-based task router v4.0.
 
-Direct provider routing (no LiteLLM). Supports Ollama (local), Groq, OpenRouter,
-Together AI, DeepInfra, OpenAI, and Anthropic with automatic fallback.
+4 providers (Zhipu AI, Google AI Studio, Ollama Cloud, OpenRouter),
+7 named routes with deep 6-level fallback chains.
 
-Key modules:
-  providers.py  — provider definitions, API keys, health checks, rate-limit tracking
-  router.py     — routes requests to providers, handles streaming and fallback
-  web/app.py    — FastAPI web dashboard + chat UI
-  proxy_server.py — OpenAI-compatible /v1/chat/completions endpoint (for Cursor, etc.)
+v4.0 Changes:
+  - Added Zhipu AI (glm-4-plus, glm-4-0520, glm-4-flash) as PRIMARY provider
+  - Added Google AI Studio (gemini-2.0-flash) as secondary
+  - Ollama Cloud as tertiary (weekly limits)
+  - OpenRouter free models as last resort
+  - 6-level fallback chains per route
+  - Exponential backoff on rate limits (429)
 """
 
-__version__ = "2.0.0"
+__version__ = "4.0.0"
 __author__ = "FreeRouter"
 
-from freerouter.providers import (
-    KNOWN_PROVIDERS, PROVIDER_MAP,
-    get_configured_providers, save_api_key,
-    update_usage_from_headers, mark_hard_limited,
-    should_skip_provider, get_all_usage,
+from freerouter.config import ROUTES
+
+# Pipeline task storage — kept for backward compatibility
+from freerouter.storage import (
+    create_pipeline_task,
+    list_pipeline_tasks,
+    get_pipeline_task,
+    update_pipeline_task,
+    delete_pipeline_task,
+    add_task_thought,
 )
-from freerouter.router import Router, get_router
 
 __all__ = [
-    "KNOWN_PROVIDERS",
-    "PROVIDER_MAP",
-    "get_configured_providers",
-    "save_api_key",
-    "update_usage_from_headers",
-    "mark_hard_limited",
-    "should_skip_provider",
-    "get_all_usage",
-    "Router",
-    "get_router",
+    "ROUTES",
     "__version__",
+    "create_pipeline_task",
+    "list_pipeline_tasks",
+    "get_pipeline_task",
+    "update_pipeline_task",
+    "delete_pipeline_task",
+    "add_task_thought",
 ]

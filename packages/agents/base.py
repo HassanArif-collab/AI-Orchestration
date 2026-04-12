@@ -6,20 +6,14 @@ system must inherit from. It ensures every agent:
   2. Has a named capability that maps to a preferred model
   3. Can optionally load skill prompts from data/skills/*.md
 
-TWO TYPES OF AGENTS IN THIS SYSTEM:
+AGENTS IN THIS SYSTEM:
 
-  Type 1: BaseAgent subclasses (packages/agents/)
-    Custom Python classes. Used for pipeline infrastructure agents
-    (trend analysis, SEO, etc.) that need direct code control.
-    Inherit from BaseAgent, implement execute().
-    Example: Create packages/agents/trend_agent.py
+  All agents are BaseAgent subclasses (packages/agents/).
+  Custom Python classes used for pipeline infrastructure and
+  content creation. Inherit from BaseAgent, implement execute().
+  Content creation runs via LangGraph pipeline nodes, not CrewAI.
 
-  Type 2: CrewAI agents (packages/content_factory/production/agents.py)
-    CrewAI Agent objects. Used for the content creation agents
-    (Researcher, Visual Director, Writer) where multi-agent collaboration
-    and task handoff is needed.
-    These do NOT inherit from BaseAgent — they are CrewAI native objects.
-    But they MUST still use RouterClient for LLM calls via FreeRouter.
+  Example: Create packages/agents/trend_agent.py
 
 SKILL LOADING:
   Each agent can have a skill definition file at data/skills/{name}.md

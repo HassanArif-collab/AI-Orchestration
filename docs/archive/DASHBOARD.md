@@ -70,7 +70,7 @@ apps/api/static/
 │   └── dashboard.css    # Dark theme styling
 └── js/
     ├── app.js           # Navigation, SSE, utilities (loads first)
-    ├── pipeline.js      # Pipeline tab functionality
+    ├── kanban.js        # Kanban board/pipeline tab functionality
     ├── chat.js          # Chat tab functionality
     ├── providers.js     # Providers tab functionality
     ├── memory.js        # Memory tab functionality

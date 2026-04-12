@@ -6,13 +6,16 @@ These are HINTS passed to FreeRouter — if the preferred model is
 unavailable, RouterClient automatically falls back to "auto" and
 FreeRouter picks the best available provider.
 
+The model mapping is derived from freerouter.config.ROUTES, which is the
+single source of truth for task-to-model routing.
+
 Do NOT hardcode these into agent code. Always call get_model_for_capability()
 so defaults can be overridden via capabilities.yaml without code changes.
 
 Usage:
     from packages.router.capabilities import get_model_for_capability
     model = get_model_for_capability("research")
-    # → "groq/llama-3.3-70b-versatile"
+    # → "openrouter/stepfun/step-3.5-flash:free"
 
 Imports: pathlib, yaml (optional override)
 Imported by: packages/agents/
@@ -22,19 +25,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Import ROUTES as the single source of truth for task-to-model mapping.
+from freerouter.config import ROUTES
+
+# Maps old capability names to ROUTES task names.
+# Each capability is resolved to its ROUTES entry, and the "model" value
+# from that route is used as the preferred model for the capability.
+CAPABILITY_ROUTE_MAP: dict[str, str] = {
+    "research":        "researcher",
+    "scripting":       "script_writer",
+    "creative":        "topic_finder",
+    "compression":     "script_writer",
+    "trend_analysis":  "topic_finder",
+    "code_generation": "auto",
+    "quick":           "scorer",
+    "seo":             "scorer",
+    "visual_planning": "annotator",
+}
+
 # Default capability → preferred model mapping.
+# Populated from freerouter.config.ROUTES via CAPABILITY_ROUTE_MAP.
 # Models use FreeRouter's "provider/model" syntax.
 # "auto" = let FreeRouter decide.
 CAPABILITY_MODELS: dict[str, str] = {
-    "research":        "groq/llama-3.3-70b-versatile",
-    "scripting":       "openrouter/stepfun/step-3.5-flash:free",
-    "compression":     "ollama/llama3.2",
-    "trend_analysis":  "groq/llama-3.3-70b-versatile",
-    "code_generation": "groq/llama-3.3-70b-versatile",
-    "quick":           "ollama/llama3.2",
-    "creative":        "openrouter/stepfun/step-3.5-flash:free",
-    "seo":             "groq/llama-3.3-70b-versatile",
-    "visual_planning": "openrouter/stepfun/step-3.5-flash:free",
+    cap: ROUTES[task_name]["model"]
+    for cap, task_name in CAPABILITY_ROUTE_MAP.items()
+    if task_name in ROUTES
 }
 
 # HOW TO OVERRIDE MODELS WITHOUT CODE CHANGES:
@@ -73,14 +89,14 @@ def get_model_for_capability(capability: str) -> str:
     
     OVERRIDE PRIORITY:
       1. capabilities.yaml values (if file exists)
-      2. CAPABILITY_MODELS defaults
+      2. CAPABILITY_MODELS defaults (populated from ROUTES)
       3. "auto" fallback
     
     Args:
         capability: The task type (e.g., "research", "scripting")
     
     Returns:
-        Model string like "groq/llama-3.3-70b-versatile" or "auto"
+        Model string like "groq/llama-3.1-8b-instant" or "auto"
     """
     overrides = _load_overrides()
     merged = {**CAPABILITY_MODELS, **overrides}

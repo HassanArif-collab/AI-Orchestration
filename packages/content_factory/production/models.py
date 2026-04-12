@@ -2,17 +2,29 @@
 production/models.py — Pydantic models for Deep Research Engine.
 
 Context: These models structure the output of the systematic research
-methodology adopted from deer-flow's deep-research skill.
+methodology adopted from ByteDance deer-flow's deep-research skill.
 
 The ResearchDossier is the primary output, containing:
   - Multi-dimensional research findings
   - Physical anchors and human characters for documentary production
   - Completeness scoring for quality validation
+  - Research plan (deer-flow v2 Planner)
+  - Quality report (deer-flow v2 synthesis check)
+  - Full article texts from deep reading (deer-flow v2 web_fetch)
 
-FIXES APPLIED:
-1. Added fact validation fields (corroboration_count, validation_status)
-2. Added fact deduplication support in ResearchDossier
-3. Added _seen_statements for tracking duplicates
+DEER-FLOW v2 UPGRADES:
+1. Added research_plan field for structured planning output
+2. Added full_article_texts field for deep reading cache
+3. Added quality_report field for qualitative assessment
+4. Added all_facts property for convenient access
+5. Updated to_markdown() with citation URLs on every fact
+6. Added Trends & Comparisons sections to markdown output
+7. Added Dimension Analysis section to markdown output
+
+PREVIOUS FIXES PRESERVED:
+1. Fact validation fields (corroboration_count, validation_status)
+2. Fact deduplication support in ResearchDossier
+3. _seen_statements for tracking duplicates
 
 Usage:
     from packages.content_factory.production.models import ResearchDossier
@@ -224,6 +236,24 @@ class ResearchDossier(BaseModel):
         description="Timeline of key events if applicable"
     )
 
+    # Deer-flow v2: Research plan from Phase 0
+    research_plan: Optional[dict] = Field(
+        default=None,
+        description="Structured research plan from planning phase (deer-flow Planner)"
+    )
+
+    # Deer-flow v2: Full article texts from deep reading
+    full_article_texts: Optional[dict[str, str]] = Field(
+        default=None,
+        description="URL -> full article text mapping from deep reading (deer-flow web_fetch)"
+    )
+
+    # Deer-flow v2: Quality report from Phase 4
+    quality_report: Optional[dict] = Field(
+        default=None,
+        description="Quality assessment from synthesis check phase"
+    )
+
     # Quality metrics
     completeness_score: float = Field(
         default=0.0,
@@ -257,6 +287,18 @@ class ResearchDossier(BaseModel):
 
     # Private attributes for deduplication (not serialized)
     _seen_statements: set[str] = PrivateAttr(default_factory=set)
+
+    @property
+    def all_facts(self) -> list[ResearchFact]:
+        """Get all facts across all information types."""
+        return (
+            self.facts_and_data
+            + self.examples_cases
+            + self.expert_opinions
+            + self.trends
+            + self.comparisons
+            + self.challenges
+        )
 
     def model_post_init(self, __context: Any) -> None:
         """Initialize private attributes after model creation."""
@@ -455,6 +497,7 @@ class ResearchDossier(BaseModel):
         Convert dossier to markdown format for downstream agents.
 
         This is the format expected by the Script Writer agent.
+        Updated (deer-flow v2): every fact includes source citation URL.
         """
         sections = []
 
@@ -463,6 +506,14 @@ class ResearchDossier(BaseModel):
         sections.append(f"\n**Genre:** {self.genre_id or 'Not specified'}")
         sections.append(f"**Completeness:** {self.completeness_score:.0%}")
         sections.append(f"**Sources:** {len(self.all_sources)}")
+        sections.append(f"**Total Facts:** {len(self.all_facts)}")
+
+        # Quality report (deer-flow v2)
+        if self.quality_report and isinstance(self.quality_report, dict):
+            qr = self.quality_report
+            sections.append(f"\n**Quality Score:** {qr.get('score', 'N/A')}/100")
+            if qr.get('weaknesses'):
+                sections.append(f"**Quality Note:** {'; '.join(qr['weaknesses'][:3])}")
 
         # Validation stats
         validation = self.get_validation_stats()
@@ -481,7 +532,7 @@ class ResearchDossier(BaseModel):
                 for evidence in self.contradicting_evidence:
                     sections.append(f"- {evidence}")
 
-        # Physical Anchors (most important for documentary)
+        # Physical Anchors
         if self.physical_anchors:
             sections.append("\n## Physical Anchors")
             for anchor in self.physical_anchors:
@@ -493,38 +544,68 @@ class ResearchDossier(BaseModel):
         if self.human_characters:
             sections.append("\n## Human Characters")
             for char in self.human_characters:
-                sections.append(f"- **{char.role}**: {char.story_summary}")
+                sections.append(f"- **{char.name}** ({char.role}): {char.story_summary}")
 
-        # Key Facts
+        # Key Facts & Data — WITH CITATIONS (deer-flow GAP #4 fix)
         if self.facts_and_data:
             sections.append("\n## Key Facts & Data")
-            for fact in self.facts_and_data[:10]:  # Limit to top 10
+            for fact in self.facts_and_data[:10]:
                 verified_marker = "✓" if fact.validation_status == ValidationStatus.VERIFIED else ""
-                sections.append(f"- {verified_marker} {fact.statement}")
+                citation = f" [source: {fact.source_name}]({fact.source_url})" if fact.source_url else ""
+                sections.append(f"- {verified_marker} {fact.statement}{citation}")
 
-        # Examples & Cases
+        # Examples & Cases — WITH CITATIONS
         if self.examples_cases:
             sections.append("\n## Examples & Cases")
             for ex in self.examples_cases[:5]:
-                sections.append(f"- {ex.statement}")
+                citation = f" [source: {ex.source_name}]({ex.source_url})" if ex.source_url else ""
+                sections.append(f"- {ex.statement}{citation}")
 
-        # Expert Opinions
+        # Expert Opinions — WITH CITATIONS
         if self.expert_opinions:
             sections.append("\n## Expert Opinions")
             for op in self.expert_opinions[:5]:
-                sections.append(f"- {op.statement}")
+                citation = f" [source: {op.source_name}]({op.source_url})" if op.source_url else ""
+                sections.append(f"- {op.statement}{citation}")
 
-        # Challenges
+        # Trends — WITH CITATIONS
+        if self.trends:
+            sections.append("\n## Trends & Forecasts")
+            for tr in self.trends[:5]:
+                citation = f" [source: {tr.source_name}]({tr.source_url})" if tr.source_url else ""
+                sections.append(f"- {tr.statement}{citation}")
+
+        # Comparisons — WITH CITATIONS
+        if self.comparisons:
+            sections.append("\n## Comparisons")
+            for comp in self.comparisons[:5]:
+                citation = f" [source: {comp.source_name}]({comp.source_url})" if comp.source_url else ""
+                sections.append(f"- {comp.statement}{citation}")
+
+        # Challenges — WITH CITATIONS
         if self.challenges:
             sections.append("\n## Challenges & Counterarguments")
             for ch in self.challenges[:5]:
-                sections.append(f"- {ch.statement}")
+                citation = f" [source: {ch.source_name}]({ch.source_url})" if ch.source_url else ""
+                sections.append(f"- {ch.statement}{citation}")
 
         # Chronological Sequence
         if self.chronological_sequence:
             sections.append("\n## Timeline")
             for i, event in enumerate(self.chronological_sequence, 1):
                 sections.append(f"{i}. {event}")
+
+        # Dimension Findings
+        if self.dimension_findings:
+            sections.append("\n## Dimension Analysis")
+            for dim_name, dim_finding in self.dimension_findings.items():
+                sections.append(f"\n### {dim_name}")
+                if dim_finding.summary:
+                    sections.append(dim_finding.summary)
+                if dim_finding.facts:
+                    for fact in dim_finding.facts[:3]:
+                        citation = f" [source]({fact.source_url})" if fact.source_url else ""
+                        sections.append(f"- {fact.statement}{citation}")
 
         # Sources
         if self.all_sources:

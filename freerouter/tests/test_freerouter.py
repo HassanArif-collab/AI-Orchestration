@@ -1,241 +1,200 @@
 #!/usr/bin/env python3
 """
-Test script for FreeRouter.
+Test suite for FreeRouter v3.
 
-Validates that the proxy works correctly with different model aliases,
-classification scenarios, and web search interception.
+Tests the slim LiteLLM task router: config routes, server endpoints,
+resolve logic, version, and FastAPI app.
 """
 
-import asyncio
-import os
 import sys
 from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-
-
-def test_classifier():
-    """Test the task classifier."""
+def test_version():
+    """Test that __version__ is 3.1.0."""
     print("\n" + "=" * 60)
-    print("Testing Task Classifier")
+    print("Testing Version")
     print("=" * 60)
 
-    from freerouter.classifier import TaskClassifier, TaskCategory
+    import freerouter
+    assert freerouter.__version__ == "3.1.0", f"Expected 3.1.0, got {freerouter.__version__}"
+    print(f"  [PASS] freerouter.__version__ = {freerouter.__version__}")
+    return True
 
-    classifier = TaskClassifier(
-        classifier_model="ollama/qwen2.5:3b",
-        api_base="http://localhost:11434",
-        use_fast_classifier=False,  # Use keyword-based for testing
-    )
 
-    # Test cases
-    test_cases = [
-        ("Write a Python function to sort a list", TaskCategory.CODING),
-        ("What is the capital of France?", TaskCategory.SIMPLE_CHAT),
-        ("Solve this math puzzle: If 2x + 5 = 15, what is x?", TaskCategory.REASONING),
-        ("Analyze this image and describe what you see", TaskCategory.VISION),
-        ("Plan a trip to Paris with flights, hotels, and activities", TaskCategory.AGENTIC),
-        ("Research the history of quantum computing", TaskCategory.RESEARCH),
-    ]
+def test_routes():
+    """Test that ROUTES has the expected keys and structure."""
+    print("\n" + "=" * 60)
+    print("Testing ROUTES Config")
+    print("=" * 60)
 
-    print("\nTesting keyword-based classification:")
+    from freerouter.config import ROUTES
+
+    expected_keys = {"auto", "researcher", "topic_finder", "script_writer", "scorer", "challenger", "annotator"}
+    actual_keys = set(ROUTES.keys())
+
+    missing = expected_keys - actual_keys
+    extra = actual_keys - expected_keys
+
+    if missing:
+        print(f"  [FAIL] Missing routes: {missing}")
+        return False
+    if extra:
+        print(f"  [FAIL] Extra routes: {extra}")
+        return False
+
+    print(f"  [PASS] All 7 route keys present: {sorted(expected_keys)}")
+
+    # Check structure
+    for name, route in ROUTES.items():
+        assert "model" in route, f"Route '{name}' missing 'model' key"
+        assert "fallback" in route, f"Route '{name}' missing 'fallback' key"
+        print(f"  [PASS] {name}: model={route['model']}, fallback={route['fallback']}")
+
+    return True
+
+
+def test_resolve():
+    """Test _resolve() function from server.py."""
+    print("\n" + "=" * 60)
+    print("Testing _resolve()")
+    print("=" * 60)
+
+    from freerouter.server import _resolve
+
     all_passed = True
 
-    for content, expected_category in test_cases:
-        result = asyncio.run(classifier.classify(content))
-        status = "[PASS]" if result.category == expected_category else "[FAIL]"
-        if result.category != expected_category:
-            all_passed = False
-        print(f"  {status} '{content[:40]}...'")
-        print(f"      Expected: {expected_category.value}, Got: {result.category.value}")
-        print(f"      Confidence: {result.confidence:.2f}")
-        print(f"      Model: {result.recommended_model}")
+    # Known task name
+    primary, fallback = _resolve("scorer")
+    expected_primary = "openrouter/stepfun/step-3.5-flash:free"
+    expected_fallback = "openrouter/qwen/qwen3.6-plus:free"
+    if primary == expected_primary and fallback == expected_fallback:
+        print(f"  [PASS] _resolve('scorer') -> ({primary}, {fallback})")
+    else:
+        print(f"  [FAIL] _resolve('scorer') expected ({expected_primary}, {expected_fallback}), got ({primary}, {fallback})")
+        all_passed = False
+
+    # Auto route
+    primary, fallback = _resolve("auto")
+    if primary == "openrouter/stepfun/step-3.5-flash:free" and fallback == "openrouter/qwen/qwen3.6-plus:free":
+        print(f"  [PASS] _resolve('auto') -> ({primary}, {fallback})")
+    else:
+        print(f"  [FAIL] _resolve('auto') unexpected result: ({primary}, {fallback})")
+        all_passed = False
+
+    # Direct litellm string (pass-through)
+    direct = "openrouter/qwen/qwen3.6-plus:free"
+    primary, fallback = _resolve(direct)
+    if primary == direct and fallback == "openrouter/stepfun/step-3.5-flash:free":
+        print(f"  [PASS] _resolve('{direct}') -> pass-through with auto fallback")
+    else:
+        print(f"  [FAIL] _resolve('{direct}') expected pass-through, got ({primary}, {fallback})")
+        all_passed = False
 
     return all_passed
 
 
-def test_config():
-    """Test configuration loading."""
+def test_app_is_fastapi():
+    """Test that freerouter.server.app is a FastAPI instance."""
     print("\n" + "=" * 60)
-    print("Testing Configuration")
+    print("Testing FastAPI App")
     print("=" * 60)
 
-    from freerouter.config import get_config_path, load_config, get_model_aliases, validate_environment
+    from freerouter.server import app
+    from fastapi import FastAPI
 
-    config_path = get_config_path()
-    print(f"\nConfig path: {config_path}")
-    print(f"Config exists: {config_path.exists()}")
-
-    if config_path.exists():
-        config = load_config()
-        print(f"\nModel list entries: {len(config.get('model_list', []))}")
-        print(f"Fallback chains: {len(config.get('fallbacks', []))}")
-
-        aliases = get_model_aliases()
-        print(f"\nAvailable aliases:")
-        for alias, model in sorted(aliases.items())[:10]:
-            print(f"  {alias}: {model}")
-        if len(aliases) > 10:
-            print(f"  ... and {len(aliases) - 10} more")
-
-    print("\nEnvironment validation:")
-    env_status = validate_environment()
-    for key, is_set in env_status.items():
-        if key == "required_set":
-            continue
-        status = "[OK]" if is_set else "[--]"
-        print(f"  {status} {key}: {'set' if is_set else 'not set'}")
-
-    return env_status.get("required_set", False)
-
-
-def test_web_search():
-    """Test web search interception."""
-    print("\n" + "=" * 60)
-    print("Testing Web Search Interception")
-    print("=" * 60)
-
-    from freerouter.websearch import WebSearchInterceptor, SearchProvider, check_for_web_search_intent
-
-    # Test intent detection
-    test_queries = [
-        ("What is the latest news about AI?", True),
-        ("Write a hello world program", False),
-        ("Search for Python tutorials", True),
-        ("How do I cook pasta?", False),
-        ("What's the current weather in London?", True),
-    ]
-
-    print("\nTesting web search intent detection:")
-    for query, expected in test_queries:
-        result = check_for_web_search_intent(query)
-        status = "[OK]" if result == expected else "[--]"
-        print(f"  {status} '{query}' -> {result} (expected: {expected})")
-
-    # Test search tool detection
-    interceptor = WebSearchInterceptor(enabled=True)
-
-    print("\nTesting tool call detection:")
-    tool_calls = [
-        {"function": {"name": "web_search", "arguments": '{"query": "test"}'}},
-        {"function": {"name": "google_search", "arguments": '{"query": "test"}'}},
-        {"function": {"name": "code_interpreter", "arguments": '{"code": "print(1)"}'}},
-    ]
-
-    for tool_call in tool_calls:
-        is_search = interceptor.is_search_tool(tool_call)
-        print(f"  {tool_call['function']['name']}: {'search tool' if is_search else 'not search'}")
-
-    # Test actual search (if enabled and network available)
-    print("\nTesting actual search (DuckDuckGo):")
-    try:
-        response = asyncio.run(interceptor.execute_search("Python programming", num_results=3))
-        if response.error:
-            print(f"  Search error: {response.error}")
-        else:
-            print(f"  Found {len(response.results)} results:")
-            for i, result in enumerate(response.results, 1):
-                print(f"    {i}. {result.title[:50]}...")
-    except Exception as e:
-        print(f"  Search failed (expected if offline): {e}")
-
+    assert isinstance(app, FastAPI), f"Expected FastAPI instance, got {type(app)}"
+    print(f"  [PASS] app is FastAPI instance")
+    print(f"  [PASS] app.title = {app.title}")
+    print(f"  [PASS] app.version = {app.version}")
     return True
 
 
-def test_health_checker():
-    """Test model health checker."""
+def test_health_endpoint():
+    """Test /health endpoint with TestClient."""
     print("\n" + "=" * 60)
-    print("Testing Health Checker")
+    print("Testing /health Endpoint")
     print("=" * 60)
 
-    from freerouter.health import ModelHealthChecker, ModelStatus
+    from fastapi.testclient import TestClient
+    from freerouter.server import app
 
-    checker = ModelHealthChecker()
+    client = TestClient(app)
+    response = client.get("/health")
 
-    # Test provider extraction
-    test_models = [
-        ("ollama/qwen2.5:7b", "ollama"),
-        ("groq/llama-3.3-70b-versatile", "groq"),
-        ("openrouter/deepseek/deepseek-chat", "openrouter"),
-        ("openai/gpt-4", "openai"),
-        ("anthropic/claude-3-opus", "anthropic"),
-    ]
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    data = response.json()
 
-    print("\nTesting provider extraction:")
-    for model, expected in test_models:
-        provider = checker.get_provider_from_model(model)
-        status = "[PASS]" if provider == expected else "[FAIL]"
-        print(f"  {status} {model} -> {provider}")
+    assert data["status"] == "ok", f"Expected status='ok', got {data['status']}"
+    assert data["version"] == "3.1.0", f"Expected version='3.1.0', got {data['version']}"
+    assert isinstance(data["tasks"], list), f"Expected tasks to be list, got {type(data['tasks'])}"
 
-    # Test health check
-    print("\nTesting provider health check (Ollama):")
-    health = asyncio.run(checker.check_provider("ollama"))
-    print(f"  Status: {health.status.value}")
-    print(f"  Latency: {health.latency_ms:.2f}ms")
-    if health.last_error:
-        print(f"  Error: {health.last_error}")
-
-    # Test status report
-    print("\nStatus report:")
-    report = checker.get_status_report()
-    for provider, status in report.items():
-        print(f"  {provider}: {status['status']}")
-
+    print(f"  [PASS] GET /health -> 200")
+    print(f"  [PASS] status = {data['status']}")
+    print(f"  [PASS] version = {data['version']}")
+    print(f"  [PASS] tasks = {data['tasks']}")
     return True
 
 
-def test_proxy_app():
-    """Test FastAPI app creation."""
+def test_models_endpoint():
+    """Test /v1/models endpoint with TestClient."""
     print("\n" + "=" * 60)
-    print("Testing Proxy App")
+    print("Testing /v1/models Endpoint")
     print("=" * 60)
 
-    try:
-        from freerouter.proxy import FreeRouterProxy, create_app
+    from fastapi.testclient import TestClient
+    from freerouter.server import app
 
-        # Test app creation
-        proxy = FreeRouterProxy(
-            litellm_base="http://localhost:4000",
-            use_classification=True,
-            enable_web_search=True,
-        )
+    client = TestClient(app)
+    response = client.get("/v1/models")
 
-        print(f"\nApp created successfully")
-        print(f"  Routes: {[route.path for route in proxy.app.routes][:5]}...")
-        print(f"  Web search enabled: {proxy.web_search_enabled}")
-        print(f"  Classifier model: {proxy.classifier.classifier_model}")
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    data = response.json()
 
-        # Test app factory
-        app = create_app()
-        print(f"\nApp factory works: {app is not None}")
+    assert data["object"] == "list", f"Expected object='list', got {data['object']}"
+    assert isinstance(data["data"], list), f"Expected data to be list"
 
-        return True
-
-    except Exception as e:
-        print(f"Error creating app: {e}")
+    model_ids = {m["id"] for m in data["data"]}
+    expected = {"auto", "researcher", "topic_finder", "script_writer", "scorer", "challenger", "annotator"}
+    if model_ids == expected:
+        print(f"  [PASS] GET /v1/models -> 200, {len(data['data'])} models")
+        for m in data["data"]:
+            print(f"    {m['id']}: owned_by={m['owned_by']}, primary={m['primary']}")
+    else:
+        missing = expected - model_ids
+        extra = model_ids - expected
+        print(f"  [FAIL] Expected {expected}, got {model_ids}, missing={missing}, extra={extra}")
         return False
+
+    return True
 
 
 def run_all_tests():
     """Run all tests."""
     print("\n" + "=" * 60)
-    print("FreeRouter Test Suite")
+    print("FreeRouter v3 Test Suite")
     print("=" * 60)
 
     results = {}
 
-    # Run tests
-    results["Config"] = test_config()
-    results["Classifier"] = test_classifier()
-    results["Web Search"] = test_web_search()
-    results["Health Checker"] = test_health_checker()
-    results["Proxy App"] = test_proxy_app()
+    tests = [
+        ("Version", test_version),
+        ("ROUTES Config", test_routes),
+        ("_resolve()", test_resolve),
+        ("FastAPI App", test_app_is_fastapi),
+        ("/health Endpoint", test_health_endpoint),
+        ("/v1/models Endpoint", test_models_endpoint),
+    ]
+
+    for name, test_func in tests:
+        try:
+            results[name] = test_func()
+        except Exception as e:
+            print(f"  [ERROR] {e}")
+            results[name] = False
 
     # Summary
     print("\n" + "=" * 60)
@@ -249,11 +208,7 @@ def run_all_tests():
         if not passed:
             all_passed = False
 
-    print("\n" + "=" * 60)
-    if all_passed:
-        print("All tests passed!")
-    else:
-        print("Some tests failed. Check the output above for details.")
+    print(f"\n{sum(results.values())}/{len(results)} tests passed")
 
     return all_passed
 

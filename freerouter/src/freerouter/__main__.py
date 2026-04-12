@@ -1,5 +1,5 @@
 """FreeRouter entry point. Run with: python -m freerouter"""
-from freerouter.cli import app
+import uvicorn
 
 if __name__ == "__main__":
-    app()
+    uvicorn.run("freerouter.server:app", host="0.0.0.0", port=4000, reload=False)

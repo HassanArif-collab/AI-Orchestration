@@ -15,13 +15,13 @@ Authentication:
 """
 
 import asyncio
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 
+from packages.core.config import get_settings
 from packages.core.logger import get_logger
 
 log = get_logger(__name__)
@@ -119,9 +119,9 @@ class YouTubeAnalyticsClient:
         client_secret: str = None,
         refresh_token: str = None
     ):
-        self.client_id = client_id or os.getenv("YOUTUBE_CLIENT_ID", "")
-        self.client_secret = client_secret or os.getenv("YOUTUBE_CLIENT_SECRET", "")
-        self.refresh_token = refresh_token or os.getenv("YOUTUBE_REFRESH_TOKEN", "")
+        self.client_id = client_id or get_settings().YOUTUBE_CLIENT_ID
+        self.client_secret = client_secret or get_settings().YOUTUBE_CLIENT_SECRET
+        self.refresh_token = refresh_token or get_settings().YOUTUBE_REFRESH_TOKEN
         
         self._access_token: str = ""
         self._token_expires: datetime = datetime.min.replace(tzinfo=timezone.utc)

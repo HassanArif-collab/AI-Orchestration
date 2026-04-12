@@ -1,307 +1,191 @@
 #!/usr/bin/env python3
 """
-Integration tests for FreeRouter fixes.
+Integration tests for FreeRouter v3 gap fixes.
 
-Tests the critical fixes applied to ensure reliability, performance, and security.
+Tests the four critical fixes applied during v3 migration:
+  GAP FIX 1: HTTPException(503) on failure (not RuntimeError)
+  GAP FIX 2: .env loading from freerouter/.env
+  GAP FIX 3: /v1/models endpoint exists
+  GAP FIX 4: version "3.0.0" in health response
 """
 
-import asyncio
-import json
-import os
 import sys
-import tempfile
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
+# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from dotenv import load_dotenv
-load_dotenv()
-
-from freerouter.proxy import FreeRouterProxy, AuthMiddleware
-from freerouter.classifier import TaskClassifier, TaskCategory
-from freerouter.health import ModelHealthChecker
-from freerouter.providers import should_skip_provider, mark_hard_limited, get_all_usage
+from fastapi.testclient import TestClient
 
 
-def test_health_based_fallback():
-    """Test that unhealthy providers are excluded from fallback chains."""
+def test_gap_fix_1_http_503_on_failure():
+    """GAP FIX 1: Server returns HTTPException(503) when all models fail."""
     print("\n" + "=" * 60)
-    print("Testing Health-Based Fallback Adjustment")
+    print("GAP FIX 1: HTTPException(503) on Failure")
     print("=" * 60)
-    
-    proxy = FreeRouterProxy()
-    
-    # Simulate provider state
-    from freerouter.providers import _usage_state
-    from freerouter.providers import ProviderUsage
-    
-    # Mark groq as hard limited
-    mark_hard_limited("groq")
-    
-    # Test fallback chain for coder
-    fallback_chain = proxy._get_healthy_fallback_chain("free-router/coder")
-    
-    # Verify groq provider models are excluded
-    groq_models = [m for m in fallback_chain if "groq" in m]
-    if groq_models:
-        print(f"  [FAIL] Unhealthy provider (groq) still in fallback chain: {groq_models}")
-        return False
-    
-    print(f"  [PASS] Unhealthy providers excluded from fallback chain")
-    print(f"  Healthy chain: {fallback_chain}")
-    
-    # Reset for next test
-    _usage_state.clear()
-    return True
 
+    from freerouter.server import app
 
-def test_classification_caching():
-    """Test that classification results are cached."""
-    print("\n" + "=" * 60)
-    print("Testing Classification Caching")
-    print("=" * 60)
-    
-    proxy = FreeRouterProxy(use_classification=False)
-    
-    # First classification (should miss cache)
-    content = "Write a Python function to sort a list"
-    result1 = asyncio.run(proxy._classify_with_cache(content))
-    
-    # Second classification (should hit cache)
-    result2 = asyncio.run(proxy._classify_with_cache(content))
-    
-    if result1.recommended_model == result2.recommended_model:
-        print(f"  [PASS] Cached classification returns same result")
-        print(f"  Model: {result1.recommended_model}")
-        return True
-    else:
-        print(f"  [FAIL] Cache returned different results")
-        return False
+    with patch("freerouter.server.litellm") as mock_litellm:
+        # Make both primary and fallback raise exceptions
+        mock_litellm.acompletion.side_effect = [
+            Exception("primary failed"),
+            Exception("fallback failed"),
+        ]
 
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/chat/completions", json={
+            "model": "scorer",
+            "messages": [{"role": "user", "content": "test"}],
+        })
 
-def test_shared_state():
-    """Test shared state mechanism for multi-worker."""
-    print("\n" + "=" * 60)
-    print("Testing Shared State Mechanism")
-    print("=" * 60)
-    
-    # Create temporary state directory
-    with tempfile.TemporaryDirectory() as tmpdir:
-        proxy1 = FreeRouterProxy(state_dir=tmpdir)
-        
-        # Build a fallback chain
-        chain = ["free-router/coder", "free-router/smart"]
-        proxy1._save_shared_cache({"free-router/coder": chain})
-        
-        # Create second proxy instance
-        proxy2 = FreeRouterProxy(state_dir=tmpdir)
-        cached = proxy2._load_shared_cache()
-        
-        if "free-router/coder" in cached and cached["free-router/coder"] == chain:
-            print(f"  [PASS] Shared state loaded correctly")
-            print(f"  Chain: {cached['free-router/coder']}")
+        if response.status_code == 503:
+            print(f"  [PASS] Returns 503 when both models fail")
+            print(f"  [PASS] Detail: {response.json().get('detail', '')[:80]}")
             return True
         else:
-            print(f"  [FAIL] Shared state not loaded")
-            print(f"  Expected: {chain}, Got: {cached.get('free-router/coder')}")
+            print(f"  [FAIL] Expected 503, got {response.status_code}")
             return False
 
 
-def test_auth_middleware():
-    """Test API key authentication."""
+def test_gap_fix_2_env_loading():
+    """GAP FIX 2: .env loads from freerouter/.env (not cwd)."""
     print("\n" + "=" * 60)
-    print("Testing API Key Authentication")
+    print("GAP FIX 2: .env Loading")
     print("=" * 60)
-    
-    from fastapi import FastAPI, Request
-    from fastapi.testclient import TestClient
-    from freerouter.proxy import AuthMiddleware
-    
-    app = FastAPI()
-    
-    @app.get("/test")
-    async def test_endpoint():
-        return {"status": "ok"}
-    
-    # Add middleware standard way
-    app.add_middleware(AuthMiddleware, api_key="test-key")
-    
+
+    # Check that _env_candidates in server.py includes the right path
+    from freerouter.server import _env_candidates
+
+    # At least one candidate should resolve to freerouter/.env
+    found_project_env = False
+    for candidate in _env_candidates:
+        normalized = Path(candidate).resolve()
+        # The candidate should point up two levels from server.py to freerouter/.env
+        parts = normalized.parts
+        # Should end with freerouter/.env or src/freerouter/.env
+        if "freerouter" in parts and normalized.name == ".env":
+            found_project_env = True
+            print(f"  [PASS] Candidate: {normalized}")
+
+    if found_project_env:
+        print(f"  [PASS] .env path candidates include freerouter/.env")
+        return True
+    else:
+        print(f"  [FAIL] No freerouter/.env candidate found")
+        print(f"  Candidates: {_env_candidates}")
+        return False
+
+
+def test_gap_fix_3_models_endpoint():
+    """GAP FIX 3: /v1/models endpoint exists and returns correct data."""
+    print("\n" + "=" * 60)
+    print("GAP FIX 3: /v1/models Endpoint")
+    print("=" * 60)
+
+    from freerouter.server import app
+
     client = TestClient(app)
-    
-    # Test without key
-    response = client.get("/test")
-    if response.status_code != 401:
-        print(f"  [FAIL] Expected 401 without key, got {response.status_code}")
-        return False
-    
-    # Test with correct key in header
-    response = client.get("/test", headers={"Authorization": "Bearer test-key"})
+    response = client.get("/v1/models")
+
     if response.status_code != 200:
-        print(f"  [FAIL] Expected 200 with correct key, got {response.status_code}")
+        print(f"  [FAIL] Expected 200, got {response.status_code}")
         return False
-    
-    print(f"  [PASS] Authentication working correctly")
+
+    data = response.json()
+    if data["object"] != "list":
+        print(f"  [FAIL] Expected object='list', got {data['object']}")
+        return False
+
+    if not isinstance(data["data"], list) or len(data["data"]) == 0:
+        print(f"  [FAIL] Expected non-empty data list")
+        return False
+
+    # Verify each model entry has required fields
+    for model in data["data"]:
+        for key in ("id", "object", "owned_by", "primary", "fallback"):
+            if key not in model:
+                print(f"  [FAIL] Model entry missing '{key}': {model}")
+                return False
+
+    print(f"  [PASS] GET /v1/models -> 200")
+    print(f"  [PASS] Returns {len(data['data'])} models with all required fields")
     return True
 
 
-def test_health_checker():
-    """Test health checker basic functionality."""
+def test_gap_fix_4_version_in_health():
+    """GAP FIX 4: Health response includes version 3.1.0."""
     print("\n" + "=" * 60)
-    print("Testing Health Checker")
+    print("GAP FIX 4: Version in Health Response")
     print("=" * 60)
-    
-    checker = ModelHealthChecker()
-    
-    # Test provider extraction
-    test_cases = [
-        ("ollama/qwen2.5:7b", "ollama"),
-        ("groq/llama-3.3-70b", "groq"),
-        ("openrouter/deepseek/deepseek-chat", "openrouter"),
-    ]
-    
-    for model, expected in test_cases:
-        provider = checker.get_provider_from_model(model)
-        if provider != expected:
-            print(f"  [FAIL] {model} -> {provider} (expected {expected})")
-            return False
-    
-    print(f"  [PASS] Provider extraction correct")
-    
-    # Test health check doesn't crash
-    try:
-        health = asyncio.run(checker.check_provider("ollama"))
-        print(f"  [PASS] Health check runs without crash")
-        print(f"    Status: {health.status.value}")
-        return True
-    except Exception as e:
-        print(f"  [FAIL] Health check failed: {e}")
+
+    from freerouter.server import app
+
+    client = TestClient(app)
+    response = client.get("/health")
+
+    if response.status_code != 200:
+        print(f"  [FAIL] Expected 200, got {response.status_code}")
         return False
 
+    data = response.json()
 
-def test_web_search_robustness():
-    """Test that web search handles errors gracefully."""
-    print("\n" + "=" * 60)
-    print("Testing Web Search Robustness")
-    print("=" * 60)
-    
-    from freerouter.websearch import WebSearchInterceptor
-    
-    interceptor = WebSearchInterceptor(enabled=True)
-    
-    # Test with empty query
-    response = asyncio.run(interceptor.execute_search(""))
-    if response.error:
-        print(f"  [PASS] Empty query returns error: {response.error}")
+    if "version" not in data:
+        print(f"  [FAIL] No 'version' key in health response")
+        return False
+
+    if data["version"] != "3.1.0":
+        print(f"  [FAIL] Expected version='3.1.0', got {data['version']}")
+        return False
+
+    print(f"  [PASS] GET /health -> 200")
+    print(f"  [PASS] version = {data['version']}")
+
+    if "tasks" in data and isinstance(data["tasks"], list):
+        print(f"  [PASS] tasks list present with {len(data['tasks'])} entries")
     else:
-        print(f"  [FAIL] Empty query should return error")
-        return False
-    
-    # Test tool detection
-    tool_call = {"function": {"name": "web_search", "arguments": '{"query": "test"}'}}
-    if interceptor.is_search_tool(tool_call):
-        print(f"  [PASS] Web search tool detected")
-    else:
-        print(f"  [FAIL] Web search tool not detected")
-        return False
-    
-    # Test non-search tool
-    tool_call = {"function": {"name": "code_interpreter", "arguments": '{"code": "print(1)"}'}}
-    if not interceptor.is_search_tool(tool_call):
-        print(f"  [PASS] Non-search tool correctly ignored")
-        return True
-    else:
-        print(f"  [FAIL] Non-search tool incorrectly detected as search")
-        return False
+        print(f"  [WARN] 'tasks' key missing or not a list")
 
-
-def test_streaming_enhancements():
-    """Test streaming response handling."""
-    print("\n" + "=" * 60)
-    print("Testing Streaming Enhancements")
-    print("=" * 60)
-    
-    # This would require a running LiteLLM instance
-    # For now, just test that the method exists and has correct signature
-    proxy = FreeRouterProxy()
-    
-    import inspect
-    sig = inspect.signature(proxy._forward_streaming)
-    params = list(sig.parameters.keys())
-    
-    expected = ['client', 'body', 'headers']
-    if params == expected:
-        print(f"  [PASS] _forward_streaming has correct parameters")
-        return True
-    else:
-        print(f"  [FAIL] Expected {expected}, got {params}")
-        return False
-
-
-def test_provider_usage_tracking():
-    """Test rate-limit usage tracking."""
-    print("\n" + "=" * 60)
-    print("Testing Provider Usage Tracking")
-    print("=" * 60)
-    
-    from freerouter.providers import update_usage_from_headers, get_usage
-    
-    # Simulate headers
-    headers = {
-        "x-ratelimit-remaining-requests": "50",
-        "x-ratelimit-limit-requests": "100",
-    }
-    
-    usage = update_usage_from_headers("groq", headers)
-    
-    if usage.requests_remaining == 50 and usage.requests_limit == 100:
-        print(f"  [PASS] Usage tracking parsed headers correctly")
-        print(f"    Remaining: {usage.requests_remaining}/{usage.requests_limit}")
-        return True
-    else:
-        print(f"  [FAIL] Usage tracking incorrect")
-        print(f"    Remaining: {usage.requests_remaining}, Limit: {usage.requests_limit}")
-        return False
+    return True
 
 
 def run_all_tests():
-    """Run all integration tests."""
+    """Run all gap fix tests."""
     print("\n" + "=" * 60)
-    print("FreeRouter Integration Tests")
+    print("FreeRouter v3 Gap Fix Tests")
     print("=" * 60)
-    
+
     tests = [
-        ("Health-Based Fallback", test_health_based_fallback),
-        ("Classification Caching", test_classification_caching),
-        ("Shared State", test_shared_state),
-        ("Authentication", test_auth_middleware),
-        ("Health Checker", test_health_checker),
-        ("Web Search Robustness", test_web_search_robustness),
-        ("Streaming Enhancements", test_streaming_enhancements),
-        ("Usage Tracking", test_provider_usage_tracking),
+        ("GAP FIX 1: HTTP 503 on failure", test_gap_fix_1_http_503_on_failure),
+        ("GAP FIX 2: .env loading", test_gap_fix_2_env_loading),
+        ("GAP FIX 3: /v1/models endpoint", test_gap_fix_3_models_endpoint),
+        ("GAP FIX 4: version in health", test_gap_fix_4_version_in_health),
     ]
-    
+
     results = {}
     for name, test_func in tests:
         try:
             results[name] = test_func()
         except Exception as e:
             print(f"  [ERROR] {e}")
+            import traceback
+            traceback.print_exc()
             results[name] = False
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("Test Summary")
     print("=" * 60)
-    
-    passed = sum(1 for r in results.values() if r)
-    total = len(results)
-    
+
     for name, result in results.items():
         status = "[PASS]" if result else "[FAIL]"
         print(f"  {status}: {name}")
-    
+
+    passed = sum(results.values())
+    total = len(results)
     print(f"\n{passed}/{total} tests passed")
-    
+
     return all(results.values())
 
 

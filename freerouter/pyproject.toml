@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freerouter"
-version = "1.0.0"
-description = "Smart LLM proxy that always prefers free models and picks the best model based on task"
+version = "3.1.0"
+description = "LiteLLM-based task router — 2 providers (OpenRouter, Ollama Cloud), 7 routes, multi-fallback"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -24,14 +24,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
-    "python-dotenv>=1.0.0",
-    "httpx>=0.24.0",
-    "pydantic>=2.0.0",
-    "pyyaml>=6.0",
-    "rich>=13.0.0",
-    "typer>=0.9.0",
+    "litellm>=1.52.0",
+    "fastapi>=0.111.0",
+    "uvicorn>=0.29.0",
+    "python-dotenv>=1.1.0",
 ]
 
 [project.optional-dependencies]
@@ -42,8 +38,9 @@ dev = [
     "ruff>=0.6.0",
 ]
 
-[project.scripts]
-freerouter = "freerouter.cli:app"
+# CLI entry removed in v3 — use: python -m freerouter
+# [project.scripts]
+# freerouter = "freerouter.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/freerouter/freerouter"

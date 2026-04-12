@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 import re
 
-from pydantic import field_validator, ValidationInfo
+from pydantic import field_validator, model_validator, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,11 +49,14 @@ class Settings(BaseSettings):
     FREEROUTER_API_KEY: str = "not-needed"
     # Whether to perform startup health check (set to False for lazy initialization)
     FREEROUTER_STARTUP_CHECK: bool = True
+    # Fallback router URL used when primary FreeRouter is unreachable after all retries
+    FALLBACK_ROUTER_URL: str = ""
 
     # ─── Supabase (V2 Storage Backend) ────────────────────────────────────────
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_DB_URL: str = ""  # Direct PostgreSQL connection string (session mode, port 5432)
 
     # GetZep Cloud — agent memory
     ZEP_API_KEY: str = ""
@@ -68,9 +71,17 @@ class Settings(BaseSettings):
     ASSET_CREATION_ENABLED: bool = True
     # Set to false to skip publishing (Notion pages, YouTube upload prep)
     PUBLISH_ENABLED: bool = True
+    # Set to true to use mock data instead of real pipeline execution
+    PIPELINE_DEV_MODE: bool = False
+
+    # ─── LLM Model Selection ──────────────────────────────────────────────
+    CHAT_MODEL: str = "auto"
 
     # External integrations
     YOUTUBE_API_KEY: str = ""
+    YOUTUBE_CLIENT_ID: str = ""
+    YOUTUBE_CLIENT_SECRET: str = ""
+    YOUTUBE_REFRESH_TOKEN: str = ""
     NOTION_API_KEY: str = ""
     NOTION_DATABASE_ID: str = ""  # Database ID for script pages
     GITHUB_TOKEN: str = ""
@@ -92,10 +103,26 @@ class Settings(BaseSettings):
     # CORS Settings
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    # Escalation settings
+    ESCALATION_ENABLED: bool = True
+    ESCALATION_MIN_SCORE: float = 50.0
+    ESCALATION_WEBHOOK_URL: str = ""
+    ESCALATION_WEBHOOK_TYPE: str = "default"
+
     # Quality thresholds
     SCRIPT_QUALITY_THRESHOLD: float = 85.0  # Target threshold
     SCRIPT_QUALITY_FLOOR: float = 60.0      # Minimum acceptable score
     SCRIPT_MAX_ITERATIONS: int = 20
+    SCRIPT_TARGET_PASS_COUNT: int = 32      # Minimum score threshold entries for full script
+
+    # ─── Review/Approval SLA Configuration (Issue 6) ─────────────────────────
+    HUMAN_REVIEW_TIMEOUT_HOURS: int = 24
+    HUMAN_REVIEW_ESCALATION_EMAIL: str = ""
+    RISK_TIER_LOW_SCORE: float = 85.0       # Auto-approve threshold
+    RISK_TIER_HIGH_SCORE: float = 65.0      # High-risk threshold
+    RISK_TIER_LOW_SLA_HOURS: int = 48
+    RISK_TIER_MEDIUM_SLA_HOURS: int = 24
+    RISK_TIER_HIGH_SLA_HOURS: int = 12
 
     # ─── P2-04: Field Validators ───────────────────────────────────────────────
 
@@ -199,6 +226,38 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("ESCALATION_MIN_SCORE")
+    @classmethod
+    def validate_escalation_min_score(cls, v: float) -> float:
+        """Validate escalation min score is in valid range."""
+        if not 0 <= v <= 100:
+            raise ValueError(
+                f"ESCALATION_MIN_SCORE must be between 0 and 100, got {v}"
+            )
+        return v
+
+    @field_validator("ESCALATION_WEBHOOK_TYPE")
+    @classmethod
+    def validate_escalation_webhook_type(cls, v: str) -> str:
+        """Validate webhook type is a known value."""
+        valid_types = {"default", "slack", "discord"}
+        if v.lower() not in valid_types:
+            raise ValueError(
+                f"ESCALATION_WEBHOOK_TYPE must be one of {valid_types}, got '{v}'"
+            )
+        return v.lower()
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self) -> "Settings":
+        """Ensure SCRIPT_QUALITY_THRESHOLD >= SCRIPT_QUALITY_FLOOR."""
+        if self.SCRIPT_QUALITY_THRESHOLD < self.SCRIPT_QUALITY_FLOOR:
+            raise ValueError(
+                f"SCRIPT_QUALITY_THRESHOLD ({self.SCRIPT_QUALITY_THRESHOLD}) must be "
+                f">= SCRIPT_QUALITY_FLOOR ({self.SCRIPT_QUALITY_FLOOR}). "
+                f"The target threshold cannot be lower than the minimum floor."
+            )
+        return self
+
     # ─── Existing Properties and Methods ───────────────────────────────────────
 
     @property
@@ -237,7 +296,8 @@ class Settings(BaseSettings):
         if service == "notion":
             if not self.NOTION_API_KEY:
                 return ServiceStatus.NOT_CONFIGURED
-            if not self.NOTION_API_KEY.startswith("secret_"):
+            valid_prefixes = ("secret_", "ntn_")
+            if not any(self.NOTION_API_KEY.startswith(p) for p in valid_prefixes):
                 return ServiceStatus.MISCONFIGURED
             return ServiceStatus.AVAILABLE
 

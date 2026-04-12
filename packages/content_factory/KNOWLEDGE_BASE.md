@@ -8,18 +8,20 @@ be modified without understanding the downstream impact.
 
 ## style_reference.json
 **What it is:** Machine-readable encoding of Johnny Harris's documentary style.
-**Used by:** Writer agent (system prompt construction), Stage 4 script generation,
-             Stage 5 Pakistani refinement.
-**Contains:** 10 sections covering narration style, visual language, structural
-              patterns, pacing, hook construction, and conclusion rules.
-**Rule:** If you change a style rule here, it changes what the Writer agent
-          produces. Test on a full pipeline run before committing.
+**Used by:** `draft_node` (script writer prompt + system prompt), `mutate_node` (challenger prompt + system prompt)
+             — both in `orchestration/nodes.py`.
+**Contains:** 10 sections covering core philosophy, anchor-bridge formula, classic style writing rules,
+              peer-to-peer framing, motive loading, dual-column format, conclusion shift, genre variations,
+              and Pakistani adaptation rules.
+**Rule:** If you change a style rule here, it changes what the Writer agent and Mutator produce.
+          Test on a full pipeline run before committing. Changes take effect on server restart
+          (loaded once at module level).
 
 ---
 
 ## evaluation_suite.json
 **What it is:** 56 binary questions (yes/no) that score every script.
-**Used by:** ScoringEngine in evaluation/scoring.py.
+**Used by:** LangGraph nodes in `orchestration/nodes.py` for script scoring and evaluation.
 **Structure:**
   - 11 categories (A through K, O, P, Q)
   - Each question has: id, text, category, responsible_agent
@@ -53,8 +55,8 @@ be modified without understanding the downstream impact.
 ## genre_schema.json
 **What it is:** Maps each genre to its applicable question categories and
                structural rules.
-**Used by:** ScoringEngine (loads questions per genre), TopicFinderAgent
-             (classifies topics), ContentCreationRouter (selects workflow).
+**Used by:** Script scoring node in `orchestration/nodes.py` (loads questions per genre), TopicFinderAgent
+             (classifies topics).
 **Genres:**
   - history — chronological narrative, JH-style reveals
   - current_situation — gap between perception and reality
@@ -64,7 +66,7 @@ be modified without understanding the downstream impact.
   - south_asian_history — regional context + colonial lens (Phase 4 addition)
 
 **Adding a genre:** Add to genre_schema.json AND add genre-specific questions
-to evaluation_suite.json AND update the ScoringEngine's applicable questions.
+to evaluation_suite.json AND update the scoring logic in `orchestration/nodes.py`.
 
 ---
 
@@ -85,16 +87,20 @@ evaluates anchor quality — Level 5 usage fails most B questions.
 
 ## Where these files are loaded
 
-Every component that needs these files loads them via:
-```python
-from pathlib import Path
-import json
+| File | Loaded By | How |
+|------|-----------|-----|
+| `style_reference.json` | `draft_node` and `mutate_node` in `orchestration/nodes.py` | `_load_style_reference()` at module level → `_build_style_context()` extracts key rules → injected into prompt |
+| `evaluation_suite.json` | `score_node` in `orchestration/nodes.py` | 56-question checklist hardcoded in scorer prompt (JSON file serves as documentation) |
+| `genre_schema.json` | `draft_node` in `orchestration/nodes.py` | `_load_genre_schema()` at module level → `_get_genre_rules(genre_id)` extracts per-genre rules → injected into prompt |
+| `anchor_substitution_hierarchy.json` | Visual Director agent, Stage 4 script generation | `json.loads()` from content factory directory |
 
-CONTENT_FACTORY_DIR = Path(__file__).parent.parent  # adjust depth as needed
-style_ref = json.loads((CONTENT_FACTORY_DIR / "style_reference.json").read_text())
-eval_suite = json.loads((CONTENT_FACTORY_DIR / "evaluation_suite.json").read_text())
-genre_schema = json.loads((CONTENT_FACTORY_DIR / "genre_schema.json").read_text())
-anchor_hierarchy = json.loads((CONTENT_FACTORY_DIR / "anchor_substitution_hierarchy.json").read_text())
+**Note:** `style_reference.json` and `genre_schema.json` are loaded once at module level and cached. Reload the server to pick up changes.
+
+```python
+# In orchestration/nodes.py (module level):
+_STYLE_REFERENCE = _load_style_reference()
+_GENRE_SCHEMA = _load_genre_schema()
+_STYLE_CONTEXT = _build_style_context(_STYLE_REFERENCE)
 ```
 
 Never copy these files to other locations. Always import from this directory.

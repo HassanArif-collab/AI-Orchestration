@@ -89,10 +89,13 @@ async def query_memory(question: str) -> str:
             audience_session = f"{settings.ZEP_AUDIENCE_USER_ID}_session"
             learning_session = f"{settings.ZEP_LEARNING_USER_ID}_session"
 
-            audience_results = await zep.search_memory(audience_session, question, limit=3)
-            learning_results = await zep.search_memory(learning_session, question, limit=3)
+            audience_result = await zep.search_memory(audience_session, question, limit=3)
+            learning_result = await zep.search_memory(learning_session, question, limit=3)
 
-        all_results = (audience_results or []) + (learning_results or [])
+        # Unwrap OperationResult objects to plain lists
+        audience_data = audience_result.data if audience_result.success else []
+        learning_data = learning_result.data if learning_result.success else []
+        all_results = audience_data + learning_data
 
         if not all_results:
             return "No relevant memories found in Zep for this query."

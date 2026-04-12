@@ -78,46 +78,60 @@ class OrchestrationDB:
             "updated_at": record.updated_at.isoformat(),
         }).execute()
 
-    def acquire_lock(self, cycle_id: str, timeout_seconds: int = 30) -> bool:
+    def acquire_lock(self, cycle_id: str, owner_id: str = "default", ttl_seconds: int = 30) -> bool:
         """Optimistic locking for safe concurrent access.
 
         Attempts to acquire an exclusive lock on a cycle record.
         Returns True if the lock was acquired, False if already locked.
 
-        Locks automatically expire after timeout_seconds to prevent
+        Locks automatically expire after ttl_seconds to prevent
         deadlocks if a process crashes while holding a lock.
 
         Args:
           cycle_id: The cycle to lock
-          timeout_seconds: Lock expiration time (default 30s)
+          owner_id: Identifier of the lock owner (default "default")
+          ttl_seconds: Lock expiration time (default 3600s)
 
         Returns:
           True if lock acquired, False if already locked by another process
         """
         now = datetime.now(timezone.utc)
-        expires = (now + timedelta(seconds=timeout_seconds)).isoformat()
+        expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
         # Try to update only if lock is expired or null
         result = (
             self._cycles()
-            .update({"lock_expires_at": expires, "updated_at": now.isoformat()})
+            .update({"lock_expires_at": expires, "lock_owner": owner_id, "updated_at": now.isoformat()})
             .eq("cycle_id", cycle_id)
             .or_(f"lock_expires_at.is.null,lock_expires_at.lt.{now.isoformat()}")
             .execute()
         )
         return bool(result.data)  # True if a row was updated
 
-    def release_lock(self, cycle_id: str):
+    def release_lock(self, cycle_id: str, owner_id: str = None):
         """Release a previously acquired lock.
 
+        Only the owner who acquired the lock can release it.
         Always call this after completing a modification, even if
         the operation failed -- prevents lock buildup.
 
         Args:
           cycle_id: The cycle to unlock
+          owner_id: Identifier of the lock owner (required if lock has owner)
         """
-        self._cycles().update(
+        query = self._cycles().update(
             {"lock_expires_at": None}
-        ).eq("cycle_id", cycle_id).execute()
+        ).eq("cycle_id", cycle_id)
+
+        # If owner_id provided, only release if we own the lock
+        if owner_id is not None:
+            query = query.eq("lock_owner", owner_id)
+
+        result = query.execute()
+        if not result.data:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"release_lock_no_match: cycle_id={cycle_id} owner_id={owner_id}"
+            )
 
     def get_active_cycles(self) -> list[ProductionCycleRecord]:
         """Fetch all cycles currently in active production.

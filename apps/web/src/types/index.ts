@@ -1,55 +1,22 @@
-// ============================================================
-// KANBAN TYPES
-// ============================================================
+// apps/web/src/types/index.ts
+//
+// UI-only types and display constants.
+// Ground truth DB types are in @/lib/schema.ts (Zod schemas).
+// This file re-exports them for convenience and adds UI-only types.
 
-export interface KanbanCard {
-  id: string;
-  topic_brief: TopicBrief;
-  column: number;                    // 1-6
-  status: PipelineStatus;
-  viability_score: number | null;
-  error_message: string | null;
-  expires_at: string | null;         // ISO timestamp, only for Column 2
-  created_at: string;
-  updated_at: string;
-}
+// ─── Re-export ground truth types from Zod schemas ───────────────────────
+export type { KanbanCard, AgentThought, IterationLog } from '@/lib/schema';
 
-export interface TopicBrief {
-  title: string;
-  description: string;
-  angle: string;
-  score?: number;
-  question_results?: ViabilityQuestion[];
-}
+// ─── UI Display Constants ────────────────────────────────────────────────
 
-export interface ViabilityQuestion {
-  question: string;
-  passed: boolean;
-  reasoning: string;
-}
-
-export type PipelineStatus =
-  | "discovering"
-  | "grading"
-  | "suggested"
-  | "researching"
-  | "drafting"
-  | "scoring"
-  | "mutating"
-  | "visuals"
-  | "review"
-  | "publishing"
-  | "complete"
-  | "error";
-
-// Maps column number to display name and description
-export const COLUMNS: Record<number, ColumnDef> = {
-  1: { name: "Topic Finding",       description: "AI is searching for ideas",     color: "blue"   },
-  2: { name: "Suggested Topics",    description: "Approve within 3 hours",        color: "yellow" },
-  3: { name: "Researching",         description: "Deep research in progress",     color: "green"  },
-  4: { name: "Script Evolution",    description: "Drafting & Karpathy loop",      color: "purple" },
-  5: { name: "Review + Visuals",    description: "Waiting for your approval",     color: "orange" },
-  6: { name: "Published (Notion)",  description: "Done!",                         color: "emerald"},
+/** Maps column_index number to display name and description */
+export const COLUMNS_DEF: Record<number, ColumnDef> = {
+  1: { name: 'Topic Finding',      description: 'AI is searching for ideas',  color: 'blue'   },
+  2: { name: 'Suggested Topics',   description: 'Approve within 3 hours',     color: 'yellow' },
+  3: { name: 'Researching',        description: 'Deep research in progress',  color: 'green'  },
+  4: { name: 'Script Evolution',   description: 'Drafting & Karpathy loop',   color: 'purple' },
+  5: { name: 'Review + Visuals',   description: 'Waiting for your approval',  color: 'orange' },
+  6: { name: 'Published (Notion)', description: 'Done!',                      color: 'emerald'},
 };
 
 export interface ColumnDef {
@@ -58,66 +25,54 @@ export interface ColumnDef {
   color: string;
 }
 
-// ============================================================
-// AGENT THOUGHT TYPES
-// ============================================================
+// ─── Agent Display Config ────────────────────────────────────────────────
 
-export interface AgentThought {
-  id: string;
-  card_id: string;
-  agent_name: AgentName;
-  thought: string;
-  thought_type: ThoughtType;
-  color: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
-
-export type AgentName =
-  | "topic_finder"
-  | "researcher"
-  | "script_writer"
-  | "scorer"
-  | "challenger"
-  | "visual_annotator"
-  | "system";
-
-export type ThoughtType =
-  | "info"
-  | "thinking"
-  | "error"
-  | "success"
-  | "milestone";
-
-// Display config for each agent (used by AgentLog component)
-export const AGENT_DISPLAY: Record<AgentName, { label: string; emoji: string; colorClass: string }> = {
-  topic_finder:     { label: "Topic Finder",     emoji: "🔵", colorClass: "text-agent-topic"      },
-  researcher:       { label: "Researcher",       emoji: "🟢", colorClass: "text-agent-researcher"  },
-  script_writer:    { label: "Script Writer",    emoji: "🟣", colorClass: "text-agent-writer"      },
-  scorer:           { label: "Scorer",           emoji: "🟠", colorClass: "text-agent-scorer"      },
-  challenger:       { label: "Challenger",       emoji: "🔴", colorClass: "text-agent-challenger"  },
-  visual_annotator: { label: "Visual Annotator", emoji: "🔷", colorClass: "text-agent-visual"     },
-  system:           { label: "System",           emoji: "⚙️", colorClass: "text-agent-system"     },
+/** Agent name display configuration (used by AgentLog component) */
+export const AGENT_DISPLAY: Record<string, { label: string; emoji: string; colorClass: string }> = {
+  topic_finder:     { label: 'Topic Finder',     emoji: '🔵', colorClass: 'text-[hsl(var(--brand-300))]' },
+  researcher:       { label: 'Researcher',       emoji: '🟢', colorClass: 'text-[hsl(var(--lineage-emerald))]' },
+  script_writer:    { label: 'Script Writer',    emoji: '🟣', colorClass: 'text-[hsl(var(--lineage-indigo))]' },
+  scorer:           { label: 'Scorer',           emoji: '🟠', colorClass: 'text-[hsl(var(--lineage-amber))]' },
+  challenger:       { label: 'Challenger',       emoji: '🔴', colorClass: 'text-[hsl(var(--lineage-rose))]' },
+  visual_annotator: { label: 'Visual Annotator', emoji: '🔷', colorClass: 'text-[hsl(var(--lineage-cyan))]' },
+  system:           { label: 'System',           emoji: '⚙️', colorClass: 'text-[hsl(var(--neutral-400))]' },
 };
 
-// ============================================================
-// QUOTA / TELEMETRY TYPES
-// ============================================================
+// ─── Thought Type Display Config ─────────────────────────────────────────
 
-export interface ProviderQuota {
-  name: string;             // "groq", "openrouter", "ollama"
-  rpm_remaining: number;    // -1 means unlimited/unknown
-  tpm_remaining: number;
-  last_updated: string;
+export const THOUGHT_DISPLAY: Record<string, { emoji: string; colorClass: string }> = {
+  thinking:     { emoji: '🧠', colorClass: 'text-blue-400'   },
+  search:       { emoji: '🔍', colorClass: 'text-green-400'  },
+  output:       { emoji: '✍️', colorClass: 'text-purple-400' },
+  error:        { emoji: '🚨', colorClass: 'text-red-400'    },
+  memory_read:  { emoji: '💾', colorClass: 'text-yellow-400' },
+  memory_write: { emoji: '💾', colorClass: 'text-yellow-400' },
+};
+
+// ─── UI-Only Types (not from DB) ────────────────────────────────────────
+
+/** Card action types for the UI */
+export type CardAction = 'save' | 'start_pipeline' | 'resubmit' | 'review' | 'none';
+
+export interface CardActionInfo {
+  action: CardAction;
+  reason: string;
+  label: string;
+  variant: 'primary' | 'secondary' | 'warning' | 'success';
 }
 
-export interface QuotaResponse {
-  providers: ProviderQuota[];
-}
+// ─── Model Registry (display only) ───────────────────────────────────────
 
-// ============================================================
-// PIPELINE STATE TYPES (mirrors LangGraph ProductionState)
-// ============================================================
+export const MODEL_REGISTRY: { agent: string; model: string; provider: string; reason: string }[] = [
+  { agent: 'Researcher',       model: 'gemini-1.5-pro',          provider: 'OpenRouter', reason: '1M token context for massive research docs'   },
+  { agent: 'Script Writer',    model: 'llama-3.3-70b-versatile', provider: 'Groq',       reason: 'Fast inference for creative writing'          },
+  { agent: 'Scorer',           model: 'llama-3.3-70b-versatile', provider: 'Groq',       reason: 'Speed for 20-iteration loop'                  },
+  { agent: 'Challenger',       model: 'llama-3.3-70b-versatile', provider: 'Groq',       reason: 'Fast mutation generation'                     },
+  { agent: 'Visual Annotator', model: 'llama3.2',                provider: 'Ollama',     reason: 'Simple task, save cloud tokens'               },
+  { agent: 'Topic Finder',     model: 'gemini-2.0-flash',        provider: 'OpenRouter', reason: 'Fast + cheap for viability grading'            },
+];
+
+// ─── Pipeline State (from LangGraph API response) ────────────────────────
 
 export interface PipelineStateResponse {
   card_id: string;
@@ -125,36 +80,31 @@ export interface PipelineStateResponse {
     evaluation_score: number;
     best_score: number;
     iteration_count: number;
-    pipeline_status: PipelineStatus;
+    pipeline_status: string;
     current_draft: string;
     visual_plan: string;
     error: string | null;
   };
-  next: string[];   // Which node runs next (empty = complete or interrupted)
+  next: string[];
 }
 
-// ============================================================
-// API REQUEST/RESPONSE TYPES
-// ============================================================
+// ─── Health Check Types ──────────────────────────────────────────────────
 
-export interface DiscoverRequest {
-  seed_hint?: string;
+export interface HealthServicesResponse {
+  critical: Record<string, boolean>;
+  optional: Record<string, boolean>;
+  missing_critical: string[];
+  missing_optional: string[];
 }
 
-export interface ResumeRequest {
-  approved: boolean;
-  feedback?: string;
+// ─── DLQ Types ───────────────────────────────────────────────────────────
+
+export interface DLQItem {
+  id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  error_message: string;
+  status: string;
+  created_at: string;
+  retries: number;
 }
-
-// ============================================================
-// MODEL REGISTRY (from Phase 3 — display only)
-// ============================================================
-
-export const MODEL_REGISTRY: { agent: string; model: string; provider: string; reason: string }[] = [
-  { agent: "Researcher",       model: "gemini-1.5-pro",         provider: "OpenRouter", reason: "1M token context for massive research docs"   },
-  { agent: "Script Writer",    model: "llama-3.3-70b-versatile", provider: "Groq",       reason: "Fast inference for creative writing"          },
-  { agent: "Scorer",           model: "llama-3.3-70b-versatile", provider: "Groq",       reason: "Speed for 20-iteration loop"                  },
-  { agent: "Challenger",       model: "llama-3.3-70b-versatile", provider: "Groq",       reason: "Fast mutation generation"                     },
-  { agent: "Visual Annotator", model: "llama3.2",                provider: "Ollama",     reason: "Simple task, save cloud tokens"               },
-  { agent: "Topic Finder",     model: "gemini-2.0-flash",        provider: "OpenRouter", reason: "Fast + cheap for viability grading"            },
-];

@@ -38,7 +38,7 @@ async function refreshSettings() {
           <td>${typeof v==='boolean'?(v?'✓ Configured':'Not set'):escHtml(String(v))}</td>
         </tr>`).join('')}
       </tbody></table>`;
-  } catch {}
+  } catch (e) { console.warn('Failed to load configuration:', e); }
 
   try {
     const cmds = await api('/api/settings/commands');
@@ -49,5 +49,5 @@ async function refreshSettings() {
           <code>${escHtml(v)}</code>
         </div>
       </div>`).join('');
-  } catch {}
+  } catch (e) { console.warn('Failed to load startup commands:', e); }
 }

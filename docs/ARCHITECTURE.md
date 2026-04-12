@@ -24,8 +24,8 @@ Video production has three challenges:
 
 | Problem | Solution | Where |
 |---------|----------|-------|
-| Quality control | Human gates at critical decisions | Pipeline stages 2, 7 |
-| Resumability | SQLite state persistence | `packages/pipeline/state.py` |
+| Quality control | Human gates at critical decisions | LangGraph orchestration nodes |
+| Resumability | Supabase-backed state persistence | `kanban_cards` + `agent_thoughts` tables |
 | Provider fragility | FreeRouter proxy with failover | `freerouter/` service |
 
 ---
@@ -36,14 +36,15 @@ Video production has three challenges:
 
 ```
 Layer 1: Infrastructure (reusable)
-├── core/       ← Config, logging, errors
+├── core/       ← Config, logging, errors, research cache
 ├── router/     ← LLM proxy client
-├── pipeline/   ← State machine
-├── agents/     ← Base classes
-└── memory/     ← Zep Cloud client
+├── agents/     ← Base classes + registry
+├── memory/     ← Zep Cloud client
+├── integrations/ ← YouTube, Notion clients
+└── visual/     ← Remotion video animations
 
 Layer 2: Business Logic (domain-specific)
-└── content_factory/   ← Video production logic
+└── content_factory/   ← LangGraph orchestration + video production logic
 ```
 
 **Reasoning**:
@@ -93,65 +94,117 @@ HTTP keeps them independent.
 
 ---
 
-## 9-Stage Pipeline
+## Production Pipeline (LangGraph)
 
-### Why 9 Stages?
+### Current Pipeline — 4 Feedback Loops
+
+The production pipeline uses LangGraph with **four feedback loops** for iterative quality improvement:
 
 ```
-Stage 1:  trend_analysis          ← AI discovers topics
-Stage 2:  human_topic_approval    ← HUMAN GATE: You pick the topic
-Stage 3:  research                ← AI researches deeply
-Stage 4:  script_writing          ← AI writes dual-column script
-Stage 5:  visual_planning         ← AI designs visuals
-Stage 6:  seo                     ← AI generates metadata
-Stage 7:  human_review            ← HUMAN GATE: You review script
-Stage 8:  asset_creation          ← AI creates assets
-Stage 9:  publish                 ← AI publishes to Notion
+load_learnings → research → draft → score
+                                    │
+                          ┌─────────┼──────────┐
+                     needs_research  mutate     done
+                          │         │          │
+                     research_gap  → score  capture_learning
+                          │                    │
+                          ↓                    ↓
+                         draft               visuals
+                                               │
+                                         ┌─────┴──────┐
+                                    revise_visual     ok
+                                         │            │
+                                         ↓            ↓
+                                        draft    human_review
+                                                      │
+                                                ┌─────┴──────┐
+                                             approve      revise
+                                                │            │
+                                                ↓            ↓
+                                             publish      draft
 ```
 
-**Reasoning**:
-- Stages map to distinct creative tasks (research ≠ writing ≠ visuals)
-- Human gates at irreversible decisions (topic choice, final script)
-- Each stage is independently testable
-- Failures can resume from last successful stage
+### Nodes (defined in `orchestration/nodes.py`)
 
-**Why human gates at stages 2 and 7?**
-- Stage 2 (topic approval): Wrong topic = wasted 10+ minutes
-- Stage 7 (script review): Script quality determines video quality
+| Node | Purpose | Model | Feedback Loop |
+|------|---------|-------|---------------|
+| `load_learnings` | Load past winning patterns from Zep memory | system | — |
+| `research` | Deep research via Exa.ai web search + LLM synthesis (5-phase deer-flow methodology) | researcher | — |
+| `research_gap` | Targeted supplementary search when credibility is low | researcher | Research Feedback |
+| `draft` | Generate script from research + style constitution + genre rules | script_writer | All loops return here |
+| `score` | 56-question binary checklist evaluation (9 categories) | scorer | Karpathy Loop |
+| `mutate` | Improve weakest sections per scorer feedback | challenger | Karpathy Loop |
+| `capture_learning` | Store winning patterns to Zep for future scripts | — | — |
+| `visuals` | Add visual annotations + structural review | annotator | Visual Feedback |
+| `human_review` | Pause graph for human approval (LangGraph interrupt) | — | Human Review |
+| `publish` | Publish approved script to Notion | — | — |
 
-**Why not more human gates?**
-- Too many gates creates fatigue
-- AI handles routine decisions well
-- Gate at points where human judgment matters most
+### The 4 Feedback Loops
+
+1. **Karpathy Mutation Loop** (`score → mutate → score`): Up to 20 iterations. Scorer identifies weak sections, mutator rewrites them. Best draft is tracked across all iterations.
+
+2. **Research Feedback Loop** (`score → research_gap → draft`): When credibility score < 60% on first pass AND research hasn't been supplemented yet. Runs targeted supplementary searches on 2-3 identified gaps, appends findings to dossier, then routes back to draft. Max 1 additional research round.
+
+3. **Visual Feedback Loop** (`visuals → draft`): Visual annotator runs structural review. If the script is too abstract or visually unproduceable, routes back to draft with specific feedback for the writer.
+
+4. **Human Review Loop** (`human_review → draft`): After visual annotations, the graph pauses for human review. If rejected, routes back to draft with human feedback. Iteration count resets for fresh mutation budget.
+
+### Style & Genre Injection
+
+The script writer loads two JSON files at module level:
+- **`style_reference.json`** — Full Johnny Harris constitution (anchor-bridge formula, classic style writing, peer-to-peer framing, motive loading, conclusion shift, Pakistani adaptation)
+- **`genre_schema.json`** — Genre-specific structural backbone, key challenge, and conclusion pattern
+
+These are injected into the script writer prompt and mutator prompt, ensuring consistent non-AI voice across all iterations.
+
+### Why This Design?
+
+- **Quality without human fatigue**: 3 automated feedback loops handle routine improvements. Human only reviews the final result.
+- **Voice consistency**: Style constitution is loaded once and injected into every draft and mutation, preventing the "each iteration sounds more generic" problem.
+- **Research depth**: If the scorer detects thin evidence, the pipeline automatically gets more research before continuing — the writer never has to work with shallow research.
+- **Crash-proof**: LangGraph checkpoints state after every node. If the server dies at iteration 14, restart picks up exactly where it left off.
+
+### Discovery Graph (Separate)
+
+The discovery graph finds and grades candidate topics. It runs independently with no loops or human gates:
+
+```
+gather_context → search_web → generate_topics → grade_viability → save_topics → END
+```
 
 ---
 
-## SQLite for State Persistence
+## Supabase for State Persistence
 
-### Why SQLite?
+### Why Supabase?
 
-**Context**: Pipeline runs take 5-15 minutes. Crashes happen.
+**Context**: Pipeline runs take 5-15 minutes. The system needs realtime updates for the frontend.
 
 **Options Considered**:
 | Database | Pros | Cons |
 |----------|------|------|
-| PostgreSQL | Production-ready, concurrent | Requires server setup |
+| PostgreSQL (Supabase) | Production-ready, realtime, concurrent | Requires external service |
 | Redis | Fast, in-memory | Data lost on restart |
-| SQLite | Zero-config, file-based | Single-server limitation |
+| SQLite | Zero-config, file-based | Single-server, no realtime |
 
-**Decision**: SQLite with WAL mode
+**Decision**: Supabase (managed PostgreSQL)
 
 **Reasoning**:
-- Zero configuration (no server to manage)
-- File-based (easy backup, easy debugging)
-- WAL mode handles concurrent reads
-- Atomic transactions prevent corruption
-- Single-server limitation is acceptable (current scale)
+- Realtime subscriptions for live frontend updates
+- Concurrent connections for API + frontend
+- JSONB columns for flexible metadata storage
+- Managed service with auth and RLS support
+
+**Key Tables**:
+- `kanban_cards` — Pipeline task cards moving through columns
+- `agent_thoughts` — Real-time agent thinking updates
+- `pipeline_runs` — LangGraph checkpoint snapshots
+- `research_dossiers` — Cached research results
 
 **Consequences**:
-- Can't run multiple API servers sharing state
-- Must manage SQLite file carefully
-- Good for current scale; revisit if scaling horizontally
+- Requires Supabase project setup
+- External dependency (but managed, no self-hosting)
+- Realtime enables reactive frontend without polling
 
 ---
 
@@ -217,17 +270,17 @@ response = await router_client.chat(...)
 ### Why This Order Matters
 
 ```
-packages/core           ← Load first (no internal deps)
-packages/router         ← Depends on: core
-packages/memory         ← Depends on: core
-packages/pipeline       ← Depends on: core, router, memory
-packages/agents         ← Depends on: core, router, memory
-packages/content_factory← Depends on: core, router (via orchestration)
+packages/core            ← Load first (no internal deps)
+packages/router          ← Depends on: core
+packages/memory          ← Depends on: core
+packages/agents          ← Depends on: core, router, memory
+packages/integrations    ← Depends on: core
+packages/content_factory ← Depends on: core, router, memory (via orchestration)
 ```
 
 **Rules**:
 1. `core` has no internal dependencies — everything can import from it
-2. Business logic (`content_factory`) never imports from infrastructure directly
+2. Business logic (`content_factory`) imports from infrastructure, never the reverse
 3. Circular imports = architecture violation
 
 **How to add a new package**:
@@ -240,10 +293,11 @@ packages/content_factory← Depends on: core, router (via orchestration)
 
 | What | Where | Why |
 |------|-------|-----|
-| Pipeline state | `packages/data/pipeline.db` | SQLite, gitignored |
+| Pipeline state | Supabase (`kanban_cards`, `agent_thoughts`) | PostgreSQL, realtime |
 | Agent prompts | `data/skills/*.md` | Source-controlled, editable |
 | LLM config | `freerouter/.env` | Separate from main app |
 | Main config | `.env` | Root level |
+| LangGraph graphs | `packages/content_factory/orchestration/graphs.py` | Active pipeline execution |
 
 ---
 
@@ -259,11 +313,10 @@ packages/content_factory← Depends on: core, router (via orchestration)
 
 ### Adding a New Pipeline Stage
 
-1. Add to `packages/pipeline/stages.py`
-2. Add handler in `packages/pipeline/runner.py`
-3. Map to Kanban column in `PIPELINE_TO_KANBAN_STAGE`
-4. Add frontend UI in `apps/api/static/js/pipeline.js`
-5. Update `STAGE_DEFINITIONS` in `pipeline_routes.py`
+1. Add a node function in `packages/content_factory/orchestration/nodes.py`
+2. Wire it into the LangGraph graph in `packages/content_factory/orchestration/graphs.py`
+3. Add the stage definition in `apps/api/routers/pipeline_routes.py` (`STAGE_DEFINITIONS`)
+4. Add frontend UI in the React app (`apps/web/src/`)
 
 ---
 
@@ -278,6 +331,18 @@ packages/content_factory← Depends on: core, router (via orchestration)
 
 ---
 
+## Rate Limiting (Credit Conservation)
+
+To prevent burning through free-tier LLM credits (OpenRouter, Groq), `RouterClient` enforces a **5-second minimum cooldown** between consecutive LLM calls. This applies to both FreeRouter proxy calls and embedded LiteLLM fallback.
+
+**Why?** Free-tier models share rate limits (e.g., 20 requests/minute across all users). Without throttling, a pipeline run with 15+ LLM calls can exhaust credits in seconds.
+
+**Where?** `packages/router/client.py` — `_rate_limit_wait()` static method, called before every `complete()` and `_complete_embedded()`.
+
+**Configurable:** `_CALL_COOLDOWN_SECONDS` module constant (default: 5.0).
+
+---
+
 ## When to Revisit These Decisions
 
 | Decision | Revisit When |
@@ -286,3 +351,4 @@ packages/content_factory← Depends on: core, router (via orchestration)
 | Two-service architecture | Need to eliminate network latency |
 | 9 stages | Business requirements change |
 | SSE for updates | Need bidirectional real-time |
+| 5s rate limiter | Have paid API keys with higher limits |

@@ -23,7 +23,7 @@ async function refreshVisual() {
           <div class="provider-usage">${x.complete}/${x.total_assets} assets</div>
         </div></div>`).join('')
       : '<p style="color:var(--text-muted)">No assets created yet</p>';
-  } catch {}
+  } catch (e) { console.warn('Failed to load manifests:', e); }
 
   try {
     const shaders = await api('/api/visual/radiant/shaders');
@@ -35,13 +35,13 @@ async function refreshVisual() {
       : `<div class="empty-state" style="grid-column:1/-1"><div class="icon">🎨</div>
           <div class="message">Radiant not installed</div>
           <div class="help"><code>RadiantManager().setup()</code></div></div>`;
-  } catch {}
+  } catch (e) { console.warn('Failed to load shaders:', e); }
 
   try {
     const t = await api('/api/visual/remotion/templates');
     document.getElementById('remotion-list').innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px">
       ${t.map(x=>`<span style="background:var(--bg-tertiary);padding:5px 12px;border-radius:var(--radius);font-size:12px;color:var(--text-primary)">${escHtml(x)}</span>`).join('')}</div>`;
-  } catch {}
+  } catch (e) { console.warn('Failed to load Remotion templates:', e); }
 }
 
 function previewShader(name) {

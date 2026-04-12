@@ -1,17 +1,51 @@
 /**
- * chat.js — Chat tab with persistent conversation history.
+ * chat.js — Chat tab with LangGraph ReAct agent.
  *
- * Ports all functionality from freerouter/web/static/js/chat.js to the
- * new dark-theme dashboard. Talks to /api/chat/* which proxies to
- * FreeRouter at :8080. Streaming, conversation history, provider badge
- * all work identically — just restyled.
+ * Talks to /api/chat/* which uses a LangGraph agent with tool calling.
+ * Supports streaming responses, session-based conversations via
+ * LangGraph checkpointer, and tool call visibility in the UI.
+ *
+ * Conversation metadata (session list) is persisted in localStorage
+ * since the backend does not provide conversation CRUD endpoints.
+ * Actual message history is fetched from GET /api/chat/history/{session_id}.
  */
 
 const _chatState = {
-  convId: null,
+  sessionId: null,
   messages: [],
   streaming: false,
 };
+
+// ─── Session persistence (localStorage) ────────────────────────────────────────
+
+function _getSessions() {
+  try { return JSON.parse(localStorage.getItem('chat_sessions') || '[]'); }
+  catch { return []; }
+}
+
+function _saveSessions(sessions) {
+  localStorage.setItem('chat_sessions', JSON.stringify(sessions));
+}
+
+function _addSession(sessionId, title) {
+  const sessions = _getSessions();
+  const filtered = sessions.filter(s => s.id !== sessionId);
+  filtered.unshift({
+    id: sessionId,
+    title: (title || 'New Chat').slice(0, 80),
+    created_at: new Date().toISOString(),
+  });
+  // Keep only the last 30 sessions
+  if (filtered.length > 30) filtered.length = 30;
+  _saveSessions(filtered);
+}
+
+function _removeSession(sessionId) {
+  const sessions = _getSessions().filter(s => s.id !== sessionId);
+  _saveSessions(sessions);
+}
+
+// ─── Init ───────────────────────────────────────────────────────────────────────
 
 async function initChat() {
   const el = document.getElementById('tab-chat');
@@ -20,26 +54,20 @@ async function initChat() {
       <div class="chat-sidebar">
         <div class="chat-sidebar-header">
           <span class="chat-sidebar-title">History</span>
-          <button class="btn btn-sm btn-outline" onclick="newConversation()">+ New</button>
+          <button class="btn btn-sm btn-outline" onclick="newChatSession()">+ New</button>
         </div>
-        <div id="conv-list" class="conv-list">
-          <div class="conv-empty">Loading…</div>
-        </div>
+        <div id="conv-list" class="conv-list"></div>
       </div>
       <div class="chat-main">
         <div class="chat-toolbar">
-          <label>Model</label>
-          <select id="chat-model" class="model-select">
-            <option value="auto">⚡ Auto (best available)</option>
-          </select>
           <button class="btn btn-sm btn-outline" onclick="clearChat()">Clear</button>
         </div>
         <div id="chat-messages" class="chat-messages">
           <div class="chat-welcome">
-            <strong>FreeRouter Chat</strong>
-            <p>Routes to the best free provider automatically.<br>
-            Provider badge shown on each response.<br>
-            History persists across restarts.</p>
+            <strong>AI Chat</strong>
+            <p>Powered by LangGraph ReAct agent.<br>
+            Tool calls are shown during processing.<br>
+            Conversation history persists per session.</p>
           </div>
         </div>
         <div class="chat-input-row">
@@ -51,16 +79,6 @@ async function initChat() {
       </div>
     </div>`;
 
-  // Load models
-  try {
-    const data = await api('/api/chat/models');
-    const sel = document.getElementById('chat-model');
-    if (data.models?.length) {
-      sel.innerHTML = data.models.map(m =>
-        `<option value="${escHtml(m.id)}">${escHtml(m.display||m.id)}</option>`).join('');
-    }
-  } catch {}
-
   await loadConvList();
 
   document.getElementById('chat-input')?.addEventListener('keydown', e => {
@@ -68,76 +86,97 @@ async function initChat() {
   });
 }
 
-// ─── Conversation list ────────────────────────────────────────────────────────
+// ─── Conversation list (localStorage-backed) ────────────────────────────────────
 
-async function loadConvList() {
-  try {
-    const data = await api('/api/chat/conversations');
-    const list = document.getElementById('conv-list');
-    const convs = data.conversations || [];
-    if (!convs.length) {
-      list.innerHTML = '<div class="conv-empty">No conversations yet</div>';
-      return;
-    }
-    list.innerHTML = convs.map(c => `
-      <div class="conv-item ${c.id === _chatState.convId ? 'active' : ''}"
-           onclick="loadConv('${c.id}')">
-        <div class="conv-title">${escHtml(c.title||'Untitled')}</div>
-        <div class="conv-meta">${c.message_count||0} messages</div>
-        <button class="conv-del" onclick="delConv(event,'${c.id}')">×</button>
-      </div>`).join('');
-  } catch (e) {
-    document.getElementById('conv-list').innerHTML =
-      `<div class="conv-empty" style="color:var(--accent-warning)">FreeRouter offline</div>`;
+function loadConvList() {
+  const sessions = _getSessions();
+  const list = document.getElementById('conv-list');
+  if (!sessions.length) {
+    list.innerHTML = '<div class="conv-empty">No conversations yet</div>';
+    return;
   }
+  list.innerHTML = sessions.map(s => `
+    <div class="conv-item ${s.id === _chatState.sessionId ? 'active' : ''}"
+         onclick="loadSession('${s.id}')">
+      <div class="conv-title">${escHtml(s.title || 'Untitled')}</div>
+      <div class="conv-meta">${fmtDate(s.created_at)}</div>
+      <button class="conv-del" onclick="delSession(event,'${s.id}')">×</button>
+    </div>`).join('');
 }
 
-async function newConversation() {
-  const data = await api('/api/chat/conversations', {method:'POST', body:{}});
-  _chatState.convId = data.id;
+// Kept as async for compatibility with old callers, but does not call any API.
+async function newConversation() { newChatSession(); }
+
+function newChatSession() {
+  _chatState.sessionId = null;
   _chatState.messages = [];
   document.getElementById('chat-messages').innerHTML =
     `<div class="chat-welcome"><strong>New conversation</strong><p>Start typing below.</p></div>`;
-  await loadConvList();
+  loadConvList();
 }
 
-async function loadConv(cid) {
+async function loadConv(cid) { loadSession(cid); }
+
+async function loadSession(sid) {
+  _chatState.sessionId = sid;
+  _chatState.messages = [];
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = `<div class="chat-welcome"><strong>Loading…</strong></div>`;
+
   try {
-    const conv = await api(`/api/chat/conversations/${cid}`);
-    _chatState.convId = cid;
-    _chatState.messages = conv.messages || [];
-    const container = document.getElementById('chat-messages');
-    if (!conv.messages.length) {
-      container.innerHTML = `<div class="chat-welcome"><strong>${escHtml(conv.title||'Chat')}</strong><p>No messages yet.</p></div>`;
+    // Fetch actual message history from LangGraph checkpointer
+    const data = await api(`/api/chat/history/${sid}`);
+    _chatState.messages = data.messages || [];
+
+    const session = _getSessions().find(s => s.id === sid);
+    if (!_chatState.messages.length) {
+      container.innerHTML =
+        `<div class="chat-welcome"><strong>${escHtml(session?.title || 'Chat')}</strong><p>No messages yet.</p></div>`;
     } else {
-      container.innerHTML = conv.messages.map(m => renderMsg(m)).join('');
+      container.innerHTML = _chatState.messages.map(m => renderMsg(m)).join('');
       container.scrollTop = container.scrollHeight;
     }
-    await loadConvList();
-  } catch (e) { showToast('Could not load: '+e.message, 'error'); }
+  } catch (e) {
+    container.innerHTML =
+      `<div class="chat-welcome"><strong>Error</strong><p>Could not load: ${escHtml(e.message)}</p></div>`;
+  }
+  loadConvList();
 }
 
-async function delConv(e, cid) {
+function delConv(e, cid) { delSession(e, cid); }
+
+async function delSession(e, sid) {
   e.stopPropagation();
   if (!confirm('Delete this conversation?')) return;
-  await api(`/api/chat/conversations/${cid}`, {method:'DELETE'}).catch(()=>{});
-  if (_chatState.convId === cid) {
-    _chatState.convId = null;
-    _chatState.messages = [];
-    document.getElementById('chat-messages').innerHTML =
-      `<div class="chat-welcome"><strong>Deleted</strong><p>Start a new conversation.</p></div>`;
+  
+  try {
+    // Delete from backend first
+    await api(`/api/chat/sessions/${sid}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error('Backend deletion failed:', err);
+    // Continue with local deletion even if backend fails
   }
-  await loadConvList();
+  
+  // Remove from local storage
+  _removeSession(sid);
+  
+  if (_chatState.sessionId === sid) {
+    newChatSession();
+  } else {
+    loadConvList();
+  }
+  showToast('Conversation deleted', 'success');
 }
 
 function clearChat() {
-  _chatState.convId = null;
+  _chatState.sessionId = null;
   _chatState.messages = [];
   document.getElementById('chat-messages').innerHTML =
     `<div class="chat-welcome"><strong>Cleared</strong><p>Start typing to begin.</p></div>`;
+  loadConvList();
 }
 
-// ─── Send ─────────────────────────────────────────────────────────────────────
+// ─── Send ───────────────────────────────────────────────────────────────────────
 
 async function sendChatMessage() {
   if (_chatState.streaming) return;
@@ -145,64 +184,59 @@ async function sendChatMessage() {
   const text = input.value.trim();
   if (!text) return;
 
-  if (!_chatState.convId) {
-    const data = await api('/api/chat/conversations', {method:'POST', body:{}});
-    _chatState.convId = data.id;
-  }
-
   input.value = '';
   _chatState.streaming = true;
   document.getElementById('chat-send').disabled = true;
 
-  const userMsg = {role:'user', content:text, timestamp:new Date().toISOString()};
+  const userMsg = { role: 'user', content: text, timestamp: new Date().toISOString() };
   _chatState.messages.push(userMsg);
   appendMsg(userMsg);
-
-  try {
-    await api(`/api/chat/conversations/${_chatState.convId}/messages`,
-              {method:'POST', body:{role:'user', content:text}});
-  } catch {}
 
   const aid = 'cm-' + Date.now();
   appendStreamingPlaceholder(aid);
 
   try {
-    const model = document.getElementById('chat-model')?.value || 'auto';
+    // Backend expects ChatRequest: { message: str, session_id: str | None }
     const resp = await fetch('/api/chat/stream', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model,
-        messages: _chatState.messages.map(m => ({role:m.role, content:m.content})),
-        temperature: 0.7,
-        max_tokens: 4096,
+        message: text,
+        session_id: _chatState.sessionId || undefined,
       }),
     });
 
     if (!resp.ok) {
-      const err = await resp.json().catch(()=>({}));
+      const err = await resp.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${resp.status}`);
     }
 
-    const {content, provider, model: usedModel} = await readChatStream(resp, aid);
+    // Parse LangGraph SSE stream: {type: "token/tool_start/tool_end/done/error"}
+    const { content, sessionId, toolsUsed } = await readChatStream(resp, aid);
+
+    // Update session ID from backend response for conversation continuity
+    if (sessionId) {
+      _chatState.sessionId = sessionId;
+    }
+
     const assistantMsg = {
-      role:'assistant', content:content||'(no response)',
-      timestamp:new Date().toISOString(), provider, model:usedModel,
+      role: 'assistant',
+      content: content || '(no response)',
+      timestamp: new Date().toISOString(),
+      tools_used: toolsUsed,
     };
     _chatState.messages.push(assistantMsg);
     finalizeMsg(aid, assistantMsg);
 
-    try {
-      await api(`/api/chat/conversations/${_chatState.convId}/messages`, {
-        method:'POST',
-        body:{role:'assistant', content:assistantMsg.content, provider, model:usedModel},
-      });
-      await loadConvList();
-    } catch {}
+    // Save session to localStorage for sidebar persistence
+    if (_chatState.sessionId) {
+      _addSession(_chatState.sessionId, text);
+    }
+    loadConvList();
 
   } catch (e) {
     setMsgError(aid, e.message);
-    showToast('Error: '+e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   } finally {
     _chatState.streaming = false;
     document.getElementById('chat-send').disabled = false;
@@ -210,17 +244,20 @@ async function sendChatMessage() {
   }
 }
 
-// ─── Stream reader ────────────────────────────────────────────────────────────
+// ─── Stream reader (LangGraph ReAct SSE format) ────────────────────────────────
 
 async function readChatStream(resp, id) {
   const reader = resp.body.getReader();
   const dec = new TextDecoder();
-  let full='', buf='', provider='', usedModel='';
+  let full = '';
+  let buf = '';
+  let sessionId = null;
+  const toolsUsed = [];
 
   while (true) {
-    const {done, value} = await reader.read();
+    const { done, value } = await reader.read();
     if (done) break;
-    buf += dec.decode(value, {stream:true});
+    buf += dec.decode(value, { stream: true });
     const lines = buf.split('\n');
     buf = lines.pop() || '';
 
@@ -228,36 +265,55 @@ async function readChatStream(resp, id) {
       const t = line.trim();
       if (!t.startsWith('data: ')) continue;
       const d = t.slice(6);
-      if (d === '[DONE]' || !d) continue;
+      if (!d) continue;
+
       try {
         const p = JSON.parse(d);
-        if (p.error) throw new Error(typeof p.error==='string' ? p.error : p.error.message||'Error');
-        if (p.meta?._provider) {
-          provider = p.meta._provider;
-          usedModel = p.meta._model||'';
-          updateStreamProvider(id, provider, usedModel);
+        const type = p.type;
+
+        if (type === 'error') {
+          throw new Error(typeof p.message === 'string' ? p.message : 'Stream error');
+        }
+
+        if (type === 'tool_start') {
+          toolsUsed.push(p.tool);
+          showToolIndicator(id, p.tool, 'started');
           continue;
         }
-        const delta = p.choices?.[0]?.delta?.content;
-        if (delta) { full += delta; updateStreamContent(id, full); }
-      } catch(e) {
-        if (!e.message.includes('JSON')) throw e;
+
+        if (type === 'tool_end') {
+          showToolIndicator(id, p.tool, 'completed');
+          continue;
+        }
+
+        if (type === 'done') {
+          if (p.session_id) sessionId = p.session_id;
+          continue;
+        }
+
+        if (type === 'token' && p.content) {
+          full += p.content;
+          updateStreamContent(id, full);
+        }
+      } catch (e) {
+        // Only re-throw non-JSON errors (real errors, not parse failures)
+        if (e.message && !e.message.includes('JSON')) throw e;
       }
     }
   }
-  return {content:full, provider, model:usedModel};
+  return { content: full, sessionId, toolsUsed: [...new Set(toolsUsed)] };
 }
 
-// ─── DOM helpers ──────────────────────────────────────────────────────────────
+// ─── DOM helpers ───────────────────────────────────────────────────────────────
 
 function renderMsg(msg) {
-  const tag = (msg.role==='assistant' && msg.provider)
-    ? `<span class="provider-tag">${escHtml(msg.provider)}${msg.model?' / '+escHtml(msg.model):''}</span>`
+  const tag = (msg.role === 'assistant' && msg.tools_used?.length)
+    ? `<span class="provider-tag">🔧 ${escHtml(msg.tools_used.join(', '))}</span>`
     : '';
   return `
     <div class="chat-msg ${msg.role}">
       <div class="msg-header">
-        ${msg.role==='user'?'You':'Assistant'} ${tag}
+        ${msg.role === 'user' ? 'You' : 'Assistant'} ${tag}
         <span style="font-size:10px;color:var(--text-muted)">${fmtTime(msg.timestamp)}</span>
       </div>
       <div class="msg-body">${escHtml(msg.content)}</div>
@@ -276,16 +332,41 @@ function appendStreamingPlaceholder(id) {
   c.insertAdjacentHTML('beforeend', `
     <div id="${id}" class="chat-msg assistant">
       <div class="msg-header">Assistant
-        <span class="provider-tag" id="${id}-p">routing…</span>
+        <span class="provider-tag" id="${id}-p">thinking…</span>
       </div>
       <div class="msg-body"><span class="thinking-dots"></span></div>
+      <div class="msg-tools" id="${id}-tools"></div>
     </div>`);
   c.scrollTop = c.scrollHeight;
 }
 
-function updateStreamProvider(id, provider, model) {
-  const el = document.getElementById(`${id}-p`);
-  if (el) el.textContent = `${provider}${model?' / '+model:''}`;
+/** Show tool call indicators during streaming. */
+function showToolIndicator(id, toolName, state) {
+  const toolsEl = document.getElementById(`${id}-tools`);
+  const statusEl = document.getElementById(`${id}-p`);
+  if (!toolsEl) return;
+
+  // Update header status
+  if (statusEl) {
+    statusEl.textContent = state === 'started'
+      ? `🔧 Using ${toolName}…`
+      : `🔧 ${toolName} done`;
+  }
+
+  // Show tool pill in tools area
+  const pillId = `tool-${id}-${toolName}`;
+  let pill = document.getElementById(pillId);
+  if (!pill) {
+    pill = document.createElement('span');
+    pill.id = pillId;
+    pill.className = 'tool-pill';
+    pill.style.cssText = 'display:inline-block;font-size:10px;padding:2px 6px;margin:2px;border-radius:4px;';
+    pill.textContent = toolName;
+    toolsEl.appendChild(pill);
+  }
+  pill.style.background = state === 'started' ? 'var(--bg-tertiary)' : 'var(--accent-success, #2da44e)';
+  pill.style.color = state === 'started' ? 'var(--text-primary)' : '#fff';
+  pill.textContent = state === 'started' ? `⏳ ${toolName}` : `✓ ${toolName}`;
 }
 
 function updateStreamContent(id, content) {
@@ -298,12 +379,18 @@ function updateStreamContent(id, content) {
 function finalizeMsg(id, msg) {
   const el = document.getElementById(id);
   if (!el) return;
-  const tag = msg.provider
-    ? `<span class="provider-tag">${escHtml(msg.provider)}${msg.model?' / '+escHtml(msg.model):''}</span>`
+
+  const tag = msg.tools_used?.length
+    ? `<span class="provider-tag">🔧 ${escHtml(msg.tools_used.join(', '))}</span>`
     : '';
+
   el.querySelector('.msg-header').innerHTML =
     `Assistant ${tag} <span style="font-size:10px;color:var(--text-muted)">${fmtTime(msg.timestamp)}</span>`;
   el.querySelector('.msg-body').textContent = msg.content;
+
+  // Clean up tools indicator area
+  const toolsEl = document.getElementById(`${id}-tools`);
+  if (toolsEl) toolsEl.remove();
 }
 
 function setMsgError(id, text) {
@@ -313,4 +400,7 @@ function setMsgError(id, text) {
     'Assistant <span class="provider-tag error-tag">failed</span>';
   el.querySelector('.msg-body').innerHTML =
     `<span style="color:var(--accent-error)">Error: ${escHtml(text)}</span>`;
+  // Clean up tools indicator area
+  const toolsEl = document.getElementById(`${id}-tools`);
+  if (toolsEl) toolsEl.remove();
 }

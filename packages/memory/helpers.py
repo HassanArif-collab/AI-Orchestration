@@ -146,10 +146,10 @@ async def recall_style(user_id: str) -> dict:
     style_session = f"{user_id}_style"
 
     # Try searching for style-related facts
-    results = await client.search_memory(style_session, "content style preferences audience", limit=5)
+    result = await client.search_memory(style_session, "content style preferences audience", limit=5)
 
-    if results:
-        return {"facts": results}
+    if result.success and result.data:
+        return {"facts": result.data}
 
     return {}
 
@@ -174,6 +174,9 @@ async def recall_video_performance(user_id: str, query: str) -> list[dict]:
     # Analytics session naming convention: user_id + "_analytics"
     analytics_session = f"{user_id}_analytics"
 
-    results = await client.search_memory(analytics_session, query, limit=10)
+    result = await client.search_memory(analytics_session, query, limit=10)
 
-    return results
+    if result.success and result.data:
+        return result.data
+
+    return []

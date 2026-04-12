@@ -85,11 +85,18 @@ class ZepAudienceModelStore:
         if not self._enabled or not self._client:
             return "No audience data available yet."
         try:
-            results = await self._client.search_memory(
+            result = await self._client.search_memory(
                 session_id=f"{self.settings.ZEP_AUDIENCE_USER_ID}_session",
                 query=f"Pakistani audience engagement patterns for {genre_id} videos",
                 limit=5
             )
+            # search_memory returns OperationResult[list[dict]]
+            if hasattr(result, 'data'):
+                results = result.data if result.success else []
+            elif isinstance(result, list):
+                results = result
+            else:
+                results = []
             if not results:
                 return "No audience data available yet."
             facts = [r.get("fact", "") for r in results if isinstance(r, dict)]
@@ -103,12 +110,73 @@ class ZepAudienceModelStore:
         if not self._enabled or not self._client:
             return []
         try:
-            results = await self._client.search_memory(
+            result = await self._client.search_memory(
                 session_id=f"{self.settings.ZEP_LEARNING_USER_ID}_session",
                 query=f"script improvement patterns for {genre_id}",
                 limit=10
             )
-            return [r.get("fact", "") for r in (results or []) if isinstance(r, dict)]
+            # search_memory returns OperationResult[list[dict]]
+            if hasattr(result, 'data'):
+                results = result.data if result.success else []
+            elif isinstance(result, list):
+                results = result
+            else:
+                results = []
+            return [r.get("fact", "") for r in results if isinstance(r, dict)]
         except Exception as e:
             logger.debug(f"zep_read_learning_insights_failed: {e}")
             return []
+
+    async def read_learnings(self, topic_text: str) -> str:
+        """Read past winning mutation learnings relevant to a topic (used by load_learnings_node).
+
+        Searches the Zep learning session for proven script patterns that relate
+        to the given topic text. Returns a concatenated string of relevant facts,
+        or empty string if Zep is disabled or no results found.
+
+        Args:
+            topic_text: The topic title or keywords to search for relevant learnings
+
+        Returns:
+            String of concatenated learning facts, or empty string
+        """
+        if not self._enabled or not self._client:
+            return ""
+        try:
+            results = await self._client.search_memory(
+                session_id=f"{self.settings.ZEP_LEARNING_USER_ID}_session",
+                query=f"PROVEN SCRIPT PATTERN for {topic_text}",
+                limit=5
+            )
+            if not results:
+                return ""
+            # search_memory returns OperationResult — extract data
+            if hasattr(results, 'data') and results.data:
+                facts = [r.get("fact", "") for r in results.data if isinstance(r, dict) and r.get("fact")]
+            elif isinstance(results, list):
+                facts = [r.get("fact", "") for r in results if isinstance(r, dict) and r.get("fact")]
+            else:
+                facts = []
+            return "\n\n".join(facts) if facts else ""
+        except Exception as e:
+            logger.debug(f"zep_read_learnings_failed: {e}")
+            return ""
+
+    async def write_learning(self, learning_text: str) -> None:
+        """Write a proven script pattern to Zep learning memory (used by capture_learning_node).
+
+        Called when a script scores >= 85% — the winning pattern is saved so
+        future scripts can benefit from what worked.
+
+        Args:
+            learning_text: The learning/fact text to store
+        """
+        if not self._enabled or not self._client:
+            return
+        try:
+            await self._client.add_facts(
+                session_id=f"{self.settings.ZEP_LEARNING_USER_ID}_session",
+                facts=[{"fact": learning_text, "type": "proven_pattern"}]
+            )
+        except Exception as e:
+            logger.debug(f"zep_write_learning_failed: {e}")

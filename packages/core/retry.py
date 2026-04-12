@@ -18,6 +18,7 @@ Imported by: packages/integrations/
 
 import asyncio
 import random
+import time
 from functools import wraps
 from typing import Callable, ParamSpec, TypeVar, Awaitable
 
@@ -59,7 +60,7 @@ def is_retryable_exception(exc: Exception, retryable_types: tuple[type[Exception
     exc_name = type(exc).__name__
     retryable_names = {
         "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
-        "ConnectionError", "ConnectError", "HTTPStatusError",
+        "ConnectionError", "ConnectError",
         "RemoteProtocolError", "LocalProtocolError",
         "SSLError", "ProtocolError",
     }
@@ -210,7 +211,6 @@ def retry_with_backoff_sync(
                         extra={"error": str(e), "error_type": type(e).__name__}
                     )
 
-                    import time
                     time.sleep(delay)
 
             if last_exception:

@@ -62,12 +62,12 @@ class TestP01_APIAuthentication:
         from packages.core.config import Settings
         
         # Test with empty keys
-        settings = Settings(API_KEYS="")
+        settings = Settings(API_KEYS="", API_AUTH_ENABLED=True)
         assert settings.valid_api_keys == set()
         assert not settings.is_auth_enabled()
         
-        # Test with keys
-        settings = Settings(API_KEYS="key1,key2,key3")
+        # Test with keys (explicitly enable auth to avoid .env override)
+        settings = Settings(API_KEYS="key1,key2,key3", API_AUTH_ENABLED=True)
         assert settings.valid_api_keys == {"key1", "key2", "key3"}
         assert settings.is_auth_enabled()
 
@@ -309,27 +309,6 @@ class TestP04_DeadLetterQueue:
             assert stats["total"] == 2
             assert stats["pending"] == 2
 
-    def test_evolution_state_persistence(self):
-        """Verify evolution loop can persist and restore state."""
-        from packages.content_factory.script_generator.evolution_loop import EvolutionState
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            state = EvolutionState(Path(tmpdir))
-            
-            # Save state
-            state.save("test_evo_id", {
-                "iteration": 5,
-                "score_history": [0.5, 0.6, 0.7, 0.75, 0.8]
-            })
-            
-            # Load state
-            loaded = state.load("test_evo_id")
-            
-            assert loaded is not None
-            assert loaded["iteration"] == 5
-            assert len(loaded["score_history"]) == 5
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # P0-05: Quality Floor Tests
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -352,19 +331,9 @@ class TestP05_QualityFloor:
         assert settings.SCRIPT_QUALITY_FLOOR == 60.0
         assert settings.SCRIPT_MAX_ITERATIONS == 20
 
-    def test_evaluator_threshold(self):
-        """Verify evaluator has production threshold."""
-        from packages.content_factory.script_generator.self_evaluator import SelfEvaluator
-        
-        assert hasattr(SelfEvaluator, 'PRODUCTION_THRESHOLD')
-        assert SelfEvaluator.PRODUCTION_THRESHOLD == 0.85  # 85%
+# test_evaluator_threshold removed: script_generator deleted in Phase 2
 
-    def test_evolution_threshold(self):
-        """Verify evolution loop has threshold."""
-        from packages.content_factory.script_generator.evolution_loop import ScriptEvolutionLoop
-        
-        assert hasattr(ScriptEvolutionLoop, 'PRODUCTION_THRESHOLD')
-        assert ScriptEvolutionLoop.PRODUCTION_THRESHOLD == 0.85
+# test_evolution_threshold removed: script_generator deleted in Phase 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -387,7 +356,8 @@ class TestP06_WebSearchNoHallucinations:
         client._zai = None  # Simulate SDK not available
         
         # Should return empty list, not fake URLs
-        result = asyncio.get_event_loop().run_until_complete(client.search("test query"))
+        import asyncio
+        result = asyncio.run(client.search("test query"))
         
         assert isinstance(result, list)
         assert len(result) == 0
@@ -460,17 +430,9 @@ class TestP07_CORSWildcard:
     def test_cors_not_wildcard_in_main(self):
         """Verify main.py uses configured origins, not wildcard."""
         import inspect
-        from apps.api.main import app
+        import apps.api.main as main_module
         
-        # Get the CORS middleware
-        for middleware in app.user_middleware:
-            if hasattr(middleware, 'cls') and 'CORS' in str(middleware.cls):
-                # Verify it's configured with specific origins
-                # The middleware should not use ["*"]
-                pass
-        
-        # Check that main.py imports settings for CORS
-        source = inspect.getsource(app)
+        source = inspect.getsource(main_module)
         assert "cors_origins_list" in source or "CORSMiddleware" in source
 
 
@@ -570,7 +532,7 @@ class TestIntegration:
         from packages.core.dead_letter import queue_for_retry, get_pending_retries
         
         # P0-05
-        from packages.content_factory.script_generator.self_evaluator import SelfEvaluator
+        # script_generator removed in Phase 2 dead code cleanup
         
         # P0-06
         from packages.router.web_search import WebSearchClient

@@ -77,6 +77,7 @@ class FeedbackLoop:
         self.zep_client = AsyncZepMemoryClient()
         self.audience_user_id = get_settings().ZEP_AUDIENCE_USER_ID
         self.zep_session_id = f"{self.audience_user_id}_session"
+        self._pending_facts: list[dict] = []  # queued when no event loop available
 
     def _load_audience_model(self) -> AudienceModel:
         """Load the evolving behavioral model for Pakistani Audience.
@@ -213,11 +214,15 @@ class FeedbackLoop:
         if facts:
             try:
                 loop = asyncio.get_running_loop()
-                asyncio.create_task(self._write_facts_to_zep(facts))
-                logger.info(f"wrote_{len(facts)}_facts_to_zep_for_genre: {genre}")
+                # Flush any previously queued pending facts along with current batch
+                all_facts = self._pending_facts + facts if self._pending_facts else facts
+                self._pending_facts.clear()
+                asyncio.create_task(self._write_facts_to_zep(all_facts))
+                logger.info(f"wrote_{len(all_facts)}_facts_to_zep_for_genre: {genre}")
             except RuntimeError:
-                # No running event loop — skip Zep write (acceptable degradation)
-                logger.debug("zep_write_skipped_no_event_loop")
+                # No running event loop — queue facts for later async submission
+                self._pending_facts.extend(facts)
+                logger.debug(f"zep_write_queued_{len(facts)}_facts_pending_total_{len(self._pending_facts)}")
             
         logger.info(f"recalibrated_feedback_loop_for_genre: {genre}")
 
@@ -227,3 +232,16 @@ class FeedbackLoop:
             await self.zep_client.add_facts(session_id=self.zep_session_id, facts=facts)
         except Exception as e:
             logger.debug(f"zep_write_failed: {e}")
+
+    async def flush_pending_facts(self) -> None:
+        """Submit any facts that were queued when no event loop was available.
+        
+        Call this from an async context (e.g., during startup or periodic
+        maintenance) to drain the pending facts queue.
+        """
+        if not self._pending_facts:
+            return
+        facts = list(self._pending_facts)
+        self._pending_facts.clear()
+        logger.info(f"flushing_{len(facts)}_pending_facts_to_zep")
+        await self._write_facts_to_zep(facts)

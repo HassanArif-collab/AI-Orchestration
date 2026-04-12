@@ -7,7 +7,7 @@ Source Video Library records, and error logging.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -316,10 +316,39 @@ class SourceVideoRecord(BaseModel):
 # ─── Error Logging ───────────────────────────────────────────────────────────
 
 
+class AdaptationStage(IntEnum):
+    """Typed enum for adaptation pipeline stages.
+
+    Replaces raw int stage_number to prevent invalid values
+    and improve type safety across the pipeline.
+
+    Usage:
+        stage = AdaptationStage.STRUCTURAL_ANALYSIS
+        error = AdaptationError(stage_number=stage, ...)
+    """
+    STRUCTURAL_ANALYSIS = 1
+    LOCALIZATION = 2
+    SCRIPT_GENERATION = 3
+    VISUAL_PLANNING = 4
+    PRODUCTION = 5
+    FINAL_REVIEW = 6
+
+    @classmethod
+    def from_int(cls, value: int) -> "AdaptationStage":
+        """Convert an int to AdaptationStage, raising ValueError if invalid."""
+        try:
+            return cls(value)
+        except ValueError:
+            raise ValueError(
+                f"Invalid adaptation stage: {value}. "
+                f"Must be one of: {[s.name for s in cls]}"
+            )
+
+
 class AdaptationError(BaseModel):
     """Standard error/warning log entry for the adaptation pipeline."""
     production_cycle_id: str
-    stage_number: int = Field(ge=1, le=4)
+    stage_number: AdaptationStage = AdaptationStage.STRUCTURAL_ANALYSIS
     error_type: str
     content_element: str = ""
     description: str

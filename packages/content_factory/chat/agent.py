@@ -18,7 +18,6 @@ routed to the model specified in Phase 3c (gpt-4o-mini or gemini-flash).
 from __future__ import annotations
 
 import logging
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +100,7 @@ async def build_chat_agent():
     from packages.core.config import get_settings
     settings = get_settings()
     freerouter_url = settings.FREEROUTER_URL
-    chat_model = os.getenv("CHAT_MODEL", "openrouter/google/gemini-2.0-flash-001")
+    chat_model = settings.CHAT_MODEL
     freerouter_api_key = settings.FREEROUTER_API_KEY
 
     llm = ChatOpenAI(
@@ -125,7 +124,22 @@ async def build_chat_agent():
         _chat_agent = agent
         logger.info("chat_agent_initialized")
         return agent
-    except Exception as e:
+    except TypeError as e:
+        # langgraph-prebuilt renamed state_modifier → prompt in newer versions
+        if "state_modifier" in str(e):
+            try:
+                agent = create_react_agent(
+                    model=llm,
+                    tools=tools,
+                    prompt=CHAT_SYSTEM_PROMPT,
+                    checkpointer=checkpointer,
+                )
+                _chat_agent = agent
+                logger.info("chat_agent_initialized (prompt param)")
+                return agent
+            except Exception as e2:
+                logger.error(f"chat_agent_build_failed: {e2}")
+                return None
         logger.error(f"chat_agent_build_failed: {e}")
         return None
 

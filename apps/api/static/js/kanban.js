@@ -1,7 +1,7 @@
 /**
- * kanban.js — Kanban board management for YouTube Pipeline.
+ * kanban.js — Kanban board management.
  * 
- * Refactored to be a direct view of PipelineRunner runs.
+ * Direct view of pipeline runs stored in Supabase.
  */
 
 // Stage labels and configuration
@@ -28,7 +28,8 @@ const Kanban = {
     tasks: [],
     activeTaskId: null,
     initialized: false,
-    
+    _expiryInterval: null,
+
     async init() {
         if (this.initialized) {
             await this.refresh();
@@ -50,13 +51,14 @@ const Kanban = {
         await this.refresh();
         this._setupEventListeners();
         this._setupDragAndDrop();
+        this._startExpiryCountdown();
         this.initialized = true;
     },
     
     _getBoardHTML() {
         return `
             <div class="kanban-header">
-                <h2 class="kanban-title">Content Pipeline</h2>
+                <h2 class="kanban-title">Kanban Board</h2>
                 <div class="kanban-actions">
                     <button class="btn btn-primary btn-sm" onclick="Kanban.createTask()">
                         + New Topic
@@ -82,7 +84,7 @@ const Kanban = {
             </div>
             
             <!-- Task Detail Drawer -->
-            <div id="kanban-drawer" class="kanban-drawer hidden" style="display: none;">
+            <div id="kanban-drawer" class="kanban-drawer hidden">
                 <div class="drawer-overlay" onclick="Kanban.closeDrawer()"></div>
                 <div class="drawer-content" id="drawer-content">
                     <div class="drawer-header">
@@ -94,7 +96,7 @@ const Kanban = {
                         </div>
                         <div class="stage-badge" id="drawer-stage-badge">Stage 1</div>
                     </div>
-                    <div class="drawer-actions">
+                    <div class="drawer-actions" id="drawer-actions">
                         <button class="btn btn-danger btn-sm" onclick="Kanban.deleteTask(Kanban.activeTaskId)">
                             🗑️ Delete Task
                         </button>
@@ -144,7 +146,18 @@ const Kanban = {
             const countEl = document.getElementById(`count-${stage}`);
             if (!list) continue;
             
-            const stageTasks = this.tasks.filter(t => t.stage == stage);
+            let stageTasks = this.tasks.filter(t => t.stage == stage);
+
+            // Auto-sort stage 2 (Suggested Topics) by expires_at — most urgent first
+            if (stage === 2) {
+                stageTasks.sort((a, b) => {
+                    if (!a.expires_at && !b.expires_at) return 0;
+                    if (!a.expires_at) return 1;  // no expiration goes to bottom
+                    if (!b.expires_at) return -1;
+                    return new Date(a.expires_at) - new Date(b.expires_at);
+                });
+            }
+
             list.innerHTML = '';
             stageTasks.forEach(task => {
                 list.appendChild(this._createTaskCard(task));
@@ -153,15 +166,81 @@ const Kanban = {
         }
     },
     
+    _getExpiryInfo(task) {
+        if (!task.expires_at) return null;
+
+        const now = Date.now();
+        const expires = new Date(task.expires_at).getTime();
+        const remaining = expires - now;
+
+        if (remaining <= 0) {
+            return { level: 'expired', label: 'EXPIRED', remaining: 0, cssClass: 'expired' };
+        }
+
+        const mins = Math.floor(remaining / 60000);
+        const hrs = Math.floor(mins / 60);
+        const leftoverMins = mins % 60;
+
+        if (mins < 30) {
+            return { level: 'danger', label: `EXPIRING SOON`, remaining, cssClass: 'danger', mins };
+        } else if (mins < 60) {
+            return { level: 'danger', label: `Expires in ${mins}m`, remaining, cssClass: 'danger', mins };
+        } else if (mins < 120) {
+            const timeStr = `${leftoverMins}m`;
+            return { level: 'warning', label: `⏱ ${timeStr}`, remaining, cssClass: 'warning', mins };
+        } else {
+            const hStr = String(hrs).padStart(2, '0');
+            const mStr = String(leftoverMins).padStart(2, '0');
+            return { level: 'normal', label: `Due: ${hStr}:${mStr}`, remaining, cssClass: 'normal', mins };
+        }
+    },
+
     _createTaskCard(task) {
         const card = document.createElement('div');
-        card.className = `kanban-task-card ${task.status === 'thinking' ? 'thinking' : ''}`;
+        const expiryInfo = this._getExpiryInfo(task);
+        const urgencyClass = expiryInfo ? `urgency-${expiryInfo.level}` : '';
+        const isThinking = task.status === 'thinking';
+        card.className = `kanban-task-card ${isThinking ? 'thinking' : ''} ${urgencyClass}`.trim();
         card.dataset.id = task.id;
         card.draggable = true;
-        card.style.borderLeftColor = task.color || '#555';
+
+        // Set border-left color based on urgency or task color
+        if (expiryInfo) {
+            // urgency CSS classes handle border-left-color
+        } else {
+            card.style.borderLeftColor = task.color || '#555';
+        }
+
+        // Set data-expires-at attribute for countdown updates
+        if (task.expires_at) {
+            card.dataset.expiresAt = task.expires_at;
+        }
         
         const safeTitle = escHtml(task.title || 'Untitled');
         const safeStatus = escHtml(task.status || 'idle');
+        
+        let expiryHtml = '';
+        if (expiryInfo) {
+            expiryHtml = `<div class="expiry-badge ${expiryInfo.cssClass}" data-expiry-badge="${task.id}">${expiryInfo.label}</div>`;
+        }
+
+        let extendHtml = '';
+        if (expiryInfo && (expiryInfo.level === 'danger' || expiryInfo.level === 'expired')) {
+            extendHtml = `<button class="extend-btn" onclick="event.stopPropagation();Kanban.extendCardExpiry('${task.id}')">Extend 3h</button>`;
+        }
+
+        // Thinking progress indicator with estimated time
+        let thinkingHtml = '';
+        if (isThinking) {
+            const elapsed = task.thinking_started_at ? Math.floor((Date.now() - new Date(task.thinking_started_at).getTime()) / 1000) : null;
+            let timeText = '';
+            if (elapsed && elapsed > 0) {
+                const mins = Math.floor(elapsed / 60);
+                const secs = Math.max(0, elapsed % 60);
+                timeText = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+            }
+            thinkingHtml = `<div class="thinking-progress">${timeText ? `⏳ ${timeText}` : '⏳ Processing...'}</div>`;
+        }
         
         card.innerHTML = `
             <div class="task-card-header">
@@ -169,8 +248,11 @@ const Kanban = {
             </div>
             <div class="task-card-body">
                 <span class="task-status ${STATUS_STYLES[task.status] || ''}">${safeStatus}</span>
+                ${expiryHtml}
                 <span class="task-time">${fmtTime(task.updated_at)}</span>
             </div>
+            ${thinkingHtml}
+            ${extendHtml}
         `;
         
         card.onclick = () => this.openDrawer(task.id);
@@ -181,6 +263,19 @@ const Kanban = {
         card.ondragend = () => card.classList.remove('dragging');
         
         return card;
+    },
+
+    async extendCardExpiry(taskId) {
+        try {
+            await api(`/api/kanban/tasks/${taskId}`, {
+                method: 'PATCH',
+                body: { extend_expiration: true }
+            });
+            showToast('Expiration extended by 3 hours', 'success');
+            await this.refresh();
+        } catch (err) {
+            showToast('Failed to extend: ' + err.message, 'error');
+        }
     },
     
     _setupEventListeners() {
@@ -220,7 +315,7 @@ const Kanban = {
     },
     
     async createTask() {
-        const title = prompt("Enter a topic or genre for the new content pipeline:");
+        const title = prompt("Enter a topic or genre for the new task:");
         if (!title) return;
         
         try {
@@ -228,19 +323,26 @@ const Kanban = {
                 method: 'POST',
                 body: { seed_query: title }
             });
-            showToast('Pipeline started!', 'success');
+            showToast('Task started!', 'success');
             await this.refresh();
         } catch (err) {
-            showToast('Failed to start pipeline: ' + err.message, 'error');
+            showToast('Failed to start task: ' + err.message, 'error');
         }
     },
     
     async deleteTask(taskId) {
-        if (!confirm('Are you sure you want to delete this pipeline run?')) return;
         try {
-            await api(`/api/kanban/tasks/${taskId}`, { method: 'DELETE' });
-            showToast('Deleted', 'success');
+            await api(`/api/kanban/tasks/${taskId}/soft-delete`, { method: 'POST' });
             this.closeDrawer();
+            showUndoToast('Task deleted', async () => {
+                try {
+                    await api(`/api/kanban/tasks/${taskId}/undo-delete`, { method: 'POST' });
+                    showToast('Run restored', 'success');
+                    await this.refresh();
+                } catch (err) {
+                    showToast('Restore failed: ' + err.message, 'error');
+                }
+            });
             await this.refresh();
         } catch (err) {
             showToast('Delete failed', 'error');
@@ -253,8 +355,9 @@ const Kanban = {
         this.activeTaskId = taskId;
         this._updateDrawer(task);
         const drawer = document.getElementById('kanban-drawer');
-        drawer.classList.remove('hidden');
-        drawer.style.display = '';
+        if (drawer) {
+            drawer.classList.remove('hidden');
+        }
     },
     
     _updateDrawer(task) {
@@ -270,6 +373,60 @@ const Kanban = {
         const config = KANBAN_STAGES[task.stage] || KANBAN_STAGES[1];
         stageBadge.textContent = config.name;
         stageBadge.style.background = config.color;
+        
+        // Show contextual action buttons based on task status
+        const actionsEl = document.getElementById('drawer-actions');
+        const isWaiting = task.status === 'waiting';
+        const isError = task.status === 'error';
+        const nextStage = task.stage < 6 ? task.stage + 1 : null;
+        
+        actionsEl.innerHTML = '';
+
+        // Show error message if task has one
+        if (task.error_message) {
+            const errorBanner = document.createElement('div');
+            errorBanner.className = 'error-banner';
+            errorBanner.style.cssText = 'background:#3d1a1a;border:1px solid #d1242f;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#ff6b6b;max-width:100%;word-wrap:break-word;';
+            errorBanner.textContent = '⚠️ ' + task.error_message;
+            actionsEl.appendChild(errorBanner);
+        }
+        
+        // Approve / Resume button for waiting or error tasks
+        if ((isWaiting || isError) && nextStage) {
+            const approveBtn = document.createElement('button');
+            approveBtn.className = 'btn btn-primary btn-sm';
+            approveBtn.style.marginRight = '8px';
+            approveBtn.textContent = isWaiting 
+                ? `✅ Approve & Start ${KANBAN_STAGES[nextStage]?.name || 'Next Stage'}` 
+                : `🔄 Retry & Continue`;
+            approveBtn.onclick = async () => {
+                approveBtn.disabled = true;
+                approveBtn.textContent = '⏳ Starting...';
+                try {
+                    await api(`/api/kanban/tasks/${task.id}`, {
+                        method: 'PATCH',
+                        body: { stage: nextStage }
+                    });
+                    showToast('Pipeline resumed!', 'success');
+                    this.closeDrawer();
+                    await this.refresh();
+                } catch (err) {
+                    showToast('Failed: ' + err.message, 'error');
+                    approveBtn.disabled = false;
+                    approveBtn.textContent = isWaiting 
+                        ? `✅ Approve & Start ${KANBAN_STAGES[nextStage]?.name || 'Next Stage'}` 
+                        : `🔄 Retry & Continue`;
+                }
+            };
+            actionsEl.appendChild(approveBtn);
+        }
+        
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm';
+        deleteBtn.textContent = '🗑️ Delete Task';
+        deleteBtn.onclick = () => this.deleteTask(this.activeTaskId);
+        actionsEl.appendChild(deleteBtn);
         
         const artifactBox = document.getElementById('drawer-artifact');
         if (artifactBox) {
@@ -293,20 +450,27 @@ const Kanban = {
         
         // Render thoughts if available
         const thoughtsEl = document.getElementById('drawer-thoughts');
-        if (thoughtsEl && task.thoughts) {
-            try {
-                const thoughtsList = typeof task.thoughts === 'string' ? JSON.parse(task.thoughts) : task.thoughts;
-                if (Array.isArray(thoughtsList) && thoughtsList.length > 0) {
-                    thoughtsEl.innerHTML = thoughtsList.map(t => {
-                        const time = fmtTime(t.time || new Date().toISOString());
-                        const text = escHtml(t.text || '');
-                        return `<div class="thought-item"><span class="thought-time">${time}</span><span class="thought-text">${text}</span></div>`;
-                    }).join('');
-                } else {
-                    thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded</div>';
+        if (thoughtsEl) {
+            if (task.thoughts) {
+                try {
+                    const thoughtsList = typeof task.thoughts === 'string' ? JSON.parse(task.thoughts) : task.thoughts;
+                    if (Array.isArray(thoughtsList) && thoughtsList.length > 0) {
+                        thoughtsEl.innerHTML = thoughtsList.map(t => {
+                            const time = fmtTime(t.time || t.created_at || new Date().toISOString());
+                            const text = escHtml(t.content || t.text || '');
+                            const typeIcon = t.thought_type === 'error' ? '🔴' :
+                                             t.thought_type === 'output' ? '✅' :
+                                             t.thought_type === 'search' ? '🔍' : '💭';
+                            return `<div class="thought-item"><span class="thought-time">${time}</span><span class="thought-text">${typeIcon} [${escHtml(t.agent_name || 'agent')}] ${text}</span></div>`;
+                        }).join('');
+                    } else {
+                        thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded yet — thoughts will appear as the pipeline runs.</div>';
+                    }
+                } catch (e) {
+                    thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded yet.</div>';
                 }
-            } catch (e) {
-                thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded</div>';
+            } else {
+                thoughtsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No agent thoughts recorded yet — thoughts will appear as the pipeline runs.</div>';
             }
         }
     },
@@ -316,7 +480,6 @@ const Kanban = {
         const drawer = document.getElementById('kanban-drawer');
         if (drawer) {
             drawer.classList.add('hidden');
-            drawer.style.display = 'none';
         }
     },
     
@@ -350,6 +513,59 @@ const Kanban = {
         item.innerHTML = `<span class="thought-time">${time}</span><span class="thought-text">${text}</span>`;
         thoughtLog.appendChild(item);
         thoughtLog.scrollTop = thoughtLog.scrollHeight;
+    },
+
+    // ─── Expiration Countdown Timer ───────────────────────────────────────────
+
+    _startExpiryCountdown() {
+        // Update every 30 seconds - runs independently of active tab
+        this._expiryInterval = setInterval(() => {
+            this._updateExpiryBadges();
+        }, 30000);
+    },
+
+    _updateExpiryBadges() {
+        // Find all cards with expiration data and update their badges
+        const cards = document.querySelectorAll('.kanban-task-card[data-expires-at]');
+        cards.forEach(card => {
+            const expiresAt = card.dataset.expiresAt;
+            if (!expiresAt) return;
+
+            const taskId = card.dataset.id;
+            const task = this.tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            const expiryInfo = this._getExpiryInfo(task);
+            if (!expiryInfo) return;
+
+            // Update badge text
+            const badge = card.querySelector(`[data-expiry-badge="${taskId}"]`);
+            if (badge) {
+                badge.textContent = expiryInfo.label;
+                badge.className = `expiry-badge ${expiryInfo.cssClass}`;
+            }
+
+            // Update urgency class on card
+            card.classList.remove('urgency-normal', 'urgency-warning', 'urgency-danger', 'urgency-expired');
+            card.classList.add(`urgency-${expiryInfo.level}`);
+
+            // Show/hide extend button
+            const existingExtend = card.querySelector('.extend-btn');
+            if (expiryInfo.level === 'danger' || expiryInfo.level === 'expired') {
+                if (!existingExtend) {
+                    const btn = document.createElement('button');
+                    btn.className = 'extend-btn';
+                    btn.textContent = 'Extend 3h';
+                    btn.onclick = (e) => {
+                        e.stopPropagation();
+                        this.extendCardExpiry(taskId);
+                    };
+                    card.appendChild(btn);
+                }
+            } else if (existingExtend) {
+                existingExtend.remove();
+            }
+        });
     }
 };
 

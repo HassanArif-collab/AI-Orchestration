@@ -1,11 +1,15 @@
 """visual_routes.py — Radiant shaders, Remotion templates, asset manifests."""
 from __future__ import annotations
 import glob, os
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, Path as FastAPIPath
 from fastapi.responses import FileResponse
 from apps.api.dependencies import get_radiant_manager
 
 router = APIRouter()
+
+# Base directory for shader files — resolved once at module load
+SHADER_BASE_DIR = Path("data/radiant-shaders/static").resolve()
 
 @router.get("/manifests")
 async def list_manifests():
@@ -31,10 +35,15 @@ async def list_shaders():
     return [{"name": s["name"], "path": s["path"], "tags": []} for s in shaders]
 
 @router.get("/radiant/preview/{shader_name}")
-async def preview_shader(shader_name: str):
-    path = f"data/radiant-shaders/static/{shader_name}.html"
-    if os.path.exists(path):
-        return FileResponse(path, media_type="text/html")
+async def preview_shader(shader_name: str = FastAPIPath(..., pattern=r'^[a-zA-Z0-9_\-]+$')):
+    shader_path = (SHADER_BASE_DIR / f"{shader_name}.html").resolve()
+
+    # Double-check resolved path stays within base directory
+    if not str(shader_path).startswith(str(SHADER_BASE_DIR)):
+        raise HTTPException(403, "Access denied")
+
+    if shader_path.exists():
+        return FileResponse(shader_path, media_type="text/html")
     raise HTTPException(404, f"Shader '{shader_name}' not found. Run RadiantManager().setup() first.")
 
 @router.get("/radiant/moods")

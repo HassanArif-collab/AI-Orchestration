@@ -29,10 +29,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
     
     # Paths that don't require authentication
-    PUBLIC_PATHS = {"/health", "/api/health", "/", "/favicon.ico"}
+    PUBLIC_PATHS = {"/health", "/api/health", "/", "/favicon.ico", "/api/events"}
     
     # Path prefixes that don't require authentication
-    PUBLIC_PREFIXES = ["/static/"]
+    PUBLIC_PREFIXES = ["/static/", "/api/health/"]
     
     async def dispatch(self, request: Request, call_next):
         """Process the request and validate API key if required.

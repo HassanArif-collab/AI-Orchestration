@@ -184,28 +184,35 @@ async def get_chat_history(session_id: str):
                     })
 
         return {"session_id": session_id, "messages": history}
-    except Exception:
-        return {"session_id": session_id, "messages": []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-# Keep the old FreeRouter-direct endpoints for backward compatibility
 
 @router.get("/models")
 async def get_models():
-    """List available models from all configured providers."""
+    """List available models from FreeRouter ROUTES config."""
     try:
-        from freerouter.router import get_router
-        models = await get_router().list_models()
-        return {"models": models}
+        from freerouter.config import ROUTES
+        models = [
+            {
+                "id": task_name,
+                "object": "model",
+                "owned_by": route["model"].split("/")[0],
+                "primary": route["model"],
+                "fallback": route["fallback"],
+            }
+            for task_name, route in ROUTES.items()
+        ]
+        return {"object": "list", "data": models}
     except Exception as e:
-        return {"models": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/conversations")
 async def list_conversations():
-    """List all conversations from FreeRouter's SQLite storage."""
-    try:
-        from freerouter.storage import list_conversations as _list
-        return {"conversations": _list()}
-    except Exception as e:
-        return {"conversations": [], "error": str(e)}
+    """List all conversations.
+
+    NOTE: Conversation storage moved to apps/api layer.
+    SQLite storage removed from freerouter (it was app-level concern).
+    """
+    return {"conversations": []}

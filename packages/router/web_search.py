@@ -1,12 +1,26 @@
 """
-router/web_search.py — Web search client using z-ai-web-dev-sdk.
+router/web_search.py — Web search client using Exa.ai.
 
 Context: This module provides web search capabilities for the research pipeline.
-Uses the z-ai-web-dev-sdk which is already installed in the environment.
+Uses Exa.ai (exa_py) — a proper Python package that returns semantic search
+results with actual article text content.
 
-FIXES APPLIED:
-1. Removed fake URL fallback - returns empty list instead of hallucinated URLs
-2. Added rate limiting for parallel searches to prevent API bans
+PREVIOUS BUG: z-ai-web-dev-sdk is a Node.js/Bun package — it CANNOT be imported
+in Python. All searches silently failed and returned empty results, causing the
+entire research pipeline to produce lifeless scripts with no real data.
+
+FIX: Replaced with Exa.ai (exa_py) which is a native Python package already
+used in the discovery pipeline and proven to work.
+
+DEER-FLOW UPGRADES:
+1. Increased default text_length from 1000 to 4000 chars per search result
+2. Added fetch_contents() for deep article reading (deer-flow web_fetch equivalent)
+   - Retrieves full article text (up to 8000 chars) via Exa's get_contents API
+   - Used by DeepResearchEngine after initial search to get rich data for fact extraction
+
+Rate Limits:
+    Exa free tier: 1000 searches/month
+    Rate limited to ~2 searches/second to avoid API bans
 
 Usage:
     from packages.router.web_search import WebSearchClient
@@ -14,9 +28,9 @@ Usage:
     async with WebSearchClient() as client:
         results = await client.search("Pakistan economy 2026", num_results=10)
         for result in results:
-            print(result["title"], result["url"])
+            print(result.title, result.url)
 
-Imports: z-ai-web-dev-sdk
+Imports: exa_py, packages.core
 Imported by: packages/content_factory/production/deep_research.py
 """
 
@@ -25,9 +39,11 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
+from urllib.parse import urlparse
 
+from packages.core.config import get_settings
 from packages.core.logger import get_logger
 
 log = get_logger(__name__)
@@ -58,9 +74,14 @@ class SearchResult:
 
 class WebSearchClient:
     """
-    Async web search client wrapping z-ai-web-dev-sdk.
+    Async web search client using Exa.ai (exa_py).
 
-    Provides structured search results that can be used by the research engine.
+    Provides structured search results with actual article content
+    that can be used by the research engine.
+
+    Uses Exa's `search_and_contents` with `text=True` to get actual
+    article text (not just meta descriptions), which gives the
+    DeepResearchEngine real data to extract facts from.
 
     Rate Limiting:
         - Configurable rate limit (default: 2 searches/second)
@@ -68,43 +89,62 @@ class WebSearchClient:
         - Automatic delay between searches in multi_search()
 
     Fallback Behavior:
-        - Returns empty list if web search is unavailable
-        - Does NOT generate fake URLs (removed hallucination fallback)
+        - Returns empty list if Exa is unavailable
+        - Does NOT generate fake URLs (no hallucination fallback)
+
+    Deep Reading (deer-flow methodology):
+        - fetch_contents() retrieves full article text for top search results
+        - This gives the research engine 8000+ chars per article instead of snippets
+        - Used after search to do deep reading of most relevant sources
     """
 
     def __init__(
         self,
         rate_limit_per_second: float = 2.0,
+        days_back: int = 30,
+        text_length: int = 4000,
     ) -> None:
         """
         Initialize the web search client.
 
         Args:
             rate_limit_per_second: Maximum searches per second (default: 2.0)
+            days_back: Only include content from last N days (default: 30)
+            text_length: Max characters of article text per result (default: 4000)
         """
-        self._zai = None
+        self._exa_client = None
         self._rate_limit_per_second = rate_limit_per_second
+        self._days_back = days_back
+        self._text_length = text_length
         self._semaphore = asyncio.Semaphore(int(rate_limit_per_second * 2))
         self._last_search_time: float = 0.0
         self._min_interval = 1.0 / rate_limit_per_second if rate_limit_per_second > 0 else 0
 
     async def __aenter__(self) -> "WebSearchClient":
-        await self._init_client()
+        self._init_client()
         return self
 
     async def __aexit__(self, *args: Any) -> None:
         pass
 
-    async def _init_client(self) -> None:
-        """Initialize the z-ai-web-dev-sdk client."""
+    def _init_client(self) -> None:
+        """Initialize the Exa client."""
         try:
-            # Lazy import to avoid errors if SDK not installed
-            ZAI = __import__("z-ai-web-dev-sdk").ZAI
-            self._zai = await ZAI.create()
-            log.debug("web_search_client_initialized")
+            from exa_py import Exa
+            settings = get_settings()
+            api_key = settings.EXA_API_KEY
+            if not api_key:
+                log.warning("exa_web_search_not_configured: EXA_API_KEY is not set")
+                self._exa_client = None
+                return
+            self._exa_client = Exa(api_key=api_key)
+            log.debug("exa_web_search_client_initialized")
+        except ImportError:
+            log.warning("exa_py_not_installed: pip install exa_py")
+            self._exa_client = None
         except Exception as e:
-            log.warning(f"web_search_sdk_init_failed: {e}")
-            self._zai = None
+            log.warning(f"exa_web_search_init_failed: {e}")
+            self._exa_client = None
 
     async def _acquire_rate_limit(self) -> None:
         """Wait until rate limit allows next search."""
@@ -121,7 +161,7 @@ class WebSearchClient:
         num_results: int = 10,
     ) -> list[SearchResult]:
         """
-        Perform a web search and return structured results.
+        Perform a web search and return structured results with article text.
 
         Args:
             query: The search query string
@@ -133,38 +173,107 @@ class WebSearchClient:
         # Apply rate limiting
         await self._acquire_rate_limit()
 
-        if self._zai is None:
-            log.warning(f"web_search_unavailable_returning_empty: query='{query[:50]}'")
+        if self._exa_client is None:
+            log.warning(f"exa_web_search_unavailable_returning_empty: query='{query[:50]}'")
             return []
 
         try:
-            # Use z-ai-web-dev-sdk web_search function
-            raw_results = await self._zai.functions.invoke(
-                "web_search",
+            start_date = (datetime.now() - timedelta(days=self._days_back)).strftime("%Y-%m-%d")
+
+            # Use Exa's search_and_contents with text=True to get actual article content
+            response = self._exa_client.search_and_contents(
                 query=query,
-                num=num_results,
+                type="neural",
+                num_results=min(num_results, 10),
+                text={"max_characters": self._text_length},
+                start_published_date=start_date,
             )
 
             results = []
-            if isinstance(raw_results, list):
-                for i, item in enumerate(raw_results):
-                    if isinstance(item, dict):
-                        results.append(SearchResult(
-                            url=item.get("url", ""),
-                            title=item.get("name", item.get("title", "")),
-                            snippet=item.get("snippet", ""),
-                            host_name=item.get("host_name", ""),
-                            rank=item.get("rank", i + 1),
-                            date=item.get("date", ""),
-                            favicon=item.get("favicon", ""),
-                        ))
+            for i, item in enumerate(response.results):
+                # Extract full article text (not just meta description)
+                text = (item.text or "").strip()
+                if not text:
+                    text = (item.highlight or "").strip()
 
-            log.info(f"web_search_complete: query='{query[:50]}...' results={len(results)}")
+                # Extract host from URL
+                host = ""
+                try:
+                    host = urlparse(item.url or "").netloc or ""
+                except Exception:
+                    pass
+
+                # Extract published date
+                date = ""
+                try:
+                    if hasattr(item, "published_date") and item.published_date:
+                        date = str(item.published_date)
+                except Exception:
+                    pass
+
+                if text:  # Only include results that have actual content
+                    results.append(SearchResult(
+                        url=item.url or "",
+                        title=item.title or "Untitled",
+                        snippet=text,
+                        host_name=host,
+                        rank=item.rank if hasattr(item, "rank") else i + 1,
+                        date=date,
+                    ))
+
+            log.info(f"exa_web_search_complete: query='{query[:50]}...' results={len(results)}")
             return results
 
         except Exception as e:
-            log.error(f"web_search_failed: {e}")
+            log.error(f"exa_web_search_failed: {e}")
             return []
+
+    async def fetch_contents(self, urls: list[str], max_characters: int = 8000) -> dict[str, str]:
+        """
+        Fetch full article text for a list of URLs using Exa's get_contents API.
+
+        This is the deep reading capability from deer-flow's methodology.
+        After initial search returns snippets, this method retrieves full article
+        content for the most relevant sources, giving the research engine rich
+        data for fact extraction.
+
+        Args:
+            urls: List of URLs to fetch content from (max 10)
+            max_characters: Maximum characters of text per article (default: 8000)
+
+        Returns:
+            Dict mapping URL -> full article text string
+        """
+        await self._acquire_rate_limit()
+
+        if self._exa_client is None:
+            log.warning("exa_fetch_contents_unavailable: client not initialized")
+            return {}
+
+        if not urls:
+            return {}
+
+        try:
+            batch = urls[:10]  # Exa allows max 10 URLs per call
+            response = self._exa_client.get_contents(
+                urls=batch,
+                text={"max_characters": max_characters},
+            )
+
+            contents = {}
+            if hasattr(response, "results"):
+                for item in response.results:
+                    url = getattr(item, "url", "")
+                    text = getattr(item, "text", "") or ""
+                    if url and text.strip():
+                        contents[url] = text.strip()
+
+            log.info(f"exa_fetch_contents_complete: requested={len(batch)} retrieved={len(contents)}")
+            return contents
+
+        except Exception as e:
+            log.error(f"exa_fetch_contents_failed: {e}")
+            return {}
 
     async def multi_search(
         self,
@@ -176,7 +285,7 @@ class WebSearchClient:
         Perform multiple searches with rate limiting.
 
         Searches are executed sequentially with configurable delays
-        to prevent rate limit bans from the search provider.
+        to prevent rate limit bans from Exa.
 
         Args:
             queries: List of search queries
@@ -197,7 +306,7 @@ class WebSearchClient:
                 results = await self.search(query, num_per_query)
                 output[query] = results
             except Exception as e:
-                log.warning(f"multi_search_query_failed: {query} -> {e}")
+                log.warning(f"exa_multi_search_query_failed: {query} -> {e}")
                 output[query] = []
 
         return output
@@ -225,7 +334,7 @@ class WebSearchClient:
         output = {}
         for query, results in zip(queries, results_lists):
             if isinstance(results, Exception):
-                log.warning(f"multi_search_query_failed: {query} -> {results}")
+                log.warning(f"exa_multi_search_query_failed: {query} -> {results}")
                 output[query] = []
             else:
                 output[query] = results

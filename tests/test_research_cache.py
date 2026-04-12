@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
 
-from packages.pipeline.research_cache import ResearchCache
+from packages.core.research_cache import ResearchCache
 
 
 def test_make_key_with_brief_id():
@@ -28,12 +28,9 @@ def test_make_key_requires_arguments():
         ResearchCache.make_key()
 
 
-@patch("packages.pipeline.research_cache.get_settings")
-def test_get_returns_cached_research(mock_settings):
+@patch("packages.core.supabase_client.get_supabase")
+def test_get_returns_cached_research(mock_get_supabase):
     """Test that get returns cached research from Supabase."""
-    mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
-    mock_settings.return_value.SUPABASE_ANON_KEY = "test-key"
-
     # Mock Supabase response
     mock_result = MagicMock()
     mock_result.data = {
@@ -45,122 +42,101 @@ def test_get_returns_cached_research(mock_settings):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    with patch.object(ResearchCache, "_db") as mock_db:
-        mock_table = MagicMock()
-        mock_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = mock_result
-        mock_db.return_value = mock_table
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = mock_result
+    mock_get_supabase.return_value.table.return_value = mock_table
 
-        cache = ResearchCache()
-        result = cache.get(topic_statement="Pakistan AI Policy")
+    cache = ResearchCache()
+    result = cache.get(topic_statement="Pakistan AI Policy")
 
-        assert result is not None
-        assert result["from_cache"] is True
-        assert "dossier" in result
-        assert result["source_count"] == 1
+    assert result is not None
+    assert result["from_cache"] is True
+    assert "dossier" in result
+    assert result["source_count"] == 1
 
 
-@patch("packages.pipeline.research_cache.get_settings")
-def test_get_returns_none_on_cache_miss(mock_settings):
+@patch("packages.core.supabase_client.get_supabase")
+def test_get_returns_none_on_cache_miss(mock_get_supabase):
     """Test that get returns None when cache miss."""
-    mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
-    mock_settings.return_value.SUPABASE_ANON_KEY = "test-key"
-
     mock_result = MagicMock()
     mock_result.data = None  # Cache miss
 
-    with patch.object(ResearchCache, "_db") as mock_db:
-        mock_table = MagicMock()
-        mock_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = mock_result
-        mock_db.return_value = mock_table
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = mock_result
+    mock_get_supabase.return_value.table.return_value = mock_table
 
-        cache = ResearchCache()
-        result = cache.get(topic_statement="New Topic")
+    cache = ResearchCache()
+    result = cache.get(topic_statement="New Topic")
 
-        assert result is None
+    assert result is None
 
 
-@patch("packages.pipeline.research_cache.get_settings")
-def test_get_handles_exception_gracefully(mock_settings):
+@patch("packages.core.supabase_client.get_supabase")
+def test_get_handles_exception_gracefully(mock_get_supabase):
     """Test that get returns None on exception (non-blocking)."""
-    mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
-    mock_settings.return_value.SUPABASE_ANON_KEY = "test-key"
+    mock_get_supabase.side_effect = Exception("Database connection failed")
 
-    with patch.object(ResearchCache, "_db") as mock_db:
-        mock_db.side_effect = Exception("Database connection failed")
+    cache = ResearchCache()
+    result = cache.get(topic_statement="Any Topic")
 
-        cache = ResearchCache()
-        result = cache.get(topic_statement="Any Topic")
-
-        assert result is None  # Should not crash
+    assert result is None  # Should not crash
 
 
-@patch("packages.pipeline.research_cache.get_settings")
-def test_save_stores_research_permanently(mock_settings):
+@patch("packages.core.supabase_client.get_supabase")
+def test_save_stores_research_permanently(mock_get_supabase):
     """Test that save stores research in Supabase."""
-    mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
-    mock_settings.return_value.SUPABASE_ANON_KEY = "test-key"
-
     mock_result = MagicMock()
 
-    with patch.object(ResearchCache, "_db") as mock_db:
-        mock_table = MagicMock()
-        mock_table.upsert.return_value.execute.return_value = mock_result
-        mock_db.return_value = mock_table
+    mock_table = MagicMock()
+    mock_table.upsert.return_value.execute.return_value = mock_result
+    mock_get_supabase.return_value.table.return_value = mock_table
 
-        cache = ResearchCache()
-        cache.save(
-            cache_key="test-key-123",
-            topic_statement="Pakistan AI Policy",
-            dossier={"topic": "Pakistan AI Policy", "facts": ["fact1"]},
-            source_urls=["https://example.com"],
-        )
+    cache = ResearchCache()
+    cache.save(
+        cache_key="test-key-123",
+        topic_statement="Pakistan AI Policy",
+        dossier={"topic": "Pakistan AI Policy", "facts": ["fact1"]},
+        source_urls=["https://example.com"],
+    )
 
-        # Verify upsert was called with correct data
-        mock_table.upsert.assert_called_once()
-        call_args = mock_table.upsert.call_args[0][0]
-        assert call_args["cache_key"] == "test-key-123"
-        assert call_args["topic_statement"] == "Pakistan AI Policy"
-        assert call_args["source_count"] == 1
+    # Verify upsert was called with correct data
+    mock_table.upsert.assert_called_once()
+    call_args = mock_table.upsert.call_args[0][0]
+    assert call_args["cache_key"] == "test-key-123"
+    assert call_args["topic_statement"] == "Pakistan AI Policy"
+    assert call_args["source_count"] == 1
 
 
-@patch("packages.pipeline.research_cache.get_settings")
-def test_save_handles_exception_gracefully(mock_settings):
+@patch("packages.core.supabase_client.get_supabase")
+def test_save_handles_exception_gracefully(mock_get_supabase):
     """Test that save doesn't crash on exception."""
-    mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
-    mock_settings.return_value.SUPABASE_ANON_KEY = "test-key"
+    mock_get_supabase.side_effect = Exception("Database error")
 
-    with patch.object(ResearchCache, "_db") as mock_db:
-        mock_db.side_effect = Exception("Database error")
-
-        cache = ResearchCache()
-        # Should not raise
-        cache.save(
-            cache_key="test-key",
-            topic_statement="Topic",
-            dossier={"topic": "Topic"},
-        )
+    cache = ResearchCache()
+    # Should not raise
+    cache.save(
+        cache_key="test-key",
+        topic_statement="Topic",
+        dossier={"topic": "Topic"},
+    )
 
 
-@patch("packages.pipeline.research_cache.get_settings")
-def test_stats_returns_cache_info(mock_settings):
+@patch("packages.core.supabase_client.get_supabase")
+def test_stats_returns_cache_info(mock_get_supabase):
     """Test that stats returns cache statistics."""
-    mock_settings.return_value.SUPABASE_URL = "https://test.supabase.co"
-    mock_settings.return_value.SUPABASE_ANON_KEY = "test-key"
-
     mock_result = MagicMock()
     mock_result.count = 42
 
-    with patch.object(ResearchCache, "_db") as mock_db:
-        mock_table = MagicMock()
-        mock_table.select.return_value.execute.return_value = mock_result
-        mock_db.return_value = mock_table
+    mock_table = MagicMock()
+    mock_table.select.return_value.execute.return_value = mock_result
+    mock_get_supabase.return_value.table.return_value = mock_table
 
-        cache = ResearchCache()
-        stats = cache.stats()
+    cache = ResearchCache()
+    stats = cache.stats()
 
-        assert stats["count"] == 42
-        assert stats["storage"] == "supabase"
-        assert stats["ttl"] == "permanent"
+    assert stats["count"] == 42
+    assert stats["storage"] == "supabase"
+    assert stats["ttl"] == "permanent"
 
 
 def test_cleanup_expired_returns_zero():

@@ -1,86 +1,67 @@
 import { useState, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { api } from '../../lib/api';
+import useSWR from 'swr';
+import { AlertTriangle } from 'lucide-react';
+import { getSkills } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 interface SkillFile {
   name: string;
   content: string;
 }
 
-/**
- * Displays the data/skills/*.md files as read-only documents.
- *
- * CRITICAL UX RULE: "Code is Truth"
- * These prompts are loaded from Git-tracked .md files.
- * The UI explicitly shows them as READ-ONLY with a warning
- * that edits must happen in VS Code / Git — not through the UI.
- *
- * This prevents the old anti-pattern where someone edits a prompt
- * in the dashboard, it gets overwritten on next deploy, and they
- * wonder why their changes disappeared.
- */
 export function SkillViewer() {
-  const [skills, setSkills] = useState<SkillFile[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
+  const { data, error, isLoading } = useSWR('skills', () => getSkills());
+
+  const skills: SkillFile[] = data?.files ?? [];
+
+  // Auto-select first skill once data loads (via useEffect, NOT during render)
   useEffect(() => {
-    api.getSkills()
-      .then((res) => {
-        setSkills(res.files);
-        if (res.files.length > 0) setSelectedSkill(res.files[0].name);
-      })
-      .catch((err) => {
-        console.error('Failed to load skills:', err);
-        setError('Failed to load skill files');
-      })
-      .finally(() => setIsLoading(false));
-  }, []);
+    if (skills.length > 0 && !selectedSkill) {
+      setSelectedSkill(skills[0].name);
+    }
+  }, [skills, selectedSkill]);
 
-  if (isLoading) return <div className="p-4 text-gray-500 text-sm">Loading skills...</div>;
-  if (error) return <div className="p-4 text-red-400 text-sm">{error}</div>;
+  if (isLoading) return <div className="p-4 text-[hsl(var(--neutral-400))] text-sm">Loading skills...</div>;
+  if (error) return <div className="p-4 text-red-400 text-sm">Failed to load skill files</div>;
 
   const activeSkill = skills.find((s) => s.name === selectedSkill);
 
   return (
     <div className="p-4">
-      {/* Warning banner */}
-      <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 mb-4">
-        <p className="text-xs text-amber-400 font-medium">
-          ⚠ Code is Truth — These files are read-only.
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-4">
+        <p className="text-xs text-amber-400 font-medium flex items-center gap-1.5">
+          <AlertTriangle className="w-3 h-3" strokeWidth={1.5} />
+          Code is Truth — These files are read-only.
         </p>
         <p className="text-xs text-amber-400/70 mt-1">
-          Edit in <code className="bg-gray-800 px-1 rounded">data/skills/*.md</code> via Git.
-          Changes here would be overwritten on deploy.
+          Edit in <code className="bg-[hsl(var(--neutral-800))] px-1 rounded text-amber-300">data/skills/*.md</code> via Git.
         </p>
       </div>
 
-      {/* Skill file tabs */}
       <div className="flex flex-wrap gap-2 mb-4">
         {skills.map((s) => (
           <button
             key={s.name}
             onClick={() => setSelectedSkill(s.name)}
-            className={`text-xs px-3 py-1 rounded ${
+            className={cn(
+              'text-xs px-3 py-1 rounded-lg transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--brand-500))]',
               selectedSkill === s.name
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-800 text-gray-400 hover:text-white'
-            }`}
+                ? 'bg-[hsl(var(--brand-500))] text-white'
+                : 'bg-[hsl(var(--neutral-800))] text-[hsl(var(--neutral-400))] hover:text-[hsl(var(--neutral-100))] border border-[hsl(var(--surface-glass-border))]',
+            )}
           >
             {s.name.replace('.md', '')}
           </button>
         ))}
       </div>
 
-      {/* Markdown content */}
       {activeSkill && (
-        <div className="prose prose-sm prose-invert max-w-none bg-gray-800 rounded-lg p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {activeSkill.content}
-          </ReactMarkdown>
-        </div>
+        <pre className="whitespace-pre-wrap font-mono bg-[hsl(var(--surface-glass))] rounded-xl p-4 max-h-[60vh] overflow-y-auto text-xs text-[hsl(var(--neutral-300))] border border-[hsl(var(--surface-glass-border))]">
+          {activeSkill.content}
+        </pre>
       )}
     </div>
   );

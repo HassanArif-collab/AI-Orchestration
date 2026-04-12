@@ -1,0 +1,38 @@
+// apps/web/src/components/system/FreeRouterBanner.tsx
+//
+// FreeRouter runs the LLMs. If port 4000 is offline, the AI orchestrator fails.
+// This banner polls /api/health/services every 15 seconds and displays a
+// sticky red warning if FreeRouter is disconnected.
+//
+// CRITICAL: Uses position: fixed (NOT absolute). Absolute positions relative
+// to the nearest positioned ancestor — inside a flex container it overlaps
+// the header. Fixed positions relative to the viewport, ensuring it always
+// sits at the true top of the screen.
+//
+// API response shape from /api/health/services:
+// { services: { freerouter: { operational_status: "operational"|"unavailable", ... } } }
+
+import useSWR from 'swr';
+import { AlertTriangle } from 'lucide-react';
+
+export function FreeRouterBanner() {
+  const { data, isLoading, error } = useSWR('/api/health/services', {
+    refreshInterval: 15_000,
+  });
+
+  // Don't flash banner during initial hydration
+  if (isLoading) return null;
+
+  // Show banner if: fetch error, or freerouter explicitly unavailable
+  const freerouterStatus = data?.services?.freerouter?.operational_status;
+  if (error || freerouterStatus === 'unavailable') {
+    return (
+      <div className="fixed top-0 left-0 right-0 z-[var(--z-toast)] bg-red-900/90 text-red-100 px-4 py-2 text-center text-sm backdrop-blur-sm flex items-center justify-center gap-2">
+        <AlertTriangle className="w-4 h-4 shrink-0" />
+        <span>FreeRouter LLM Proxy is disconnected. Please run &lsquo;make freerouter&rsquo; in your terminal.</span>
+      </div>
+    );
+  }
+
+  return null;
+}

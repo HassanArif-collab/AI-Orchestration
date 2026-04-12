@@ -3,10 +3,14 @@
 Every thought inserted here is automatically pushed to the React
 frontend via Supabase Realtime (postgres_changes on agent_thoughts).
 
-This replaces:
-    - ThoughtsStore class in apps/api/routers/kanban_routes.py
-    - KanbanCallbackHandler.on_thought() HTTP POST pattern
-    - The /api/kanban/events SSE broadcasting
+This module provides the core CRUD operations for agent thoughts:
+- report_thought() / report_thought_async() — write thoughts
+- get_thoughts_for_card() — retrieve thoughts for a card
+- delete_thoughts_for_card() — delete thoughts for a card
+
+Pipeline-specific utilities (stage mapping, @pipeline_node decorator,
+milestone/error reporting) live in:
+    packages.content_factory.orchestration.thoughts
 
 Usage from any agent:
     from packages.core.thoughts import report_thought
